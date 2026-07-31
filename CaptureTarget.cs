@@ -119,30 +119,111 @@ public sealed class CaptureTarget
 
     public bool StillAlive() => !IsWindow || (IsWindowVisible(Window) && !IsIconic(Window));
 
+    [DllImport("user32.dll")] private static extern IntPtr GetDesktopWindow();
+    [DllImport("user32.dll")] private static extern IntPtr GetWindowDC(IntPtr h);
+    [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr h, IntPtr hdc);
+    [DllImport("gdi32.dll")] private static extern bool StretchBlt(
+        IntPtr hdcDest, int xd, int yd, int wd, int hd,
+        IntPtr hdcSrc, int xs, int ys, int ws, int hs, uint rop);
+    [DllImport("gdi32.dll")] private static extern int SetStretchBltMode(IntPtr hdc, int mode);
+    [DllImport("gdi32.dll")] private static extern bool SetBrushOrgEx(IntPtr hdc, int x, int y, IntPtr p);
+    [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+    [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int w, int h);
+    [DllImport("gdi32.dll")] private static extern IntPtr SelectObject(IntPtr hdc, IntPtr obj);
+    [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr obj);
+    [DllImport("gdi32.dll")] private static extern bool DeleteDC(IntPtr hdc);
+
+    private const uint SrcCopy = 0x00CC0020;
+
     /// <summary>
-    /// Copia o alvo pro bitmap. Monitor usa CopyFromScreen; janela usa PrintWindow com
-    /// PW_RENDERFULLCONTENT, que pega o conteudo mesmo com outra janela por cima.
+    /// HALFTONE faz media dos pixels (texto nitido) mas custa caro; COLORONCOLOR
+    /// so descarta pixels e e bem mais rapido. Medido nesta maquina reduzindo
+    /// 1920x1080 -> 1024x576: HALFTONE 35ms, COLORONCOLOR 21ms. A diferenca vale
+    /// uns 10 fps, entao a escolha e feita quadro a quadro conforme a cena.
     /// </summary>
-    public bool CaptureInto(Bitmap target, Graphics g)
+    private const int Halftone = 4;
+    private const int ColorOnColor = 3;
+
+    // DC intermediario reusado pra captura de janela (criar a cada quadro custa caro).
+    private IntPtr _winDc, _winBmp, _winOld;
+    private Size _winDcSize;
+
+    /// <summary>
+    /// Captura JA NO TAMANHO FINAL, numa unica operacao.
+    /// </summary>
+    /// <remarks>
+    /// Antes era capturar em 1920x1080 (CopyFromScreen, ~30ms) e depois reduzir com
+    /// GDI+ bicubico (~24ms) — 54ms so nisso, o que travava tudo em 17fps. O StretchBlt
+    /// faz copia e reducao de uma vez dentro do GDI, e o bitmap intermediario de 8MB
+    /// por quadro deixa de existir.
+    /// </remarks>
+    /// <param name="fast">
+    /// true = prioriza velocidade (cena com movimento, onde ninguem repara na
+    /// suavidade); false = prioriza nitidez (tela parada, onde ler texto importa).
+    /// </param>
+    public bool CaptureScaledInto(Bitmap dest, Graphics gDest, bool fast = false)
     {
         try
         {
-            if (!IsWindow)
-            {
-                g.CopyFromScreen(MonitorBounds.X, MonitorBounds.Y, 0, 0,
-                                 new Size(target.Width, target.Height), CopyPixelOperation.SourceCopy);
-                return true;
-            }
+            var src = IsWindow ? CurrentSize() : MonitorBounds.Size;
+            if (src.Width <= 0 || src.Height <= 0) return false;
 
-            IntPtr hdc = g.GetHdc();
-            try { return PrintWindow(Window, hdc, PwRenderFullContent); }
-            finally { g.ReleaseHdc(hdc); }
+            IntPtr hdcDest = gDest.GetHdc();
+            try
+            {
+                SetStretchBltMode(hdcDest, fast ? ColorOnColor : Halftone);
+                SetBrushOrgEx(hdcDest, 0, 0, IntPtr.Zero);
+
+                if (!IsWindow)
+                {
+                    IntPtr desktop = GetDesktopWindow();
+                    IntPtr hdcSrc = GetWindowDC(desktop);
+                    try
+                    {
+                        return StretchBlt(hdcDest, 0, 0, dest.Width, dest.Height,
+                                          hdcSrc, MonitorBounds.X, MonitorBounds.Y,
+                                          src.Width, src.Height, SrcCopy);
+                    }
+                    finally { ReleaseDC(desktop, hdcSrc); }
+                }
+
+                // Janela: PrintWindow precisa de um DC do tamanho nativo; reduzimos
+                // dele pro destino. O DC e reaproveitado entre quadros.
+                EnsureWindowDc(hdcDest, src);
+                if (_winDc == IntPtr.Zero) return false;
+                if (!PrintWindow(Window, _winDc, PwRenderFullContent)) return false;
+                return StretchBlt(hdcDest, 0, 0, dest.Width, dest.Height,
+                                  _winDc, 0, 0, src.Width, src.Height, SrcCopy);
+            }
+            finally { gDest.ReleaseHdc(hdcDest); }
         }
         catch (Exception ex)
         {
             Log.Write("captura falhou: " + ex.Message);
             return false;
         }
+    }
+
+    private void EnsureWindowDc(IntPtr reference, Size size)
+    {
+        if (_winDc != IntPtr.Zero && _winDcSize == size) return;
+        ReleaseWindowDc();
+        _winDc = CreateCompatibleDC(reference);
+        if (_winDc == IntPtr.Zero) return;
+        _winBmp = CreateCompatibleBitmap(reference, size.Width, size.Height);
+        if (_winBmp == IntPtr.Zero) { DeleteDC(_winDc); _winDc = IntPtr.Zero; return; }
+        _winOld = SelectObject(_winDc, _winBmp);
+        _winDcSize = size;
+    }
+
+    public void ReleaseWindowDc()
+    {
+        if (_winDc == IntPtr.Zero) return;
+        try { SelectObject(_winDc, _winOld); } catch { }
+        try { DeleteObject(_winBmp); } catch { }
+        try { DeleteDC(_winDc); } catch { }
+        _winDc = _winBmp = _winOld = IntPtr.Zero;
+        _winDcSize = Size.Empty;
     }
 
     /// <summary>Posicao do alvo na tela — usada pra desenhar o cursor no lugar certo.</summary>
