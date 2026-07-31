@@ -53,6 +53,32 @@ public sealed class VoiceEngine : IDisposable
     /// <summary>Erro fatal de audio pra mostrar na UI.</summary>
     public event Action<string>? Failed;
 
+    /// <summary>PCM do meu microfone (o gravador de clipe escuta aqui).</summary>
+    public event Action<byte[], int, int>? MicPcm;
+
+    /// <summary>PCM do que EU ouço — vozes dos outros + musica do DJ, ja mixado.</summary>
+    public event Action<byte[], int, int>? HeardPcm;
+
+    /// <summary>Volume da musica do DJ (0..2), separado do volume das vozes.</summary>
+    public float MusicVolume
+    {
+        get => _musicVolume;
+        set
+        {
+            _musicVolume = Math.Clamp(value, 0f, 2f);
+            lock (_streamsLock)
+                foreach (var (key, st) in _streams)
+                    if ((key & MusicFlag) != 0) st.Volume.Volume = _musicVolume;
+        }
+    }
+    private float _musicVolume = 0.7f;
+
+    /// <summary>
+    /// Bit que separa a musica da voz da MESMA pessoa. O DJ manda dois fluxos ao
+    /// mesmo tempo; sem isso eles cairiam no mesmo jitter buffer e picotariam.
+    /// </summary>
+    private const uint MusicFlag = 0x8000_0000;
+
     private sealed class PeerStream
     {
         public BufferedWaveProvider Jitter = null!;
@@ -99,8 +125,12 @@ public sealed class VoiceEngine : IDisposable
 
         _mixer = new MixingSampleProvider(Float48Mono) { ReadFully = true };
 
+        // Deriva o que sai pro fone, convertido pra PCM 16-bit — e exatamente isso
+        // que o clipe precisa gravar ("o que eu ouvi"), sem mexer no que e tocado.
+        var tap = new TapProvider(_mixer, (buf, count) => HeardPcm?.Invoke(buf, 0, count));
+
         _out = OpenOutput(outputDeviceId);
-        _out.Init(_mixer);
+        _out.Init(tap);
         _out.Play();
 
         if (micDeviceNumber >= 0)
@@ -146,12 +176,17 @@ public sealed class VoiceEngine : IDisposable
     {
         _session = session;
         session.VoiceReceived += OnVoiceReceived;
+        session.MusicReceived += OnMusicReceived;
     }
 
     public void Dispose()
     {
         _running = false;
-        if (_session != null) _session.VoiceReceived -= OnVoiceReceived;
+        if (_session != null)
+        {
+            _session.VoiceReceived -= OnVoiceReceived;
+            _session.MusicReceived -= OnMusicReceived;
+        }
 
         try { if (_mic != null) { _mic.DataAvailable -= OnMicData; _mic.StopRecording(); _mic.Dispose(); } }
         catch { }
@@ -174,6 +209,7 @@ public sealed class VoiceEngine : IDisposable
         if (session == null) return;
 
         MyPeak = ComputePeak(a.Buffer, 0, a.BytesRecorded);
+        if (!session.Muted) MicPcm?.Invoke(a.Buffer, 0, a.BytesRecorded);
 
         // O driver entrega blocos de tamanho arbitrario; o acumulador recorta em
         // frames exatos de 10ms pra rede receber sempre o mesmo tamanho.
@@ -185,13 +221,19 @@ public sealed class VoiceEngine : IDisposable
     // ─── REDE -> ALTO-FALANTE ────────────────────────────────────────────────
 
     private void OnVoiceReceived(uint senderId, byte[] data, int offset, int count)
+        => OnStreamData(senderId, data, offset, count, music: false);
+
+    private void OnMusicReceived(uint senderId, byte[] data, int offset, int count)
+        => OnStreamData(senderId | MusicFlag, data, offset, count, music: true);
+
+    private void OnStreamData(uint key, byte[] data, int offset, int count, bool music)
     {
         if (!_running || count <= 0) return;
 
         PeerStream st;
         lock (_streamsLock)
         {
-            if (!_streams.TryGetValue(senderId, out st!))
+            if (!_streams.TryGetValue(key, out st!))
             {
                 var mixer = _mixer;
                 if (mixer == null) return;
@@ -201,11 +243,12 @@ public sealed class VoiceEngine : IDisposable
                     BufferDuration = TimeSpan.FromMilliseconds(JitterMaxMs),
                     DiscardOnBufferOverflow = true,
                 };
-                var vol = new VolumeSampleProvider(jitter.ToSampleProvider()) { Volume = 1.0f };
+                var vol = new VolumeSampleProvider(jitter.ToSampleProvider())
+                { Volume = music ? _musicVolume : 1.0f };
                 st = new PeerStream { Jitter = jitter, Volume = vol };
-                _streams[senderId] = st;
+                _streams[key] = st;
                 mixer.AddMixerInput(vol);
-                Log.Write($"stream de audio criada p/ sender {senderId:X8}");
+                Log.Write($"stream de {(music ? "musica" : "voz")} criada p/ {key:X8}");
             }
         }
 
@@ -224,16 +267,19 @@ public sealed class VoiceEngine : IDisposable
         st.LastAudioTicks = DateTime.UtcNow.Ticks;
     }
 
-    /// <summary>Tira do mixer a voz de quem saiu (senao fica uma fonte morta pra sempre).</summary>
+    /// <summary>Tira do mixer a voz E a musica de quem saiu (senao ficam fontes mortas).</summary>
     public void RemovePeer(uint senderId)
     {
-        lock (_streamsLock)
+        foreach (uint key in new[] { senderId, senderId | MusicFlag })
         {
-            if (!_streams.TryGetValue(senderId, out var st)) return;
-            _streams.Remove(senderId);
-            try { _mixer?.RemoveMixerInput(st.Volume); } catch { }
+            lock (_streamsLock)
+            {
+                if (!_streams.TryGetValue(key, out var st)) continue;
+                _streams.Remove(key);
+                try { _mixer?.RemoveMixerInput(st.Volume); } catch { }
+            }
+            Log.Write($"stream removida ({key:X8})");
         }
-        Log.Write($"stream de audio removida (sender {senderId:X8})");
     }
 
     /// <summary>Nivel de voz de um participante (0..1); zera se ele parou de falar.</summary>
@@ -252,6 +298,44 @@ public sealed class VoiceEngine : IDisposable
     {
         lock (_streamsLock)
             if (_streams.TryGetValue(senderId, out var st)) st.Volume.Volume = Math.Clamp(volume, 0f, 2f);
+    }
+
+    /// <summary>
+    /// Passa o audio adiante sem mudar nada, entregando uma copia em PCM 16-bit pra
+    /// quem quiser gravar. Fica ENTRE o mixer e a placa de som.
+    /// </summary>
+    private sealed class TapProvider : ISampleProvider
+    {
+        private readonly ISampleProvider _source;
+        private readonly Action<byte[], int> _onPcm;
+        private byte[] _pcm = Array.Empty<byte>();
+
+        public WaveFormat WaveFormat => _source.WaveFormat;
+
+        public TapProvider(ISampleProvider source, Action<byte[], int> onPcm)
+        {
+            _source = source;
+            _onPcm = onPcm;
+        }
+
+        public int Read(float[] buffer, int offset, int count)
+        {
+            int read = _source.Read(buffer, offset, count);
+            if (read <= 0) return read;
+            try
+            {
+                if (_pcm.Length < read * 2) _pcm = new byte[read * 2];
+                for (int i = 0; i < read; i++)
+                {
+                    short s = (short)(Math.Clamp(buffer[offset + i], -1f, 1f) * 32767);
+                    _pcm[i * 2] = (byte)s;
+                    _pcm[i * 2 + 1] = (byte)(s >> 8);
+                }
+                _onPcm(_pcm, read * 2);
+            }
+            catch { /* gravacao nunca pode derrubar o audio */ }
+            return read;
+        }
     }
 
     /// <summary>

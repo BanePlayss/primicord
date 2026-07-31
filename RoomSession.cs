@@ -53,6 +53,13 @@ public sealed class RoomSession : IDisposable
     public const byte TypePunch = 1;   // "estou aqui, me responde"
     public const byte TypePunchAck = 2;   // "te ouvi"
     public const byte TypeBye = 3;   // saida limpa
+    public const byte TypeScreen = 4;   // quadro de tela (fragmentado)
+    public const byte TypeMusic = 5;   // audio do sistema do DJ
+
+    // Um quadro de tela nao cabe num datagrama, entao vai picado. Sub-cabecalho de
+    // 10 bytes depois do cabecalho comum: frameId, indice, total, largura, altura.
+    private const int ScreenSubHeader = 10;
+    private const int ChunkPayload = 1100;   // total ~1119 bytes, abaixo do MTU
 
     private const int PunchIntervalMs = 250;   // enquanto nao conectou
     private const int KeepAliveMs = 1000;  // depois de conectado (mantem o NAT aberto)
@@ -88,6 +95,12 @@ public sealed class RoomSession : IDisposable
 
     /// <summary>Voz recebida de alguem (thread de rede — nao toque na UI daqui).</summary>
     public event Action<uint, byte[], int, int>? VoiceReceived;
+
+    /// <summary>Audio do sistema do DJ (modo musica).</summary>
+    public event Action<uint, byte[], int, int>? MusicReceived;
+
+    /// <summary>Quadro de tela COMPLETO ja remontado: (quem, jpeg, largura, altura).</summary>
+    public event Action<uint, byte[], int, int>? ScreenFrameReceived;
 
     /// <summary>A lista de participantes mudou (entrou, saiu, mutou, conectou).</summary>
     public event Action? PeersChanged;
@@ -365,6 +378,58 @@ public sealed class RoomSession : IDisposable
         SendToAll(TypeVoice, payload, offset, count, Interlocked.Increment(ref _voiceSeq));
     }
 
+    /// <summary>Manda um frame do audio do sistema (modo DJ).</summary>
+    public void SendMusic(byte[] payload, int offset, int count)
+        => SendToAll(TypeMusic, payload, offset, count, Interlocked.Increment(ref _musicSeq));
+
+    private uint _musicSeq;
+    private ushort _screenFrameId;
+
+    /// <summary>
+    /// Pica um quadro JPEG em datagramas e manda pra todo mundo.
+    /// </summary>
+    /// <remarks>
+    /// Sem retransmissao de proposito: se um pedaco se perde, o quadro inteiro e
+    /// descartado e o proximo (100ms depois) assume. Pra tela ao vivo, chegar
+    /// atrasado e pior que faltar um quadro.
+    /// </remarks>
+    public void SendScreenFrame(byte[] jpeg, int length, int width, int height)
+    {
+        var sock = _socket;
+        if (sock == null) return;
+
+        ushort frameId = _screenFrameId++;
+        int chunks = (length + ChunkPayload - 1) / ChunkPayload;
+        if (chunks == 0 || chunks > ushort.MaxValue) return;
+
+        var targets = Peers.Where(p => p.Locked != null).Select(p => p.Locked!).ToList();
+        if (targets.Count == 0) return;
+
+        for (int i = 0; i < chunks; i++)
+        {
+            int off = i * ChunkPayload;
+            int len = Math.Min(ChunkPayload, length - off);
+            byte[] packet = new byte[HeaderBytes + ScreenSubHeader + len];
+
+            packet[0] = TypeScreen;
+            WriteUInt32(packet, 1, _mySenderId);
+            WriteUInt32(packet, 5, frameId);
+            WriteUInt16(packet, 9, frameId);
+            WriteUInt16(packet, 11, (ushort)i);
+            WriteUInt16(packet, 13, (ushort)chunks);
+            WriteUInt16(packet, 15, (ushort)width);
+            WriteUInt16(packet, 17, (ushort)height);
+            Buffer.BlockCopy(jpeg, off, packet, HeaderBytes + ScreenSubHeader, len);
+
+            foreach (var ep in targets)
+            {
+                try { sock.SendTo(packet, ep); }
+                catch (SocketException) { }
+                catch (ObjectDisposedException) { return; }
+            }
+        }
+    }
+
     private void SendToAll(byte type, byte[] payload, int offset, int count, uint seq = 0)
     {
         foreach (var p in Peers)
@@ -441,6 +506,14 @@ public sealed class RoomSession : IDisposable
                     VoiceReceived?.Invoke(senderId, buf, HeaderBytes, len - HeaderBytes);
                     break;
 
+                case TypeMusic:
+                    MusicReceived?.Invoke(senderId, buf, HeaderBytes, len - HeaderBytes);
+                    break;
+
+                case TypeScreen:
+                    HandleScreenChunk(peer, buf, len);
+                    break;
+
                 case TypePunch:
                     // Responde imediatamente: e o ack que fecha o furo do outro lado.
                     SendTo(src, TypePunchAck, Array.Empty<byte>(), 0, 0);
@@ -457,6 +530,90 @@ public sealed class RoomSession : IDisposable
             }
         }
         Log.Write("loop de recepcao encerrado");
+    }
+
+    // ─── REMONTAGEM DE QUADRO DE TELA ────────────────────────────────────────
+
+    private sealed class FrameAssembly
+    {
+        public ushort FrameId;
+        public byte[]?[] Chunks = Array.Empty<byte[]?>();
+        public int Have;
+        public int Total;
+        public int Width, Height;
+        public long StartedTicks;
+    }
+
+    private readonly Dictionary<uint, FrameAssembly> _assembling = new();
+
+    private void HandleScreenChunk(RemotePeer peer, byte[] buf, int len)
+    {
+        if (len < HeaderBytes + ScreenSubHeader) return;
+
+        ushort frameId = ReadUInt16(buf, 9);
+        ushort idx = ReadUInt16(buf, 11);
+        ushort total = ReadUInt16(buf, 13);
+        ushort w = ReadUInt16(buf, 15);
+        ushort h = ReadUInt16(buf, 17);
+        if (total == 0 || idx >= total) return;
+
+        int dataLen = len - HeaderBytes - ScreenSubHeader;
+        if (dataLen <= 0) return;
+
+        byte[]?[] ready;
+        int width, height;
+        FrameAssembly asm;
+        lock (_assembling)
+        {
+            if (!_assembling.TryGetValue(peer.SenderId, out asm!))
+            {
+                asm = new FrameAssembly();
+                _assembling[peer.SenderId] = asm;
+            }
+
+            // Quadro novo: joga fora o anterior incompleto. Pedaço atrasado de um
+            // quadro velho e ignorado (ushort da a volta, dai a comparacao circular).
+            if (asm.FrameId != frameId || asm.Total != total)
+            {
+                bool newer = asm.Chunks.Length == 0 || (ushort)(frameId - asm.FrameId) < 32768;
+                if (!newer) return;
+                asm.FrameId = frameId;
+                asm.Total = total;
+                asm.Chunks = new byte[total][];
+                asm.Have = 0;
+                asm.Width = w;
+                asm.Height = h;
+                asm.StartedTicks = DateTime.UtcNow.Ticks;
+            }
+
+            if (asm.Chunks[idx] != null) return;   // duplicado
+            var slice = new byte[dataLen];
+            Buffer.BlockCopy(buf, HeaderBytes + ScreenSubHeader, slice, 0, dataLen);
+            asm.Chunks[idx] = slice;
+            asm.Have++;
+
+            if (asm.Have != asm.Total) return;
+
+            // Completo: TIRA o array daqui de dentro e ja deixa um vazio no lugar.
+            // Montar fora do lock lendo asm.Chunks seria corrida — o proximo quadro
+            // pode trocar o array no meio da copia.
+            ready = asm.Chunks;
+            asm.Chunks = new byte[asm.Total][];
+            asm.Have = 0;
+            width = asm.Width;
+            height = asm.Height;
+        }
+
+        int size = 0;
+        foreach (var c in ready) size += c!.Length;
+        var jpeg = new byte[size];
+        int pos = 0;
+        foreach (var c in ready)
+        {
+            Buffer.BlockCopy(c!, 0, jpeg, pos, c!.Length);
+            pos += c.Length;
+        }
+        ScreenFrameReceived?.Invoke(peer.SenderId, jpeg, width, height);
     }
 
     // ─── UTIL ────────────────────────────────────────────────────────────────
@@ -477,4 +634,12 @@ public sealed class RoomSession : IDisposable
 
     private static uint ReadUInt32(byte[] b, int off)
         => (uint)(b[off] | (b[off + 1] << 8) | (b[off + 2] << 16) | (b[off + 3] << 24));
+
+    private static void WriteUInt16(byte[] b, int off, ushort v)
+    {
+        b[off] = (byte)v; b[off + 1] = (byte)(v >> 8);
+    }
+
+    private static ushort ReadUInt16(byte[] b, int off)
+        => (ushort)(b[off] | (b[off + 1] << 8));
 }

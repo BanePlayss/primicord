@@ -27,6 +27,17 @@ public sealed class MainForm : Form
     private string _voiceRoomId = "";
     private string _voiceRoomName = "";
 
+    // tela, clipe e DJ
+    private ScreenSender? _screenSender;
+    private readonly ScreenReceiver _screens = new();
+    private ClipRecorder? _clips;
+    private MusicShare? _music;
+    private StageView? _stage;
+    private uint _focusedSharer;          // 0 = minha propria tela
+    private bool _iAmSharing;
+    private Label? _djLabel;
+    private string _nowPlaying = "";
+
     // shell
     private readonly Panel _body = new() { Dock = DockStyle.Fill, BackColor = Pv.Charcoal };
     private readonly Label _banner = new()
@@ -721,20 +732,75 @@ public sealed class MainForm : Form
 
         _roomStatus = new Label
         {
-            Dock = DockStyle.Top, Height = 30, Font = Pv.Body, ForeColor = Pv.BoneDim,
-            Padding = new Padding(22, 8, 0, 0), Text = "conectando...",
+            Dock = DockStyle.Top, Height = 26, Font = Pv.Body, ForeColor = Pv.BoneDim,
+            Padding = new Padding(22, 4, 0, 0), Text = "conectando...",
+        };
+        // "tocando agora" vive na linha de status, que tem a largura toda — na barra
+        // de botoes ele era cortado pelo painel de membros.
+        _djLabel = new Label
+        {
+            Dock = DockStyle.Top, Height = 22, Font = Pv.Label, ForeColor = Pv.Green,
+            Padding = new Padding(22, 2, 0, 0), Text = "", Visible = false,
         };
 
+        // Barra de acoes da sala: tela, clipe, gravar, DJ.
+        var actions = BuildRoomActions();
+
+        // Tiles embaixo; palco ocupa o resto. Altura = tile (124) + margem (12) +
+        // padding (16) + folga da barra de rolagem horizontal.
         _tiles = new FlowLayoutPanel
         {
-            Dock = DockStyle.Fill, AutoScroll = true, WrapContents = true,
+            Dock = DockStyle.Bottom, Height = 168, AutoScroll = true, WrapContents = false,
             BackColor = Pv.Charcoal, Padding = new Padding(16, 8, 16, 8),
         };
 
+        _stage = new StageView { Dock = DockStyle.Fill };
+
+        _roomPanel.Controls.Add(_stage);      // Fill primeiro
         _roomPanel.Controls.Add(_tiles);
+        _roomPanel.Controls.Add(actions);
+        _roomPanel.Controls.Add(_djLabel);
         _roomPanel.Controls.Add(_roomStatus);
         _roomPanel.Controls.Add(head);
         return _roomPanel;
+    }
+
+    private PrimButton? _btnShare, _btnClip, _btnRec, _btnDj;
+
+    private Panel BuildRoomActions()
+    {
+        var bar = new Panel { Dock = DockStyle.Bottom, Height = 62, BackColor = Pv.Charcoal };
+        bar.Paint += (_, e) =>
+        {
+            using var p = new Pen(Pv.Char3, 2);
+            e.Graphics.DrawLine(p, 16, 0, bar.Width - 16, 0);
+        };
+
+        _btnShare = new PrimButton("COMPARTILHAR TELA", PrimButton.Style.Ghost) { Size = new Size(190, 38) };
+        _btnShare.Click += (_, _) => ToggleScreenShare();
+
+        _btnClip = new PrimButton("CLIPE", PrimButton.Style.Ghost) { Size = new Size(110, 38) };
+        _btnClip.Click += (_, _) => SaveClip();
+
+        _btnRec = new PrimButton("GRAVAR", PrimButton.Style.Ghost) { Size = new Size(120, 38) };
+        _btnRec.Click += (_, _) => ToggleClipBuffer();
+
+        _btnDj = new PrimButton("MODO DJ", PrimButton.Style.Ghost) { Size = new Size(130, 38) };
+        _btnDj.Click += (_, _) => ToggleDj();
+
+        void Layout()
+        {
+            int x = 16, y = (bar.ClientSize.Height - 38) / 2;
+            foreach (var b in new[] { _btnShare, _btnRec, _btnClip, _btnDj })
+            {
+                b!.Location = new Point(x, y);
+                x += b.Width + 8;
+            }
+        }
+        bar.Resize += (_, _) => Layout();
+        bar.Controls.AddRange(new Control[] { _btnShare, _btnRec, _btnClip, _btnDj });
+        Layout();
+        return bar;
     }
 
     private async Task JoinVoiceAsync(string roomId, string roomName)
@@ -748,9 +814,16 @@ public sealed class MainForm : Form
         _session.PeersChanged += OnPeersChanged;
         _session.Failed += ShowBanner;
 
+        _session.ScreenFrameReceived += OnPeerFrame;
+
         _voice = new VoiceEngine();
         _voice.Failed += ShowBanner;
         _voice.AttachSession(_session);
+
+        // Buffer rolante de clipe: recebe o que eu ouço e o meu microfone.
+        _clips = new ClipRecorder(60);
+        _voice.HeardPcm += (b, o, c) => _clips?.PushHeard(b, o, c);
+        _voice.MicPcm += (b, o, c) => _clips?.PushMic(b, o, c);
 
         // Recria os tiles do zero pra esta sala.
         _peerTiles.Clear();
@@ -778,6 +851,8 @@ public sealed class MainForm : Form
             ShowBanner("Nao consegui entrar: " + ex.Message);
         }
 
+        SyncRoomButtons();
+
         _voiceTimer?.Stop();
         _voiceTimer = new System.Windows.Forms.Timer { Interval = 100 };
         _voiceTimer.Tick += (_, _) => TickVoice();
@@ -789,6 +864,17 @@ public sealed class MainForm : Form
         _voiceTimer?.Stop();
         _voiceTimer?.Dispose();
         _voiceTimer = null;
+
+        try { _screenSender?.Dispose(); } catch { }
+        _screenSender = null;
+        _iAmSharing = false;
+        try { _music?.Dispose(); } catch { }
+        _music = null;
+        try { _clips?.Dispose(); } catch { }
+        _clips = null;
+        _screens.Dispose();
+        _focusedSharer = 0;
+        _nowPlaying = "";
 
         try { _voice?.Dispose(); } catch { }
         try { _session?.Dispose(); } catch { }
@@ -824,6 +910,14 @@ public sealed class MainForm : Form
             tile.Sharing = p.Sharing;
             tile.Connected = p.Connected;
             tile.Punching = p.Locked == null;
+            // Clicar no tile de quem compartilha joga a tela dele no palco.
+            if (p.Sharing && (string?)tile.Tag != "clickable")
+            {
+                tile.Tag = "clickable";
+                uint sid = p.SenderId;
+                tile.Cursor = Cursors.Hand;
+                tile.Click += (_, _) => { _focusedSharer = sid; };
+            }
             tile.Invalidate();
         }
 
@@ -834,13 +928,52 @@ public sealed class MainForm : Form
             _tiles.Controls.Remove(tile);
             tile.Dispose();
             _voice?.RemovePeer(sid);
+            _screens.Remove(sid);
+            if (_focusedSharer == sid) _focusedSharer = 0;
         }
         UpdateRoomStatus();
     }
 
+    private int _stageTick;
+
     private void TickVoice()
     {
         if (_voice == null || _session == null) return;
+
+        // Palco: mostra a tela de quem esta em foco (a minha ja chega por OnMyFrame).
+        if (_stage != null && !_stage.IsDisposed && _focusedSharer != 0)
+        {
+            _stage.SetFrame(_screens.FrameOf(_focusedSharer));
+            var who = _session.Peers.FirstOrDefault(p => p.SenderId == _focusedSharer);
+            _stage.SharerNick = who?.Nick ?? "";
+        }
+        else if (_stage != null && !_stage.IsDisposed && _focusedSharer == 0)
+        {
+            _stage.SharerNick = _iAmSharing ? Nick : "";
+            if (!_iAmSharing) _stage.SetFrame(null);
+        }
+
+        if (_stage != null && !_stage.IsDisposed)
+        {
+            bool buffering = _clips?.Active == true;
+            _stage.Recording = buffering;
+            _stage.StatusRight = buffering
+                ? $"BUFFER {_clips!.BufferSeconds}s · {_clips.BufferMegabytes}MB"
+                : (_iAmSharing && _screenSender != null
+                    ? $"{_screenSender.Fps} FPS · {_screenSender.KbPerSecond} KB/s" : "");
+        }
+
+        // "Tocando agora" a cada ~2s quando sou o DJ.
+        if (_music != null && ++_stageTick % 20 == 0)
+        {
+            _ = NowPlaying.ReadAsync().ContinueWith(t =>
+            {
+                if (!t.IsCompletedSuccessfully || t.Result == _nowPlaying) return;
+                _nowPlaying = t.Result;
+                try { BeginInvoke(SyncRoomButtons); } catch { }
+            });
+        }
+
         if (_myTile != null && !_myTile.IsDisposed)
         {
             _myTile.Level = _session.Muted ? 0f : _voice.MyPeak;
@@ -880,6 +1013,163 @@ public sealed class MainForm : Form
     {
         if (_session == null) return;
         _session.Muted = !_session.Muted;
+    }
+
+    // ─── TELA ────────────────────────────────────────────────────────────────
+
+    private void ToggleScreenShare()
+    {
+        if (_session == null) { ShowBanner("Entra numa sala de voz primeiro."); return; }
+
+        if (_iAmSharing)
+        {
+            _screenSender?.Dispose();
+            _screenSender = null;
+            _iAmSharing = false;
+            _session.Sharing = false;
+            SyncRoomButtons();
+            return;
+        }
+
+        var screens = ScreenSender.ListScreens();
+        Rectangle area = screens.Count > 0 ? screens[0].Bounds : Screen.PrimaryScreen!.Bounds;
+        if (screens.Count > 1)
+        {
+            int pick = PickDialog.Choose(this, "COMPARTILHAR TELA", "Qual monitor?",
+                                         screens.Select(s => s.Name).ToList());
+            if (pick < 0) return;
+            area = screens[pick].Bounds;
+        }
+
+        try
+        {
+            _screenSender = new ScreenSender(_session, area);
+            _screenSender.FrameProduced += OnMyFrame;
+            _screenSender.Start();
+            _iAmSharing = true;
+            _session.Sharing = true;
+            _focusedSharer = 0;   // foca a minha propria tela
+            SyncRoomButtons();
+        }
+        catch (Exception ex)
+        {
+            Log.Write("compartilhar tela falhou: " + ex.Message);
+            ShowBanner("Nao consegui capturar a tela: " + ex.Message);
+        }
+    }
+
+    /// <summary>Meu proprio quadro: alimenta o palco local e o buffer de clipe.</summary>
+    private void OnMyFrame(byte[] jpeg, int w, int h)
+    {
+        _clips?.PushFrame(jpeg, w, h);
+        if (_focusedSharer != 0) return;
+        try
+        {
+            using var ms = new MemoryStream(jpeg);
+            using var img = Image.FromStream(ms);
+            var bmp = new Bitmap(img);
+            BeginInvoke(() =>
+            {
+                var old = _stage?.Tag as Bitmap;
+                _stage?.SetFrame(bmp);
+                if (_stage != null) _stage.Tag = bmp;
+                try { old?.Dispose(); } catch { }
+            });
+        }
+        catch { }
+    }
+
+    private void OnPeerFrame(uint senderId, byte[] jpeg, int w, int h)
+    {
+        _screens.OnFrame(senderId, jpeg, w, h);
+        // Ninguem em foco ainda? A primeira tela que aparecer vira o palco.
+        if (_focusedSharer == 0 && !_iAmSharing) _focusedSharer = senderId;
+        if (_focusedSharer == senderId) _clips?.PushFrame(jpeg, w, h);
+    }
+
+    // ─── CLIPE ───────────────────────────────────────────────────────────────
+
+    private void ToggleClipBuffer()
+    {
+        if (_clips == null) return;
+        if (_clips.Active) _clips.Stop();
+        else _clips.Start();
+        SyncRoomButtons();
+    }
+
+    private void SaveClip()
+    {
+        if (_clips == null || !_clips.Active)
+        {
+            ShowBanner("Liga o GRAVAR primeiro — o clipe sai do que ficou no buffer.");
+            return;
+        }
+        string? path = _clips.SaveClip(30, _voiceRoomName);
+        if (path == null) { ShowBanner("Buffer ainda vazio — espera uns segundos."); return; }
+
+        // Abre a pasta com o arquivo ja selecionado.
+        try { System.Diagnostics.Process.Start("explorer.exe", $"/select,\"{path}\""); }
+        catch (Exception ex) { Log.Write("abrir pasta falhou: " + ex.Message); }
+    }
+
+    // ─── MODO DJ ─────────────────────────────────────────────────────────────
+
+    private void ToggleDj()
+    {
+        if (_session == null) { ShowBanner("Entra numa sala de voz primeiro."); return; }
+
+        if (_music != null)
+        {
+            _music.Dispose();
+            _music = null;
+            _nowPlaying = "";
+            SyncRoomButtons();
+            return;
+        }
+
+        try
+        {
+            _music = new MusicShare(_session);
+            _music.Start();
+            if (_music.EchoRisk)
+                ShowBanner("Windows sem process loopback: o audio das vozes vai voltar junto (eco).");
+            SyncRoomButtons();
+        }
+        catch (Exception ex)
+        {
+            Log.Write("modo DJ falhou: " + ex.Message);
+            ShowBanner("Nao consegui capturar o audio do sistema: " + ex.Message);
+            _music = null;
+        }
+    }
+
+    private void SyncRoomButtons()
+    {
+        if (_btnShare == null) return;
+
+        _btnShare.Text = _iAmSharing ? "PARAR TELA" : "COMPARTILHAR TELA";
+        _btnShare.Kind = _iAmSharing ? PrimButton.Style.Solid : PrimButton.Style.Ghost;
+        _btnShare.Invalidate();
+
+        bool buffering = _clips?.Active == true;
+        _btnRec!.Text = buffering ? "GRAVANDO" : "GRAVAR";
+        _btnRec.Kind = buffering ? PrimButton.Style.Solid : PrimButton.Style.Ghost;
+        _btnRec.Invalidate();
+
+        _btnClip!.Enabled = buffering;
+        _btnClip.Invalidate();
+
+        bool dj = _music != null;
+        _btnDj!.Text = dj ? "PARAR DJ" : "MODO DJ";
+        _btnDj.Kind = dj ? PrimButton.Style.Solid : PrimButton.Style.Ghost;
+        _btnDj.Invalidate();
+
+        if (_djLabel != null)
+        {
+            bool show = dj && _nowPlaying.Length > 0;
+            _djLabel.Text = show ? "TOCANDO AGORA: " + _nowPlaying.ToUpperInvariant() : "";
+            _djLabel.Visible = show;
+        }
     }
 
     private void StopTimers()

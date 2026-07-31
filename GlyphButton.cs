@@ -115,3 +115,58 @@ public static class PromptDialog
         return dlg.ShowDialog(owner) == DialogResult.OK ? input.Value : null;
     }
 }
+
+/// <summary>Escolha entre opcoes — usada pra pedir qual monitor compartilhar.</summary>
+public static class PickDialog
+{
+    /// <summary>Indice escolhido, ou -1 se cancelou.</summary>
+    public static int Choose(IWin32Window owner, string title, string label, List<string> options)
+    {
+        using var dlg = new Form
+        {
+            Text = title,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+            StartPosition = FormStartPosition.CenterParent,
+            ClientSize = new Size(420, 190),
+            BackColor = Pv.Char2,
+            ForeColor = Pv.Bone,
+            Font = Pv.Body,
+        };
+        try
+        {
+            string? exe = Environment.ProcessPath;
+            if (exe != null) dlg.Icon = Icon.ExtractAssociatedIcon(exe);
+        }
+        catch { }
+
+        var head = new Label
+        {
+            Text = title, Font = Pv.DisplaySm, ForeColor = Pv.Bone,
+            Location = new Point(22, 20), AutoSize = true,
+        };
+        var lbl = new Label
+        {
+            Text = label, Font = Pv.Label, ForeColor = Pv.Orange,
+            Location = new Point(22, 58), AutoSize = true,
+        };
+        var combo = new ComboBox
+        {
+            Location = new Point(22, 78), Width = 376,
+            DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat,
+            BackColor = Pv.Charcoal, ForeColor = Pv.Bone, Font = Pv.Body,
+        };
+        foreach (string o in options) combo.Items.Add(o);
+        combo.SelectedIndex = 0;
+
+        var ok = new PrimButton("COMPARTILHAR") { Location = new Point(22, 132), Size = new Size(182, 40) };
+        var cancel = new PrimButton("CANCELAR", PrimButton.Style.Ghost)
+        { Location = new Point(216, 132), Size = new Size(182, 40) };
+        ok.Click += (_, _) => { dlg.DialogResult = DialogResult.OK; dlg.Close(); };
+        cancel.Click += (_, _) => { dlg.DialogResult = DialogResult.Cancel; dlg.Close(); };
+
+        dlg.Controls.AddRange(new Control[] { head, lbl, combo, ok, cancel });
+        return dlg.ShowDialog(owner) == DialogResult.OK ? combo.SelectedIndex : -1;
+    }
+}
