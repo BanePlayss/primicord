@@ -136,6 +136,139 @@ public sealed class PrimButton : Control
     }
 }
 
+/// <summary>
+/// Slider no tema do app. O TrackBar do WinForms nao aceita cor — apareceria uma
+/// barra branca com puxador azul do Windows no meio do painel escuro.
+/// </summary>
+public sealed class PrimSlider : Control
+{
+    private int _value = 30;
+    private bool _dragging;
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public int Minimum { get; set; } = 5;
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public int Maximum { get; set; } = 60;
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public int Value
+    {
+        get => _value;
+        set
+        {
+            int v = Math.Clamp(value, Minimum, Maximum);
+            if (v == _value) return;
+            _value = v;
+            ValueChanged?.Invoke(this, EventArgs.Empty);
+            Invalidate();
+        }
+    }
+
+    public event EventHandler? ValueChanged;
+
+    public PrimSlider()
+    {
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
+                 ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        Height = 30;
+        Cursor = Cursors.Hand;
+        BackColor = Pv.Char2;
+    }
+
+    private int TrackLeft => 8;
+    private int TrackRight => Width - 8;
+
+    private void SetFromX(int x)
+    {
+        double t = (x - TrackLeft) / (double)Math.Max(1, TrackRight - TrackLeft);
+        Value = (int)Math.Round(Minimum + t * (Maximum - Minimum));
+    }
+
+    protected override void OnMouseDown(MouseEventArgs e)
+    { _dragging = true; SetFromX(e.X); base.OnMouseDown(e); }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    { if (_dragging) SetFromX(e.X); base.OnMouseMove(e); }
+
+    protected override void OnMouseUp(MouseEventArgs e)
+    { _dragging = false; base.OnMouseUp(e); }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+
+        int cy = Height / 2;
+        double t = (_value - Minimum) / (double)Math.Max(1, Maximum - Minimum);
+        int x = TrackLeft + (int)(t * (TrackRight - TrackLeft));
+
+        using (var b = new SolidBrush(Pv.Char3))
+        using (var path = Pv.RoundRect(new Rectangle(TrackLeft, cy - 3, TrackRight - TrackLeft, 6), 3))
+            g.FillPath(b, path);
+
+        if (x > TrackLeft)
+            using (var b = new SolidBrush(Pv.Orange))
+            using (var path = Pv.RoundRect(new Rectangle(TrackLeft, cy - 3, x - TrackLeft, 6), 3))
+                g.FillPath(b, path);
+
+        using (var b = new SolidBrush(Pv.Bone)) g.FillEllipse(b, x - 8, cy - 8, 16, 16);
+        using (var p = new Pen(Pv.Charcoal, 2)) g.DrawEllipse(p, x - 8, cy - 8, 16, 16);
+    }
+}
+
+/// <summary>Caixa de marcar no tema do app (a padrao do WinForms fica branca).</summary>
+public sealed class PrimCheck : Control
+{
+    private bool _hover;
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool Checked { get; set; }
+
+    public PrimCheck(string text)
+    {
+        Text = text;
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
+                 ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        Height = 26;
+        Cursor = Cursors.Hand;
+        BackColor = Pv.Char2;
+        Font = Pv.Body;
+    }
+
+    protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
+    protected override void OnMouseLeave(EventArgs e) { _hover = false; Invalidate(); base.OnMouseLeave(e); }
+    protected override void OnClick(EventArgs e) { Checked = !Checked; Invalidate(); base.OnClick(e); }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+
+        var box = new Rectangle(0, (Height - 18) / 2, 18, 18);
+        using (var b = new SolidBrush(Checked ? Pv.Orange : Pv.Charcoal))
+        using (var path = Pv.RoundRect(box, 4))
+            g.FillPath(b, path);
+        using (var p = new Pen(Checked || _hover ? Pv.Orange : Pv.Char3, 2))
+        using (var path = Pv.RoundRect(box, 4))
+            g.DrawPath(p, path);
+
+        if (Checked)
+            using (var p = new Pen(Pv.Charcoal, 2.4f)
+            { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                g.DrawLines(p, new[]
+                {
+                    new PointF(box.X + 4.5f, box.Y + 9f),
+                    new PointF(box.X + 7.5f, box.Y + 12.5f),
+                    new PointF(box.X + 13.5f, box.Y + 5.5f),
+                });
+
+        using var tb = new SolidBrush(Pv.Bone);
+        g.DrawString(Text, Font, tb, box.Right + 10, (Height - Font.Height) / 2f);
+    }
+}
+
 /// <summary>Caixa de texto no tema escuro (a TextBox padrao do WinForms nao tema).</summary>
 public sealed class PrimInput : Panel
 {

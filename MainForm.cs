@@ -38,6 +38,9 @@ public sealed class MainForm : Form
     private Label? _djLabel;
     private string _nowPlaying = "";
 
+    private readonly HotkeyBinding _clipHotkey = new(1);
+    private ToastOverlay? _toast;
+
     // shell
     private readonly Panel _body = new() { Dock = DockStyle.Fill, BackColor = Pv.Charcoal };
     private readonly Label _banner = new()
@@ -414,6 +417,9 @@ public sealed class MainForm : Form
         using var dlg = new SettingsDialog(_cfg);
         dlg.Applied += () =>
         {
+            ApplyClipHotkey();     // a tecla pode ter mudado
+            SyncRoomButtons();
+
             // Ja numa call? Reabre o audio com os dispositivos novos, sem derrubar a sala.
             if (_voice == null || _session == null) return;
             try
@@ -779,7 +785,8 @@ public sealed class MainForm : Form
         _btnShare = new PrimButton("COMPARTILHAR TELA", PrimButton.Style.Ghost) { Size = new Size(190, 38) };
         _btnShare.Click += (_, _) => ToggleScreenShare();
 
-        _btnClip = new PrimButton("CLIPE", PrimButton.Style.Ghost) { Size = new Size(110, 38) };
+        // Largura fixa e generosa: o rotulo cresce pra caber a tecla do atalho.
+        _btnClip = new PrimButton("CLIPE", PrimButton.Style.Ghost) { Size = new Size(200, 38) };
         _btnClip.Click += (_, _) => SaveClip();
 
         _btnRec = new PrimButton("GRAVAR", PrimButton.Style.Ghost) { Size = new Size(120, 38) };
@@ -1061,6 +1068,7 @@ public sealed class MainForm : Form
     /// <summary>Meu proprio quadro: alimenta o palco local e o buffer de clipe.</summary>
     private void OnMyFrame(byte[] jpeg, int w, int h)
     {
+        AutoStartBuffer();
         _clips?.PushFrame(jpeg, w, h);
         if (_focusedSharer != 0) return;
         try
@@ -1084,7 +1092,21 @@ public sealed class MainForm : Form
         _screens.OnFrame(senderId, jpeg, w, h);
         // Ninguem em foco ainda? A primeira tela que aparecer vira o palco.
         if (_focusedSharer == 0 && !_iAmSharing) _focusedSharer = senderId;
-        if (_focusedSharer == senderId) _clips?.PushFrame(jpeg, w, h);
+        if (_focusedSharer != senderId) return;
+        AutoStartBuffer();
+        _clips?.PushFrame(jpeg, w, h);
+    }
+
+    /// <summary>
+    /// Liga o buffer sozinho quando ha tela pra gravar. Sem isso o atalho falharia
+    /// calado — ninguem lembra de apertar GRAVAR ANTES da jogada acontecer.
+    /// Desligavel na engrenagem; o selo BUFFER no palco deixa visivel que esta ligado.
+    /// </summary>
+    private void AutoStartBuffer()
+    {
+        if (!_cfg.AutoBuffer || _clips == null || _clips.Active) return;
+        _clips.Start();
+        try { BeginInvoke(SyncRoomButtons); } catch { }
     }
 
     // ─── CLIPE ───────────────────────────────────────────────────────────────
@@ -1104,7 +1126,7 @@ public sealed class MainForm : Form
             ShowBanner("Liga o GRAVAR primeiro — o clipe sai do que ficou no buffer.");
             return;
         }
-        string? path = _clips.SaveClip(30, _voiceRoomName);
+        string? path = _clips.SaveClip(_cfg.ClipSeconds, _voiceRoomName);
         if (path == null) { ShowBanner("Buffer ainda vazio — espera uns segundos."); return; }
 
         // Abre a pasta com o arquivo ja selecionado.
@@ -1156,7 +1178,12 @@ public sealed class MainForm : Form
         _btnRec.Kind = buffering ? PrimButton.Style.Solid : PrimButton.Style.Ghost;
         _btnRec.Invalidate();
 
+        // Mostra a tecla no proprio botao — e assim que o usuario descobre o atalho.
+        var (hkMods, hkKey) = HotkeyBinding.Parse(_cfg.ClipHotkey, HotkeyBinding.Mods.None, Keys.F9);
         _btnClip!.Enabled = buffering;
+        _btnClip.Text = _clipHotkey.IsRegistered
+            ? "CLIPE · " + HotkeyBinding.Format(hkMods, hkKey)
+            : "CLIPE";
         _btnClip.Invalidate();
 
         bool dj = _music != null;
@@ -1180,8 +1207,72 @@ public sealed class MainForm : Form
         _voiceTimer = null;
     }
 
+    // ─── ATALHO GLOBAL DO CLIPE ──────────────────────────────────────────────
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        ApplyClipHotkey();
+    }
+
+    /// <summary>(Re)registra o atalho lido do config. Avisa se o Windows recusar.</summary>
+    private void ApplyClipHotkey()
+    {
+        if (!IsHandleCreated) return;
+        var (mods, key) = HotkeyBinding.Parse(_cfg.ClipHotkey, HotkeyBinding.Mods.None, Keys.F9);
+        if (!_clipHotkey.Register(Handle, mods, key))
+        {
+            ShowBanner($"O atalho {HotkeyBinding.Format(mods, key)} ja esta em uso por outro "
+                     + "programa — escolhe outro na engrenagem.");
+        }
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        if (_clipHotkey.Matches(m)) { OnClipHotkey(); return; }
+        base.WndProc(ref m);
+    }
+
+    /// <summary>
+    /// Atalho apertado — normalmente com o jogo em primeiro plano e o app invisivel.
+    /// Por isso todo retorno aqui e por SOM + aviso flutuante, nunca por MessageBox
+    /// (que roubaria o foco do jogo).
+    /// </summary>
+    private void OnClipHotkey()
+    {
+        if (_clips == null || !_clips.Active)
+        {
+            Chime.Fail();
+            Toast("SEM BUFFER", "Entra numa sala com alguem compartilhando tela.");
+            return;
+        }
+
+        string? path = _clips.SaveClip(_cfg.ClipSeconds, _voiceRoomName);
+        if (path == null)
+        {
+            Chime.Fail();
+            Toast("BUFFER VAZIO", "Espera uns segundos de tela antes de clipar.");
+            return;
+        }
+        Chime.Ok();
+        Toast("CLIPE SALVO", $"ultimos {_cfg.ClipSeconds}s · {Path.GetFileName(path)}");
+        Log.Write("clipe pelo atalho: " + path);
+    }
+
+    private void Toast(string title, string sub)
+    {
+        try
+        {
+            _toast ??= new ToastOverlay();
+            _toast.Show(title, sub);
+        }
+        catch (Exception ex) { Log.Write("aviso flutuante falhou: " + ex.Message); }
+    }
+
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        _clipHotkey.Unregister();
+        try { _toast?.Dispose(); } catch { }
         StopTimers();
         try { _chat?.ClearPresenceAsync().Wait(1200); } catch { }
         try { _voice?.Dispose(); } catch { }

@@ -108,6 +108,19 @@ public sealed class Config
     public string OutputDeviceId = "";
     public bool PushToTalk;
 
+    /// <summary>Atalho global do clipe (padrao F9), serializado como "mods:tecla".</summary>
+    public string ClipHotkey = HotkeyBinding.Serialize(HotkeyBinding.Mods.None, Keys.F9);
+
+    /// <summary>Quantos segundos o clipe guarda pra tras.</summary>
+    public int ClipSeconds = 30;
+
+    /// <summary>
+    /// Manter o buffer rolando sozinho enquanto alguem compartilha tela. Sem isso o
+    /// atalho falharia calado — quando a coisa engracada acontece ja e tarde pra ligar.
+    /// Fica so na memoria e e descartado continuamente; so vira arquivo no atalho.
+    /// </summary>
+    public bool AutoBuffer = true;
+
     private static string Path_ => System.IO.Path.Combine(AppEnv.DataDir, "config.txt");
 
     public static Config Load()
@@ -128,6 +141,9 @@ public sealed class Config
                     case "mic": if (int.TryParse(v, out var m)) c.MicDevice = m; break;
                     case "out": c.OutputDeviceId = v; break;
                     case "ptt": c.PushToTalk = v == "1"; break;
+                    case "cliphotkey": c.ClipHotkey = v; break;
+                    case "clipsecs": if (int.TryParse(v, out var cs)) c.ClipSeconds = Math.Clamp(cs, 5, 60); break;
+                    case "autobuf": c.AutoBuffer = v != "0"; break;
                 }
             }
         }
@@ -146,6 +162,9 @@ public sealed class Config
                 "mic=" + MicDevice,
                 "out=" + OutputDeviceId,
                 "ptt=" + (PushToTalk ? "1" : "0"),
+                "cliphotkey=" + ClipHotkey,
+                "clipsecs=" + ClipSeconds,
+                "autobuf=" + (AutoBuffer ? "1" : "0"),
             });
         }
         catch (Exception ex) { Log.Write("config nao salvou: " + ex.Message); }
