@@ -964,10 +964,12 @@ public sealed class MainForm : Form
         {
             bool buffering = _clips?.Active == true;
             _stage.Recording = buffering;
+            string net = _iAmSharing && _screenSender != null
+                ? $"{_screenSender.Fps}FPS · Q{_screenSender.Quality} · {_screenSender.KbPerSecond}KB/s"
+                : "";
             _stage.StatusRight = buffering
-                ? $"BUFFER {_clips!.BufferSeconds}s · {_clips.BufferMegabytes}MB"
-                : (_iAmSharing && _screenSender != null
-                    ? $"{_screenSender.Fps} FPS · {_screenSender.KbPerSecond} KB/s" : "");
+                ? $"BUFFER {_clips!.BufferSeconds}s" + (net.Length > 0 ? " · " + net : "")
+                : net;
         }
 
         // "Tocando agora" a cada ~2s quando sou o DJ.
@@ -1051,7 +1053,9 @@ public sealed class MainForm : Form
         try
         {
             _screenSender = new ScreenSender(_session, area);
-            _screenSender.FrameProduced += OnMyFrame;
+            _screenSender.FullFrameProduced += OnMyFrame;
+            // Quadro inteiro custa um encode a mais — so quando o clipe precisa.
+            _screenSender.NeedFullFrames = _cfg.AutoBuffer;
             _screenSender.Start();
             _iAmSharing = true;
             _session.Sharing = true;
@@ -1087,14 +1091,21 @@ public sealed class MainForm : Form
         catch { }
     }
 
-    private void OnPeerFrame(uint senderId, byte[] jpeg, int w, int h)
+    private void OnPeerFrame(uint senderId, byte[] payload, int w, int h)
     {
-        _screens.OnFrame(senderId, jpeg, w, h);
+        if (!_screens.OnUpdate(senderId, payload, w, h)) return;
         // Ninguem em foco ainda? A primeira tela que aparecer vira o palco.
         if (_focusedSharer == 0 && !_iAmSharing) _focusedSharer = senderId;
         if (_focusedSharer != senderId) return;
+
         AutoStartBuffer();
-        _clips?.PushFrame(jpeg, w, h);
+        // Chegam blocos, nao um quadro inteiro — pro clipe, codificamos a tela
+        // remontada. So quando o buffer esta gravando, pra nao gastar CPU a toa.
+        if (_clips?.Active != true) return;
+        var jpeg = _screens.EncodeFrame(senderId);
+        if (jpeg == null) return;
+        var (cw, ch) = _screens.SizeOf(senderId);
+        _clips.PushFrame(jpeg, cw, ch);
     }
 
     /// <summary>

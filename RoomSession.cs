@@ -153,6 +153,10 @@ public sealed class RoomSession : IDisposable
 
         _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
         AppEnv.DisableUdpConnReset(_socket);
+        // Buffers graudos: a tela vai em rajadas de dezenas de datagramas e o padrao
+        // (~64KB) transborda, derrubando pedacos e perdendo o quadro inteiro.
+        try { _socket.ReceiveBufferSize = 4 * 1024 * 1024; } catch { }
+        try { _socket.SendBufferSize = 2 * 1024 * 1024; } catch { }
         _socket.Bind(new IPEndPoint(IPAddress.Any, 0));
         int localPort = ((IPEndPoint)_socket.LocalEndPoint!).Port;
         foreach (var ip in AppEnv.LocalIPv4()) _localEps.Add(new IPEndPoint(ip, localPort));
@@ -176,6 +180,10 @@ public sealed class RoomSession : IDisposable
 
         _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
         AppEnv.DisableUdpConnReset(_socket);
+        // Buffers graudos: a tela vai em rajadas de dezenas de datagramas e o padrao
+        // (~64KB) transborda, derrubando pedacos e perdendo o quadro inteiro.
+        try { _socket.ReceiveBufferSize = 4 * 1024 * 1024; } catch { }
+        try { _socket.SendBufferSize = 2 * 1024 * 1024; } catch { }
         _socket.Bind(new IPEndPoint(IPAddress.Any, 0));   // porta efemera: o STUN descobre qual
         int localPort = ((IPEndPoint)_socket.LocalEndPoint!).Port;
 

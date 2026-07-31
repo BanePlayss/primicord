@@ -7,13 +7,23 @@ namespace Primicord;
 /// <summary>Pastas, log e utilidades de rede compartilhadas.</summary>
 public static class AppEnv
 {
-    /// <summary>%APPDATA%\Primicord — sobrevive a updates do instalador.</summary>
+    /// <summary>
+    /// %APPDATA%\Primicord — sobrevive a updates do instalador.
+    /// </summary>
+    /// <remarks>
+    /// PRIMICORD_DATA_DIR redireciona tudo pra outra pasta. Existe pros harnesses de
+    /// teste NAO mexerem na pasta real: um deles apagava o config.txt a cada rodada e
+    /// derrubava a sessao salva do usuario de verdade.
+    /// </remarks>
     public static string DataDir
     {
         get
         {
-            string d = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Primicord");
+            string? over = Environment.GetEnvironmentVariable("PRIMICORD_DATA_DIR");
+            string d = !string.IsNullOrWhiteSpace(over)
+                ? over
+                : Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Primicord");
             try { Directory.CreateDirectory(d); } catch { }
             return d;
         }
