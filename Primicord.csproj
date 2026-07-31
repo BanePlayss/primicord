@@ -13,15 +13,11 @@
     <RootNamespace>Primicord</RootNamespace>
     <Version>0.1.0</Version>
     <ApplicationIcon>Primicord.ico</ApplicationIcon>
-    <!-- Publica como UM exe so, sem precisar de .NET instalado na maquina do
-         primitivo. IncludeNativeLibraries* embute as DLLs nativas do NAudio/SpeexDSP. -->
-    <SelfContained>true</SelfContained>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <PublishSingleFile>true</PublishSingleFile>
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <!-- Trimming quebra reflection do WinForms/NAudio — deixar desligado. -->
     <PublishTrimmed>false</PublishTrimmed>
+    <!-- As flags de self-contained/single-file NAO ficam aqui: elas contaminam o
+         build normal e impedem que outro projeto referencie este (NETSDK1151, que
+         quebrou o harness de teste). Vao como argumentos do publish, no build.ps1. -->
   </PropertyGroup>
 
   <ItemGroup>

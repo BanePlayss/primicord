@@ -98,6 +98,12 @@ public sealed class RoomDirectory
 public sealed class Config
 {
     public string Nick = "";
+    /// <summary>
+    /// Hash da senha do Primitivao, pra nao pedir login todo boot. Nao e um segredo
+    /// novo: o doc primitivao/apostas e de leitura publica e ja expoe esses mesmos
+    /// hashes pra qualquer um — guardar aqui nao aumenta a exposicao.
+    /// </summary>
+    public string SenhaHash = "";
     public int MicDevice = 0;
     public string OutputDeviceId = "";
     public bool PushToTalk;
@@ -118,6 +124,7 @@ public sealed class Config
                 switch (k)
                 {
                     case "nick": c.Nick = v; break;
+                    case "hash": c.SenhaHash = v; break;
                     case "mic": if (int.TryParse(v, out var m)) c.MicDevice = m; break;
                     case "out": c.OutputDeviceId = v; break;
                     case "ptt": c.PushToTalk = v == "1"; break;
@@ -135,6 +142,7 @@ public sealed class Config
             File.WriteAllLines(Path_, new[]
             {
                 "nick=" + Nick,
+                "hash=" + SenhaHash,
                 "mic=" + MicDevice,
                 "out=" + OutputDeviceId,
                 "ptt=" + (PushToTalk ? "1" : "0"),

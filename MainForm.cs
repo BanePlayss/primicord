@@ -14,6 +14,11 @@ public sealed class MainForm : Form
     private readonly RoomDirectory _dir;
     private readonly Config _cfg;
 
+    /// <summary>Quem esta logado — vem do Primitivao (mesma conta do site).</summary>
+    private PrimitivaoUser? _me;
+    private Panel? _header;
+    private string Nick => _me?.Nick ?? _cfg.Nick;
+
     private RoomSession? _session;
     private VoiceEngine? _voice;
     private string _roomName = "";
@@ -62,12 +67,15 @@ public sealed class MainForm : Form
         Font = Pv.Body;
         DoubleBuffered = true;
 
+        _header = BuildHeader();
         Controls.Add(_body);      // Fill entra primeiro: fica com o espaco restante
         Controls.Add(_banner);
-        Controls.Add(BuildHeader());
+        Controls.Add(_header);
 
-        if (string.IsNullOrWhiteSpace(_cfg.Nick)) ShowGate();
-        else ShowLobby();
+        ShowLogin();
+        // Ja logou antes? Re-valida em silencio contra o Primitivao.
+        if (!string.IsNullOrWhiteSpace(_cfg.Nick) && !string.IsNullOrWhiteSpace(_cfg.SenhaHash))
+            _ = TryAutoLoginAsync();
     }
 
     // ─── SHELL ───────────────────────────────────────────────────────────────
@@ -84,12 +92,53 @@ public sealed class MainForm : Form
             using (var p = new Pen(Pv.Orange, 3))
                 g.DrawLine(p, 0, header.Height - 2, header.Width, header.Height - 2);
 
-            if (!string.IsNullOrWhiteSpace(_cfg.Nick))
+            if (_me == null) return;
+
+            // Canto direito: foto do site + nick + saldo de PC (dados do Primitivao).
+            int right = header.Width - 18;
+            const int av = 36;
+            var ac = new Rectangle(right - av, (header.Height - av) / 2 - 1, av, av);
+            var photo = Primitivao.AvatarFor(_me.Nick);
+            if (photo != null)
             {
-                string who = _cfg.Nick.ToUpperInvariant();
-                using var b = new SolidBrush(Pv.BoneDim);
+                using var clip = new System.Drawing.Drawing2D.GraphicsPath();
+                clip.AddEllipse(ac);
+                var saved = g.Save();
+                g.SetClip(clip);
+                int side = Math.Min(photo.Width, photo.Height);
+                g.DrawImage(photo, ac,
+                    new Rectangle((photo.Width - side) / 2, (photo.Height - side) / 2, side, side),
+                    GraphicsUnit.Pixel);
+                g.Restore(saved);
+                using var pen = new Pen(Pv.Orange, 2);
+                g.DrawEllipse(pen, ac);
+            }
+            else
+            {
+                using var b = new SolidBrush(Pv.Orange);
+                g.FillEllipse(b, ac);
+                using var f = new Font("Bahnschrift", 15f, FontStyle.Bold);
+                using var tb = new SolidBrush(Pv.Charcoal);
+                string ini = _me.Nick[..1].ToUpperInvariant();
+                var sz = g.MeasureString(ini, f);
+                g.DrawString(ini, f, tb, ac.X + (av - sz.Width) / 2, ac.Y + (av - sz.Height) / 2);
+            }
+
+            float textRight = ac.Left - 12;
+            string who = _me.Nick.ToUpperInvariant();
+            if (_me.Badge.Length > 0) who += " · " + _me.Badge;
+            using (var b = new SolidBrush(Pv.Bone))
+            {
                 float w = Pv.TrackedWidth(g, who, Pv.Label, 1.8f);
-                Pv.DrawTracked(g, who, Pv.Label, b, header.Width - w - 20, 26, 1.8f);
+                Pv.DrawTracked(g, who, Pv.Label, b, textRight - w, 16, 1.8f);
+            }
+
+            string coins = _me.PcShort + " PC";
+            if (_me.TeamName.Length > 0) coins = _me.TeamName.ToUpperInvariant() + " · " + coins;
+            using (var b = new SolidBrush(Pv.Orange))
+            {
+                float w = Pv.TrackedWidth(g, coins, Pv.Label, 1.2f);
+                Pv.DrawTracked(g, coins, Pv.Label, b, textRight - w, 34, 1.2f);
             }
         };
         header.Resize += (_, _) => header.Invalidate();
@@ -120,12 +169,20 @@ public sealed class MainForm : Form
         Text = text, Font = Pv.Label, ForeColor = Pv.BoneDim, AutoSize = true,
     };
 
-    // ─── GATE (primeira vez: pede o nick) ────────────────────────────────────
+    // ─── LOGIN (conta do Primitivao) ─────────────────────────────────────────
 
-    private void ShowGate()
+    private PrimInput? _loginNick;
+    private PrimInput? _loginPass;
+    private Label? _loginErr;
+    private PrimButton? _loginBtn;
+
+    private void ShowLogin(string? presetNick = null)
     {
+        _me = null;
+        _header?.Invalidate();
+
         var host = new Panel { BackColor = Pv.Charcoal };
-        var card = new Panel { Size = new Size(400, 210), BackColor = Pv.Char2 };
+        var card = new Panel { Size = new Size(410, 300), BackColor = Pv.Char2 };
         card.Paint += (_, e) =>
         {
             using var p = new Pen(Pv.Char3, 2);
@@ -134,41 +191,116 @@ public sealed class MainForm : Form
 
         var title = new Label
         {
-            Text = "QUEM FALA?", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
-            Location = new Point(24, 22), AutoSize = true,
+            Text = "ENTRAR", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
+            Location = new Point(24, 20), AutoSize = true,
         };
         var hint = new Label
         {
-            Text = "Usa o mesmo nick do app de apostas.", Font = Pv.Body, ForeColor = Pv.BoneDim,
-            Location = new Point(24, 50), AutoSize = true,
+            Text = "Mesma conta do site do Primitivao.", Font = Pv.Body, ForeColor = Pv.BoneDim,
+            Location = new Point(24, 48), AutoSize = true,
         };
-        var input = new PrimInput("seu nick")
-        { Location = new Point(24, 86), Width = 352, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
-        var btn = new PrimButton("ENTRAR")
-        { Location = new Point(24, 140), Size = new Size(352, 40), Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
 
-        void Enter()
+        var lblNick = SectionLabel("NICK");
+        lblNick.Location = new Point(24, 82);
+        _loginNick = new PrimInput("seu nick")
         {
-            string nick = input.Value.Trim().TrimStart('@');
-            if (string.IsNullOrEmpty(nick)) return;
-            _cfg.Nick = nick;
-            _cfg.Save();
-            ShowLobby();
-        }
-        btn.Click += (_, _) => Enter();
-        input.Box.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Enter(); } };
+            Location = new Point(24, 100), Width = 362,
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+        };
+        _loginNick.Value = presetNick ?? _cfg.Nick;
 
-        card.Controls.AddRange(new Control[] { title, hint, input, btn });
+        var lblPass = SectionLabel("SENHA");
+        lblPass.Location = new Point(24, 148);
+        _loginPass = new PrimInput("sua senha")
+        {
+            Location = new Point(24, 166), Width = 362,
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+        };
+        _loginPass.Box.UseSystemPasswordChar = true;
+
+        _loginErr = new Label
+        {
+            Text = "", Font = Pv.Body, ForeColor = Pv.Red, Location = new Point(24, 210),
+            Size = new Size(362, 34), AutoSize = false,
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+        };
+
+        _loginBtn = new PrimButton("ENTRAR")
+        {
+            Location = new Point(24, 244), Size = new Size(362, 40),
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+        };
+        _loginBtn.Click += async (_, _) => await DoLoginAsync();
+        _loginNick.Box.KeyDown += async (_, e) =>
+        { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; _loginPass.Box.Focus(); } };
+        _loginPass.Box.KeyDown += async (_, e) =>
+        { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; await DoLoginAsync(); } };
+
+        card.Controls.AddRange(new Control[]
+            { title, hint, lblNick, _loginNick, lblPass, _loginPass, _loginErr, _loginBtn });
         host.Controls.Add(card);
 
         void Center() => card.Location = new Point(
             Math.Max(0, (host.ClientSize.Width - card.Width) / 2),
-            Math.Max(10, (host.ClientSize.Height - card.Height) / 2 - 30));
+            Math.Max(10, (host.ClientSize.Height - card.Height) / 2 - 20));
         host.Resize += (_, _) => Center();
 
         SetBody(host);
         Center();
-        input.Box.Focus();
+        if (_loginNick.Value.Length > 0) _loginPass.Box.Focus(); else _loginNick.Box.Focus();
+    }
+
+    private async Task DoLoginAsync()
+    {
+        if (_loginNick == null || _loginPass == null || _loginBtn == null) return;
+        SetLoginBusy(true, "");
+        var res = await Primitivao.AuthenticateAsync(_fs, _loginNick.Value, _loginPass.Value);
+        if (!res.Ok)
+        {
+            SetLoginBusy(false, res.Error ?? "Nao consegui entrar");
+            return;
+        }
+        OnLoggedIn(res.User!);
+    }
+
+    /// <summary>Boot: revalida a sessao salva sem incomodar o usuario.</summary>
+    private async Task TryAutoLoginAsync()
+    {
+        SetLoginBusy(true, "");
+        var res = await Primitivao.AuthenticateWithHashAsync(_fs, _cfg.Nick, _cfg.SenhaHash);
+        if (res.Ok) { OnLoggedIn(res.User!); return; }
+
+        // Senha mudou no site, ou conta sumiu: cai no login normal.
+        Log.Write("auto-login falhou: " + res.Error);
+        SetLoginBusy(false, res.Error ?? "");
+    }
+
+    private void OnLoggedIn(PrimitivaoUser user)
+    {
+        if (InvokeRequired) { BeginInvoke(() => OnLoggedIn(user)); return; }
+        _me = user;
+        _cfg.Nick = user.Nick;
+        _cfg.SenhaHash = user.SenhaHash;
+        _cfg.Save();
+        _header?.Invalidate();
+        ShowLobby();
+    }
+
+    private void SetLoginBusy(bool busy, string error)
+    {
+        if (InvokeRequired) { BeginInvoke(() => SetLoginBusy(busy, error)); return; }
+        if (_loginBtn == null || _loginBtn.IsDisposed) return;
+        _loginBtn.Enabled = !busy;
+        _loginBtn.Text = busy ? "ENTRANDO..." : "ENTRAR";
+        _loginBtn.Invalidate();
+        if (_loginErr != null && !_loginErr.IsDisposed) _loginErr.Text = error;
+    }
+
+    private void Logout()
+    {
+        _cfg.SenhaHash = "";
+        _cfg.Save();
+        ShowLogin(_cfg.Nick);
     }
 
     // ─── LOBBY ───────────────────────────────────────────────────────────────
@@ -203,11 +335,16 @@ public sealed class MainForm : Form
         // Rodape: dispositivos de audio.
         var devices = BuildDevicePanel();
 
-        // Rotulo da lista.
-        var lblRooms = new Panel { Dock = DockStyle.Top, Height = 30, BackColor = Pv.Charcoal };
+        // Rotulo da lista + trocar de conta.
+        var lblRooms = new Panel { Dock = DockStyle.Top, Height = 34, BackColor = Pv.Charcoal };
         var lr = SectionLabel("SALAS");
-        lr.Location = new Point(24, 10);
-        lblRooms.Controls.Add(lr);
+        lr.Location = new Point(24, 12);
+        var logoutBtn = new PrimButton("TROCAR CONTA", PrimButton.Style.Ghost) { Size = new Size(140, 28) };
+        logoutBtn.Click += (_, _) => Logout();
+        lblRooms.Resize += (_, _) =>
+            logoutBtn.Location = new Point(lblRooms.ClientSize.Width - logoutBtn.Width - 24, 3);
+        lblRooms.Controls.AddRange(new Control[] { lr, logoutBtn });
+        logoutBtn.Location = new Point(Math.Max(160, ClientSize.Width - logoutBtn.Width - 24), 3);
 
         // Lista (preenche o resto).
         _roomList = new Panel

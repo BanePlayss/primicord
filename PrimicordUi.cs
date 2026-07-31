@@ -42,19 +42,26 @@ public static class Pv
     {
         foreach (char c in text)
         {
-            string s = c.ToString();
-            g.DrawString(s, font, brush, x, y);
-            x += g.MeasureString(s, font, PointF.Empty, StringFormat.GenericTypographic).Width + tracking;
+            if (c != ' ') g.DrawString(c.ToString(), font, brush, x, y);
+            x += CharWidth(g, c, font) + tracking;
         }
     }
 
     public static float TrackedWidth(Graphics g, string text, Font font, float tracking)
     {
         float w = 0;
-        foreach (char c in text)
-            w += g.MeasureString(c.ToString(), font, PointF.Empty, StringFormat.GenericTypographic).Width + tracking;
+        foreach (char c in text) w += CharWidth(g, c, font) + tracking;
         return w;
     }
+
+    /// <summary>
+    /// Largura de um caractere. O espaco precisa de tratamento proprio: medido com
+    /// GenericTypographic ele volta ~0 e as palavras grudam ("BANE·940TPC").
+    /// </summary>
+    private static float CharWidth(Graphics g, char c, Font font)
+        => c == ' '
+            ? font.Size * 0.42f
+            : g.MeasureString(c.ToString(), font, PointF.Empty, StringFormat.GenericTypographic).Width;
 }
 
 /// <summary>Botao chapado no estilo do app: retangulo com sombra dura, sem gradiente.</summary>

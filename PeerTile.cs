@@ -40,21 +40,41 @@ public sealed class PeerTile : Control
         Color border = Speaking ? Pv.Green : (Punching ? Pv.OrangeDim : Pv.Char3);
         using (var p = new Pen(border, 2)) g.DrawRectangle(p, r);
 
-        // Avatar: circulo laranja com a inicial.
+        // Avatar: a MESMA foto que o jogador usa no site; sem foto, cai na inicial.
         int av = 52;
         var ac = new Rectangle((Width - av) / 2, 16, av, av);
-        using (var b = new SolidBrush(Muted || !Connected ? Pv.Char3 : Pv.Orange)) g.FillEllipse(b, ac);
+        var photo = Primitivao.AvatarFor(Nick);
+
+        if (photo != null)
+        {
+            using var clip = new GraphicsPath();
+            clip.AddEllipse(ac);
+            var saved = g.Save();
+            g.SetClip(clip);
+            // Recorte quadrado central da foto, pra nao distorcer retrato/paisagem.
+            int side = Math.Min(photo.Width, photo.Height);
+            var src = new Rectangle((photo.Width - side) / 2, (photo.Height - side) / 2, side, side);
+            g.DrawImage(photo, ac, src, GraphicsUnit.Pixel);
+            g.Restore(saved);
+            // Sem sinal / mutado: escurece a foto pra ficar claro que esta inativo.
+            if (Muted || !Connected)
+                using (var veil = new SolidBrush(Color.FromArgb(140, Pv.Charcoal)))
+                    g.FillEllipse(veil, ac);
+            using (var p = new Pen(Pv.Charcoal, 2)) g.DrawEllipse(p, ac);
+        }
+        else
+        {
+            using (var b = new SolidBrush(Muted || !Connected ? Pv.Char3 : Pv.Orange)) g.FillEllipse(b, ac);
+            string initial = string.IsNullOrEmpty(Nick) ? "?" : Nick[..1].ToUpperInvariant();
+            using var f = new Font("Bahnschrift", 22f, FontStyle.Bold);
+            using var tb = new SolidBrush(Muted || !Connected ? Pv.BoneDim : Pv.Charcoal);
+            var sz = g.MeasureString(initial, f);
+            g.DrawString(initial, f, tb, ac.X + (av - sz.Width) / 2, ac.Y + (av - sz.Height) / 2);
+        }
+
         if (Speaking)
             using (var p = new Pen(Pv.Green, 3))
                 g.DrawEllipse(p, Rectangle.Inflate(ac, 4, 4));
-
-        string initial = string.IsNullOrEmpty(Nick) ? "?" : Nick[..1].ToUpperInvariant();
-        using (var f = new Font("Bahnschrift", 22f, FontStyle.Bold))
-        using (var b = new SolidBrush(Muted || !Connected ? Pv.BoneDim : Pv.Charcoal))
-        {
-            var sz = g.MeasureString(initial, f);
-            g.DrawString(initial, f, b, ac.X + (av - sz.Width) / 2, ac.Y + (av - sz.Height) / 2);
-        }
 
         // Nick.
         string name = (IsMe ? Nick + " (VOCE)" : Nick).ToUpperInvariant();
