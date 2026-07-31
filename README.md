@@ -30,6 +30,19 @@ som vai devolver a voz dos outros pelo microfone.
 
 ## Rodar
 
+Só abrir o `Primicord.exe` — é **um arquivo só** e não precisa de .NET instalado
+na máquina (self-contained, ~56MB). Na primeira vez o Windows mostra o aviso do
+SmartScreen ("Mais informações" → "Executar assim mesmo"), porque o exe não é
+assinado.
+
+Pra gerar o exe de novo depois de mexer no código:
+
+```powershell
+./build.ps1
+```
+
+Ou rodar direto do código:
+
 ```
 dotnet run --project Primicord.csproj
 ```

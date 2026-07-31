@@ -2,5 +2,7 @@ bin/
 obj/
 *.user
 publish/
+# O exe publicado (56MB) nao vai pro git — gera com build.ps1
+Primicord.exe
 vpk-publish/
 Releases/

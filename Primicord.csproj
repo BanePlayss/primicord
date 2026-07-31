@@ -12,6 +12,16 @@
     <AssemblyName>Primicord</AssemblyName>
     <RootNamespace>Primicord</RootNamespace>
     <Version>0.1.0</Version>
+    <ApplicationIcon>Primicord.ico</ApplicationIcon>
+    <!-- Publica como UM exe so, sem precisar de .NET instalado na maquina do
+         primitivo. IncludeNativeLibraries* embute as DLLs nativas do NAudio/SpeexDSP. -->
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <!-- Trimming quebra reflection do WinForms/NAudio — deixar desligado. -->
+    <PublishTrimmed>false</PublishTrimmed>
   </PropertyGroup>
 
   <ItemGroup>

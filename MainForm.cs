@@ -45,6 +45,15 @@ public sealed class MainForm : Form
         _cfg = Config.Load();
 
         Text = "PRIMICORD";
+        // O icone vem embutido no proprio exe (ApplicationIcon) — funciona tambem
+        // no publish single-file, onde nao existe .ico solto ao lado do binario.
+        try
+        {
+            string? exe = Environment.ProcessPath;
+            if (exe != null) Icon = Icon.ExtractAssociatedIcon(exe);
+        }
+        catch (Exception ex) { Log.Write("icone da janela: " + ex.Message); }
+
         ClientSize = new Size(960, 660);
         MinimumSize = new Size(720, 540);
         StartPosition = FormStartPosition.CenterScreen;
