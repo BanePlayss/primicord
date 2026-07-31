@@ -26,30 +26,29 @@ namespace Primicord;
 /// </remarks>
 public sealed class ScreenSender : IDisposable
 {
-    private const int MaxWidth = 1600;
-    private const int TargetFps = 12;
+    private const int TargetFps = 20;
     private const int TileSize = 128;
 
     /// <summary>
-    /// Teto de blocos por quadro. Um quadro COMPLETO (104 blocos a 1600x900) vira
-    /// ~380 datagramas disparados de uma vez — o buffer do socket transborda e o
-    /// quadro nunca chega inteiro. Medido: com quadro completo, so 1 de 30 pacotes
-    /// era aplicado. Com teto, cada envio e pequeno e chega.
+    /// Larguras possiveis, da melhor pra pior. Sob movimento intenso (jogo, video)
+    /// nao adianta insistir em 1600: melhor CAIR DE RESOLUCAO e manter a fluidez do
+    /// que segurar resolucao alta com qualidade destruida. E o que codec de verdade
+    /// faz, e e o motivo do "144p" — antes so a qualidade caia, nunca a resolucao.
     /// </summary>
-    private const int MaxTilesPerFrame = 24;
+    private static readonly int[] WidthLadder = { 1600, 1280, 1024, 800 };
 
     /// <summary>
     /// Blocos re-enviados por quadro mesmo sem terem mudado. E o conserto de perda:
-    /// em ~9s toda a tela e refeita, entao bloco que se perdeu no caminho volta
-    /// sozinho — sem precisar de um quadro completo gigante.
+    /// bloco que se perdeu no caminho volta sozinho, sem precisar de quadro completo
+    /// (que e grande demais pra passar de uma vez).
     /// </summary>
     private const int RefreshTilesPerFrame = 2;
 
-    /// <summary>Orcamento por espectador (bytes/s). ~2,8 Mbps cada.</summary>
-    private const int BudgetPerViewer = 350_000;
+    /// <summary>Orcamento por espectador (bytes/s). ~3,2 Mbps cada.</summary>
+    private const int BudgetPerViewer = 400_000;
 
     private readonly RoomSession _session;
-    private readonly Rectangle _area;
+    private readonly CaptureTarget _target;
     private Thread? _thread;
     private volatile bool _running;
 
@@ -65,25 +64,17 @@ public sealed class ScreenSender : IDisposable
     public int KbPerSecond { get; private set; }
     public int Quality => (int)_quality;
     public int TilesLastFrame { get; private set; }
+    public int OutWidth { get; private set; }
+    public int OutHeight { get; private set; }
 
-    public ScreenSender(RoomSession session, Rectangle area)
+    /// <summary>Avisa quando o alvo sumiu (janela fechada) pra UI parar sozinha.</summary>
+    public event Action? TargetLost;
+
+    public ScreenSender(RoomSession session, CaptureTarget target)
     {
         _session = session;
-        _area = area;
+        _target = target;
         _jpegCodec = ImageCodecInfo.GetImageEncoders().First(c => c.FormatID == ImageFormat.Jpeg.Guid);
-    }
-
-    public static List<(string Name, Rectangle Bounds)> ListScreens()
-    {
-        var list = new List<(string, Rectangle)>();
-        for (int i = 0; i < Screen.AllScreens.Length; i++)
-        {
-            var s = Screen.AllScreens[i];
-            string name = $"Monitor {i + 1} ({s.Bounds.Width}x{s.Bounds.Height})"
-                        + (s.Primary ? " — principal" : "");
-            list.Add((name, s.Bounds));
-        }
-        return list;
     }
 
     public void Start()
@@ -92,7 +83,7 @@ public sealed class ScreenSender : IDisposable
         _running = true;
         _thread = new Thread(Loop) { IsBackground = true, Name = "primicord-screen" };
         _thread.Start();
-        Log.Write($"tela: compartilhando {_area.Width}x{_area.Height}");
+        Log.Write($"tela: compartilhando {_target.Name}");
     }
 
     public void Dispose()
@@ -105,33 +96,16 @@ public sealed class ScreenSender : IDisposable
 
     private void Loop()
     {
-        int outW = _area.Width, outH = _area.Height;
-        if (outW > MaxWidth)
-        {
-            outH = (int)Math.Round(outH * (MaxWidth / (double)outW));
-            outW = MaxWidth;
-        }
-        outW -= outW % 2; outH -= outH % 2;
+        int ladder = 0;                 // indice em WidthLadder
+        int srcW = 0, srcH = 0;         // tamanho do alvo na ultima montagem
+        int outW = 0, outH = 0, cols = 0, rows = 0, stride = 0;
 
-        int cols = (outW + TileSize - 1) / TileSize;
-        int rows = (outH + TileSize - 1) / TileSize;
-        Log.Write($"tela: {outW}x{outH}, grade {cols}x{rows} = {cols * rows} blocos");
-
-        using var grab = new Bitmap(_area.Width, _area.Height, PixelFormat.Format32bppArgb);
-        using var scaled = new Bitmap(outW, outH, PixelFormat.Format24bppRgb);
-        using var tile = new Bitmap(TileSize, TileSize, PixelFormat.Format24bppRgb);
-
-        using var gGrab = Graphics.FromImage(grab);
-        using var gScale = Graphics.FromImage(scaled);
-        gScale.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-        gScale.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
-        using var gTile = Graphics.FromImage(tile);
-        gTile.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
-        gTile.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+        Bitmap? grab = null, scaled = null, tile = null;
+        Graphics? gGrab = null, gScale = null, gTile = null;
 
         // prev = estado JA TRANSMITIDO (nao o quadro anterior). Bloco que nao coube
-        // no teto deste quadro fica com o valor velho aqui e continua marcado como
-        // "mudado", entao entra no proximo — nada se perde por causa do teto.
+        // no orcamento deste quadro fica com o valor velho aqui e continua marcado
+        // como "mudado", entao entra no proximo — nada se perde por falta de espaco.
         byte[] prev = Array.Empty<byte>();
         byte[] cur = Array.Empty<byte>();
         bool primed = false;
@@ -146,21 +120,68 @@ public sealed class ScreenSender : IDisposable
         var sw = System.Diagnostics.Stopwatch.StartNew();
         long lastStat = Environment.TickCount64;
         int framesSec = 0, bytesSec = 0;
-        int measuredRate = 0;
+        int overBudgetStreak = 0, underBudgetStreak = 0;
+
+        void Rebuild(int targetW, int targetH, int ladderIdx)
+        {
+            int w = targetW, h = targetH;
+            int maxW = WidthLadder[ladderIdx];
+            if (w > maxW) { h = (int)Math.Round(h * (maxW / (double)w)); w = maxW; }
+            w -= w % 2; h -= h % 2;
+            if (w < 2 || h < 2) return;
+
+            gGrab?.Dispose(); grab?.Dispose();
+            gScale?.Dispose(); scaled?.Dispose();
+            gTile?.Dispose(); tile?.Dispose();
+
+            grab = new Bitmap(targetW, targetH, PixelFormat.Format32bppArgb);
+            scaled = new Bitmap(w, h, PixelFormat.Format24bppRgb);
+            tile = new Bitmap(TileSize, TileSize, PixelFormat.Format24bppRgb);
+
+            gGrab = Graphics.FromImage(grab);
+            gScale = Graphics.FromImage(scaled);
+            gScale.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            gScale.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+            gTile = Graphics.FromImage(tile);
+            gTile.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+
+            outW = w; outH = h;
+            OutWidth = w; OutHeight = h;
+            cols = (outW + TileSize - 1) / TileSize;
+            rows = (outH + TileSize - 1) / TileSize;
+            srcW = targetW; srcH = targetH;
+            primed = false;     // resolucao mudou: reenvia tudo
+            Log.Write($"tela: {outW}x{outH} (fonte {targetW}x{targetH}), grade {cols}x{rows}");
+        }
 
         while (_running)
         {
             long t0 = sw.ElapsedMilliseconds;
             try
             {
-                gGrab.CopyFromScreen(_area.X, _area.Y, 0, 0, _area.Size, CopyPixelOperation.SourceCopy);
-                DrawCursor(gGrab, _area);
-                gScale.DrawImage(grab, 0, 0, outW, outH);
+                if (!_target.StillAlive())
+                {
+                    Log.Write("tela: a janela compartilhada sumiu");
+                    TargetLost?.Invoke();
+                    break;
+                }
+
+                var size = _target.CurrentSize();
+                if (size.Width < 2 || size.Height < 2) { Thread.Sleep(200); continue; }
+
+                // A janela pode ser redimensionada a qualquer momento.
+                if (size.Width != srcW || size.Height != srcH || scaled == null)
+                    Rebuild(size.Width, size.Height, ladder);
+                if (scaled == null || grab == null || tile == null) { Thread.Sleep(200); continue; }
+
+                if (!_target.CaptureInto(grab, gGrab!)) { Thread.Sleep(80); continue; }
+                DrawCursor(gGrab!, _target.ScreenRect());
+                gScale!.DrawImage(grab, 0, 0, outW, outH);
 
                 // Copia os pixels pra memoria gerenciada, pra comparar bloco a bloco.
                 var bits = scaled.LockBits(new Rectangle(0, 0, outW, outH),
                                            ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
-                int stride = bits.Stride;
+                stride = bits.Stride;
                 int total = stride * outH;
                 if (cur.Length < total) cur = new byte[total];
                 Marshal.Copy(bits.Scan0, cur, 0, total);
@@ -171,51 +192,51 @@ public sealed class ScreenSender : IDisposable
                 lastViewers = viewers;
 
                 if (prev.Length < total) { prev = new byte[total]; primed = false; }
-                // Entrou gente nova: o proximo ciclo de refresh reenvia a tela toda
-                // pra ela, forcando todo bloco a parecer desatualizado.
+                // Entrou gente nova (ou mudou a resolucao): tudo precisa ir de novo.
                 if (newViewer || !primed) { Array.Clear(prev, 0, total); primed = true; }
 
                 int tileCount = cols * rows;
+                // Orcamento DESTE quadro. Quem nao couber fica sujo e vai no proximo,
+                // entao o movimento continua fluido em vez de travar esperando.
+                int frameBudget = Math.Max(12_000, BudgetPerViewer / Math.Max(1, TargetFps));
 
-                // Escolhe os blocos: primeiro os que mudaram, depois alguns do
-                // rodizio de conserto, ate o teto.
-                var chosen = new List<(int C, int R)>(MaxTilesPerFrame);
-                for (int r = 0; r < rows && chosen.Count < MaxTilesPerFrame; r++)
+                var dirty = new List<(int C, int R)>();
+                for (int r = 0; r < rows; r++)
                 {
-                    int ty = r * TileSize;
-                    int th = Math.Min(TileSize, outH - ty);
-                    for (int c = 0; c < cols && chosen.Count < MaxTilesPerFrame; c++)
+                    int ty = r * TileSize, th = Math.Min(TileSize, outH - ty);
+                    for (int c = 0; c < cols; c++)
                     {
-                        int tx = c * TileSize;
-                        int tw = Math.Min(TileSize, outW - tx);
-                        if (TileChanged(prev, cur, stride, tx, ty, tw, th)) chosen.Add((c, r));
+                        int tx = c * TileSize, tw = Math.Min(TileSize, outW - tx);
+                        if (TileChanged(prev, cur, stride, tx, ty, tw, th)) dirty.Add((c, r));
                     }
                 }
-                for (int i = 0; i < RefreshTilesPerFrame && chosen.Count < MaxTilesPerFrame; i++)
+                int dirtyTotal = dirty.Count;
+
+                for (int i = 0; i < RefreshTilesPerFrame; i++)
                 {
                     int idx = refreshCursor % Math.Max(1, tileCount);
                     refreshCursor++;
                     var pick = (C: idx % cols, R: idx / cols);
-                    if (!chosen.Contains(pick)) chosen.Add(pick);
+                    if (!dirty.Contains(pick)) dirty.Add(pick);
                 }
 
-                // ── monta o pacote ──
                 payload.SetLength(0);
                 payload.Position = 8;      // reserva o cabecalho
                 int tilesSent = 0;
                 ep.Param[0] = new EncoderParameter(Encoder.Quality, _quality);
 
-                foreach (var (c, r) in chosen)
+                foreach (var (c, r) in dirty)
                 {
+                    if (payload.Length >= frameBudget) break;   // o resto vai no proximo quadro
+
                     int tx = c * TileSize, ty = r * TileSize;
                     int tw = Math.Min(TileSize, outW - tx), th = Math.Min(TileSize, outH - ty);
                     if (tw <= 0 || th <= 0) continue;
 
-                    gTile.DrawImage(scaled, new Rectangle(0, 0, tw, th),
-                                    new Rectangle(tx, ty, tw, th), GraphicsUnit.Pixel);
+                    gTile!.DrawImage(scaled, new Rectangle(0, 0, tw, th),
+                                     new Rectangle(tx, ty, tw, th), GraphicsUnit.Pixel);
 
                     tileMs.SetLength(0);
-                    // So a area util do bloco (as bordas sao menores que 128).
                     if (tw == TileSize && th == TileSize) tile.Save(tileMs, _jpegCodec, ep);
                     else
                     {
@@ -257,34 +278,61 @@ public sealed class ScreenSender : IDisposable
 
                 TilesLastFrame = tilesSent;
 
+                // ── adaptacao ──
+                // Muita coisa mudando e nao coube: e cena de movimento. Primeiro
+                // baixa qualidade; se persistir, DESCE DE RESOLUCAO — o que salva a
+                // fluidez de verdade. Com folga, sobe de volta.
+                bool overBudget = dirtyTotal > tilesSent + 2;
+                if (overBudget)
+                {
+                    underBudgetStreak = 0;
+                    if (++overBudgetStreak > 6)
+                    {
+                        overBudgetStreak = 0;
+                        if (_quality > 45) _quality -= 8;
+                        else if (ladder < WidthLadder.Length - 1)
+                        {
+                            ladder++;
+                            _quality = 70;
+                            Rebuild(srcW, srcH, ladder);
+                        }
+                    }
+                }
+                else
+                {
+                    overBudgetStreak = 0;
+                    if (++underBudgetStreak > 25)
+                    {
+                        underBudgetStreak = 0;
+                        if (_quality < 92) _quality += 4;
+                        else if (ladder > 0)
+                        {
+                            ladder--;
+                            Rebuild(srcW, srcH, ladder);
+                        }
+                    }
+                }
+
                 if (NeedFullFrames)
                 {
                     tileMs.SetLength(0);
                     ep.Param[0] = new EncoderParameter(Encoder.Quality, 70L);
                     scaled.Save(tileMs, _jpegCodec, ep);
-                    var full = tileMs.ToArray();
-                    FullFrameProduced?.Invoke(full, outW, outH);
+                    FullFrameProduced?.Invoke(tileMs.ToArray(), outW, outH);
                 }
 
                 framesSec++;
-
-                // ── qualidade adaptativa pela banda REAL medida ──
-                // O orcamento e por espectador porque a malha manda uma copia pra cada.
-                int budget = BudgetPerViewer;
-                if (measuredRate > budget * 1.15 && _quality > 40) _quality -= 4;
-                else if (measuredRate < budget * 0.6 && _quality < 92) _quality += 2;
             }
             catch (Exception ex)
             {
                 Log.Write("captura de tela falhou: " + ex.Message);
-                Thread.Sleep(500);
+                Thread.Sleep(300);
             }
 
             if (Environment.TickCount64 - lastStat >= 1000)
             {
                 Fps = framesSec;
                 KbPerSecond = bytesSec / 1024;
-                measuredRate = bytesSec;
                 framesSec = 0; bytesSec = 0;
                 lastStat = Environment.TickCount64;
             }
@@ -293,6 +341,9 @@ public sealed class ScreenSender : IDisposable
             if (wait > 0) Thread.Sleep(wait);
         }
 
+        gGrab?.Dispose(); grab?.Dispose();
+        gScale?.Dispose(); scaled?.Dispose();
+        gTile?.Dispose(); tile?.Dispose();
         ep.Dispose();
         payload.Dispose();
         tileMs.Dispose();
@@ -329,6 +380,7 @@ public sealed class ScreenSender : IDisposable
     {
         try
         {
+            if (area.Width <= 0) return;
             var ci = new CursorInfo { cbSize = Marshal.SizeOf<CursorInfo>() };
             if (!GetCursorInfo(ref ci) || (ci.flags & CursorShowing) == 0) return;
             if (!area.Contains(ci.ptScreenPos)) return;

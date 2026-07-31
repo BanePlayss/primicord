@@ -51,7 +51,7 @@ public sealed class ChatService
 
     // ─── CAMINHOS ────────────────────────────────────────────────────────────
 
-    private static string ChannelPath(string channel) => $"pc_chat/{channel}/msgs";
+    private static string ChannelMsgs(string channel) => $"pc_chat/{channel}/msgs";
 
     /// <summary>
     /// Caminho da DM. A chave e o par de nicks em ordem alfabetica, pros dois lados
@@ -63,7 +63,7 @@ public sealed class ChatService
         return string.CompareOrdinal(a, b) <= 0 ? $"{a}__{b}" : $"{b}__{a}";
     }
 
-    private static string DmPath(string a, string b) => $"pc_dm/{DmKey(a, b)}/msgs";
+    private static string DmMsgs(string a, string b) => $"pc_dm/{DmKey(a, b)}/msgs";
 
     private static string NewMessageId()
         => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString("D13")
@@ -72,15 +72,26 @@ public sealed class ChatService
     // ─── LER ─────────────────────────────────────────────────────────────────
 
     public Task<List<ChatMessage>> ReadChannelAsync(string channel, CancellationToken ct = default)
-        => ReadAsync(ChannelPath(channel), ct);
+        => ReadAsync($"pc_chat/{channel}", ct);
 
     public Task<List<ChatMessage>> ReadDmAsync(string other, CancellationToken ct = default)
-        => ReadAsync(DmPath(_myNick, other), ct);
+        => ReadAsync($"pc_dm/{DmKey(_myNick, other)}", ct);
 
-    private async Task<List<ChatMessage>> ReadAsync(string path, CancellationToken ct)
+    /// <summary>Le as mensagens mais recentes; a ordenacao e o limite vao no servidor.</summary>
+    private async Task<List<ChatMessage>> ReadAsync(string parentPath, CancellationToken ct)
     {
-        var docs = await _fs.ListAsync(path, RecentCount, ct, orderBy: "__name__ desc")
+        List<(string Id, Dictionary<string, object?> Fields)> docs;
+        try
+        {
+            docs = await _fs.QueryAsync(parentPath, "msgs", "at", descending: true, RecentCount, ct)
                             .ConfigureAwait(false);
+        }
+        catch (FirestoreException ex) when (!ex.IsPermissionDenied)
+        {
+            // Conversa nova ainda nao tem a colecao — listar devolve vazio sem erro.
+            Log.Write("chat: consulta falhou, tentando listagem simples: " + ex.Message);
+            docs = await _fs.ListAsync(parentPath + "/msgs", RecentCount, ct).ConfigureAwait(false);
+        }
         var msgs = new List<ChatMessage>(docs.Count);
         foreach (var (id, f) in docs)
         {
@@ -101,10 +112,10 @@ public sealed class ChatService
     // ─── ESCREVER ────────────────────────────────────────────────────────────
 
     public Task SendToChannelAsync(string channel, string text, CancellationToken ct = default)
-        => SendAsync(ChannelPath(channel), text, ct);
+        => SendAsync(ChannelMsgs(channel), text, ct);
 
     public Task SendDmAsync(string other, string text, CancellationToken ct = default)
-        => SendAsync(DmPath(_myNick, other), text, ct);
+        => SendAsync(DmMsgs(_myNick, other), text, ct);
 
     private async Task SendAsync(string path, string text, CancellationToken ct)
     {

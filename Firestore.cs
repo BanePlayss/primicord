@@ -131,6 +131,53 @@ public sealed class Firestore
         if (!resp.IsSuccessStatusCode) throw new FirestoreException(await Describe(resp).ConfigureAwait(false));
     }
 
+    /// <summary>
+    /// Consulta estruturada (runQuery) — a forma certa de pedir "as N mais recentes".
+    /// </summary>
+    /// <remarks>
+    /// O parametro `orderBy` do documents.list e recusado com 400 nesta API; ficava
+    /// caindo no plano B e baixando a coleção INTEIRA a cada 2 segundos. Com runQuery
+    /// a ordenacao e o limite acontecem no servidor.
+    /// </remarks>
+    public async Task<List<(string Id, Dictionary<string, object?> Fields)>> QueryAsync(
+        string parentPath, string collectionId, string orderField, bool descending, int limit,
+        CancellationToken ct = default)
+    {
+        var body = new JsonObject
+        {
+            ["structuredQuery"] = new JsonObject
+            {
+                ["from"] = new JsonArray(new JsonObject { ["collectionId"] = collectionId }),
+                ["orderBy"] = new JsonArray(new JsonObject
+                {
+                    ["field"] = new JsonObject { ["fieldPath"] = orderField },
+                    ["direction"] = descending ? "DESCENDING" : "ASCENDING",
+                }),
+                ["limit"] = limit,
+            },
+        };
+
+        string url = Base + "/" + parentPath.Trim('/') + ":runQuery?key=" + ApiKey;
+        using var content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
+        using var resp = await _http.PostAsync(url, content, ct).ConfigureAwait(false);
+        if (!resp.IsSuccessStatusCode)
+            throw new FirestoreException(await Describe(resp).ConfigureAwait(false));
+
+        var outList = new List<(string, Dictionary<string, object?>)>();
+        var node = JsonNode.Parse(await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
+        if (node is not JsonArray results) return outList;
+
+        foreach (var row in results)
+        {
+            var doc = row?["document"];
+            if (doc == null) continue;   // linhas de "readTime" sem documento
+            string name = doc["name"]?.GetValue<string>() ?? "";
+            string id = name.Contains('/') ? name[(name.LastIndexOf('/') + 1)..] : name;
+            outList.Add((id, ParseFields(doc["fields"])));
+        }
+        return outList;
+    }
+
     public async Task DeleteAsync(string docPath, CancellationToken ct = default)
     {
         using var resp = await _http.DeleteAsync(Url(docPath), ct).ConfigureAwait(false);

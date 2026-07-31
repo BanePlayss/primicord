@@ -29,12 +29,23 @@ public static class AppEnv
         }
     }
 
-    /// <summary>%APPDATA%\Primicord\Clipes — destino dos clipes gravados (Fase 3).</summary>
+    /// <summary>%APPDATA%\Primicord\Clipes — destino dos clipes gravados.</summary>
     public static string ClipsDir
     {
         get
         {
             string d = Path.Combine(DataDir, "Clipes");
+            try { Directory.CreateDirectory(d); } catch { }
+            return d;
+        }
+    }
+
+    /// <summary>%APPDATA%\Primicord\Cinema — filmes recebidos na sessao cinema.</summary>
+    public static string CinemaDir
+    {
+        get
+        {
+            string d = Path.Combine(DataDir, "Cinema");
             try { Directory.CreateDirectory(d); } catch { }
             return d;
         }

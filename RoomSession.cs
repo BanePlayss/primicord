@@ -55,6 +55,8 @@ public sealed class RoomSession : IDisposable
     public const byte TypeBye = 3;   // saida limpa
     public const byte TypeScreen = 4;   // quadro de tela (fragmentado)
     public const byte TypeMusic = 5;   // audio do sistema do DJ
+    public const byte TypeCinemaCtl = 6;   // controle do cinema (oferta, nack, play)
+    public const byte TypeCinemaData = 7;   // pedaco do arquivo de video
 
     // Um quadro de tela nao cabe num datagrama, entao vai picado. Sub-cabecalho de
     // 10 bytes depois do cabecalho comum: frameId, indice, total, largura, altura.
@@ -101,6 +103,12 @@ public sealed class RoomSession : IDisposable
 
     /// <summary>Quadro de tela COMPLETO ja remontado: (quem, jpeg, largura, altura).</summary>
     public event Action<uint, byte[], int, int>? ScreenFrameReceived;
+
+    /// <summary>Mensagem de controle do cinema (JSON).</summary>
+    public event Action<uint, string>? CinemaControl;
+
+    /// <summary>Pedaco do arquivo de video: (quem, indice, buffer, offset, tamanho).</summary>
+    public event Action<uint, int, byte[], int, int>? CinemaChunk;
 
     /// <summary>A lista de participantes mudou (entrou, saiu, mutou, conectou).</summary>
     public event Action? PeersChanged;
@@ -390,6 +398,18 @@ public sealed class RoomSession : IDisposable
     public void SendMusic(byte[] payload, int offset, int count)
         => SendToAll(TypeMusic, payload, offset, count, Interlocked.Increment(ref _musicSeq));
 
+    /// <summary>Mensagem de controle do cinema (cabe num datagrama).</summary>
+    public void SendCinemaControl(string json)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(json);
+        if (bytes.Length > 1200) { Log.Write("cinema: controle grande demais, ignorado"); return; }
+        SendToAll(TypeCinemaCtl, bytes, 0, bytes.Length);
+    }
+
+    /// <summary>Um pedaco do arquivo. O indice vai no campo de sequencia.</summary>
+    public void SendCinemaChunk(int index, byte[] data, int offset, int count)
+        => SendToAll(TypeCinemaData, data, offset, count, (uint)index);
+
     private uint _musicSeq;
     private ushort _screenFrameId;
 
@@ -520,6 +540,21 @@ public sealed class RoomSession : IDisposable
 
                 case TypeScreen:
                     HandleScreenChunk(peer, buf, len);
+                    break;
+
+                case TypeCinemaCtl:
+                    try
+                    {
+                        string json = System.Text.Encoding.UTF8.GetString(buf, HeaderBytes, len - HeaderBytes);
+                        CinemaControl?.Invoke(senderId, json);
+                    }
+                    catch (Exception ex) { Log.Write("cinema: controle ilegivel: " + ex.Message); }
+                    break;
+
+                case TypeCinemaData:
+                    // O indice do pedaco viaja no campo de sequencia do cabecalho.
+                    CinemaChunk?.Invoke(senderId, (int)ReadUInt32(buf, 5),
+                                        buf, HeaderBytes, len - HeaderBytes);
                     break;
 
                 case TypePunch:

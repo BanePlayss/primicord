@@ -771,7 +771,9 @@ public sealed class MainForm : Form
         return _roomPanel;
     }
 
-    private PrimButton? _btnShare, _btnClip, _btnRec, _btnDj;
+    private PrimButton? _btnShare, _btnClip, _btnRec, _btnDj, _btnCinema;
+    private CinemaSession? _cinema;
+    private Form? _cinemaWindow;
 
     private Panel BuildRoomActions()
     {
@@ -795,17 +797,20 @@ public sealed class MainForm : Form
         _btnDj = new PrimButton("MODO DJ", PrimButton.Style.Ghost) { Size = new Size(130, 38) };
         _btnDj.Click += (_, _) => ToggleDj();
 
+        _btnCinema = new PrimButton("CINEMA", PrimButton.Style.Ghost) { Size = new Size(130, 38) };
+        _btnCinema.Click += (_, _) => OpenCinema();
+
         void Layout()
         {
             int x = 16, y = (bar.ClientSize.Height - 38) / 2;
-            foreach (var b in new[] { _btnShare, _btnRec, _btnClip, _btnDj })
+            foreach (var b in new[] { _btnShare, _btnRec, _btnClip, _btnDj, _btnCinema })
             {
                 b!.Location = new Point(x, y);
                 x += b.Width + 8;
             }
         }
         bar.Resize += (_, _) => Layout();
-        bar.Controls.AddRange(new Control[] { _btnShare, _btnRec, _btnClip, _btnDj });
+        bar.Controls.AddRange(new Control[] { _btnShare, _btnRec, _btnClip, _btnDj, _btnCinema });
         Layout();
         return bar;
     }
@@ -871,6 +876,12 @@ public sealed class MainForm : Form
         _voiceTimer?.Stop();
         _voiceTimer?.Dispose();
         _voiceTimer = null;
+
+        try { _cinemaWindow?.Close(); } catch { }
+        _cinemaWindow = null;
+        try { _cinema?.Dispose(); } catch { }
+        _cinema = null;
+        _bufferOffByUser = false;
 
         try { _screenSender?.Dispose(); } catch { }
         _screenSender = null;
@@ -1040,20 +1051,21 @@ public sealed class MainForm : Form
             return;
         }
 
-        var screens = ScreenSender.ListScreens();
-        Rectangle area = screens.Count > 0 ? screens[0].Bounds : Screen.PrimaryScreen!.Bounds;
-        if (screens.Count > 1)
-        {
-            int pick = PickDialog.Choose(this, "COMPARTILHAR TELA", "Qual monitor?",
-                                         screens.Select(s => s.Name).ToList());
-            if (pick < 0) return;
-            area = screens[pick].Bounds;
-        }
+        // Seletor no estilo do OBS: monitores E janelas abertas.
+        var targets = CaptureTarget.List();
+        if (targets.Count == 0) { ShowBanner("Nao achei nada pra capturar."); return; }
+        int pick = PickDialog.Choose(this, "COMPARTILHAR", "O que voce quer mostrar?",
+                                     targets.Select(t => t.Name).ToList());
+        if (pick < 0) return;
 
         try
         {
-            _screenSender = new ScreenSender(_session, area);
+            _screenSender = new ScreenSender(_session, targets[pick]);
             _screenSender.FullFrameProduced += OnMyFrame;
+            _screenSender.TargetLost += () =>
+            {
+                try { BeginInvoke(() => { if (_iAmSharing) ToggleScreenShare(); }); } catch { }
+            };
             // Quadro inteiro custa um encode a mais — so quando o clipe precisa.
             _screenSender.NeedFullFrames = _cfg.AutoBuffer;
             _screenSender.Start();
@@ -1115,6 +1127,7 @@ public sealed class MainForm : Form
     /// </summary>
     private void AutoStartBuffer()
     {
+        if (_bufferOffByUser) return;   // respeita quem desligou na mao
         if (!_cfg.AutoBuffer || _clips == null || _clips.Active) return;
         _clips.Start();
         try { BeginInvoke(SyncRoomButtons); } catch { }
@@ -1122,13 +1135,19 @@ public sealed class MainForm : Form
 
     // ─── CLIPE ───────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Liga/desliga o buffer na mao. Desligar aqui vale pra sessao inteira: o
+    /// auto-ligar nao briga com a decisao do usuario ate ele entrar noutra sala.
+    /// </summary>
     private void ToggleClipBuffer()
     {
         if (_clips == null) return;
-        if (_clips.Active) _clips.Stop();
-        else _clips.Start();
+        if (_clips.Active) { _clips.Stop(); _bufferOffByUser = true; }
+        else { _clips.Start(); _bufferOffByUser = false; }
         SyncRoomButtons();
     }
+
+    private bool _bufferOffByUser;
 
     private void SaveClip()
     {
@@ -1176,6 +1195,41 @@ public sealed class MainForm : Form
         }
     }
 
+    // ─── CINEMA ──────────────────────────────────────────────────────────────
+
+    private void OpenCinema()
+    {
+        if (_session == null) { ShowBanner("Entra numa sala de voz primeiro."); return; }
+
+        if (_cinemaWindow is { IsDisposed: false }) { _cinemaWindow.Activate(); return; }
+
+        _cinema ??= new CinemaSession(_session, Nick);
+        // Quem abre e clica em ESCOLHER VIDEO vira o host; quem so abre, assiste.
+        bool isHost = _cinema.State == CinemaSession.Phase.Ocioso
+                   || _cinema.HostNick == Nick;
+
+        var view = new CinemaView(_cinema, isHost) { Dock = DockStyle.Fill };
+        _cinemaWindow = new Form
+        {
+            Text = "PRIMICORD — CINEMA",
+            ClientSize = new Size(1000, 620),
+            MinimumSize = new Size(640, 400),
+            BackColor = Pv.Charcoal,
+            ForeColor = Pv.Bone,
+            Font = Pv.Body,
+            StartPosition = FormStartPosition.CenterParent,
+        };
+        try
+        {
+            string? exe = Environment.ProcessPath;
+            if (exe != null) _cinemaWindow.Icon = Icon.ExtractAssociatedIcon(exe);
+        }
+        catch { }
+        _cinemaWindow.Controls.Add(view);
+        _cinemaWindow.FormClosed += (_, _) => _cinemaWindow = null;
+        _cinemaWindow.Show(this);
+    }
+
     private void SyncRoomButtons()
     {
         if (_btnShare == null) return;
@@ -1184,8 +1238,10 @@ public sealed class MainForm : Form
         _btnShare.Kind = _iAmSharing ? PrimButton.Style.Solid : PrimButton.Style.Ghost;
         _btnShare.Invalidate();
 
+        // Liga/desliga explicito do buffer: o rotulo diz o ESTADO, nao a acao,
+        // pra ficar claro se esta gravando pra tras ou nao.
         bool buffering = _clips?.Active == true;
-        _btnRec!.Text = buffering ? "GRAVANDO" : "GRAVAR";
+        _btnRec!.Text = buffering ? "BUFFER: LIGADO" : "BUFFER: DESLIGADO";
         _btnRec.Kind = buffering ? PrimButton.Style.Solid : PrimButton.Style.Ghost;
         _btnRec.Invalidate();
 
