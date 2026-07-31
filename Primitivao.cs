@@ -192,6 +192,32 @@ public static class Primitivao
         catch { return 0; }
     }
 
+    // ─── ELENCO ──────────────────────────────────────────────────────────────
+
+    private static List<string>? _members;
+
+    /// <summary>
+    /// Todos os nicks cadastrados no Primitivao — vira a lista de membros do
+    /// Primicord (igual ao Discord: todo mundo aparece, online ou nao).
+    /// </summary>
+    public static async Task<List<string>> ListMembersAsync(Firestore fs, CancellationToken ct = default,
+                                                             bool force = false)
+    {
+        if (_members != null && !force) return _members;
+        var list = new List<string>();
+        try
+        {
+            var doc = await fs.GetAsync("primitivao/apostas", ct).ConfigureAwait(false);
+            var state = JsonNode.Parse(Firestore.Str(doc ?? new(), "json", "{}"));
+            if (state?["users"] is JsonObject users)
+                foreach (var (nick, _) in users) list.Add(nick);
+            list.Sort(StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) { Log.Write("listar membros falhou: " + ex.Message); }
+        _members = list;
+        return list;
+    }
+
     // ─── AVATARES ────────────────────────────────────────────────────────────
 
     /// <summary>

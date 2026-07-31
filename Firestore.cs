@@ -43,14 +43,21 @@ public sealed class Firestore
     // ─── LEITURA ─────────────────────────────────────────────────────────────
 
     /// <summary>Lista os documentos de uma coleção. Retorna (id, campos) por doc.</summary>
+    /// <param name="orderBy">
+    /// Ordenação server-side (ex.: "__name__ desc"). Quando informada, traz só a
+    /// primeira página — usado pra pegar as N mensagens mais recentes sem baixar o
+    /// histórico inteiro. Se o Firestore recusar, cai pra listagem simples.
+    /// </param>
     public async Task<List<(string Id, Dictionary<string, object?> Fields)>> ListAsync(
-        string collectionPath, int pageSize = 100, CancellationToken ct = default)
+        string collectionPath, int pageSize = 100, CancellationToken ct = default,
+        string? orderBy = null)
     {
         var outList = new List<(string, Dictionary<string, object?>)>();
         string? pageToken = null;
         do
         {
             string q = "pageSize=" + pageSize;
+            if (orderBy != null) q += "&orderBy=" + Uri.EscapeDataString(orderBy);
             if (pageToken != null) q += "&pageToken=" + Uri.EscapeDataString(pageToken);
 
             using var resp = await _http.GetAsync(Url(collectionPath, q), ct).ConfigureAwait(false);
@@ -58,6 +65,12 @@ public sealed class Firestore
             {
                 // 404 = coleção ainda não existe (nenhum doc criado) — não é erro.
                 if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) return outList;
+                // orderBy pode exigir índice; sem ele, refaz sem ordenação.
+                if (orderBy != null && resp.StatusCode == System.Net.HttpStatusCode.BadRequest)
+                {
+                    Log.Write($"orderBy recusado em {collectionPath}, caindo pra listagem simples");
+                    return await ListAsync(collectionPath, pageSize, ct).ConfigureAwait(false);
+                }
                 throw new FirestoreException(await Describe(resp).ConfigureAwait(false));
             }
 
@@ -74,6 +87,7 @@ public sealed class Firestore
                 }
             }
             pageToken = node?["nextPageToken"]?.GetValue<string>();
+            if (orderBy != null) break;   // ordenado = só a primeira página interessa
         } while (!string.IsNullOrEmpty(pageToken));
 
         return outList;

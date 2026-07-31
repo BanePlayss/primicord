@@ -1,12 +1,15 @@
+using System.Drawing.Drawing2D;
+
 namespace Primicord;
 
 /// <summary>
-/// Janela unica: alterna entre o LOBBY (lista de salas) e a SALA (quem esta na call).
+/// Shell do app, no formato do Discord: rail de canais a esquerda, conversa no
+/// meio, membros a direita, painel do usuario (com a engrenagem) no rodape do rail.
 /// </summary>
 /// <remarks>
 /// Layout e todo por DOCK + reposicionamento no Resize, nunca por coordenada fixa
-/// calculada do ClientSize no construtor — o Windows escala a janela por DPI (125%,
-/// 150%...) e tamanho fixo estoura pra fora da tela.
+/// calculada do ClientSize no construtor — o Windows escala por DPI e tamanho fixo
+/// estoura pra fora da tela.
 /// </remarks>
 public sealed class MainForm : Form
 {
@@ -14,14 +17,15 @@ public sealed class MainForm : Form
     private readonly RoomDirectory _dir;
     private readonly Config _cfg;
 
-    /// <summary>Quem esta logado — vem do Primitivao (mesma conta do site).</summary>
     private PrimitivaoUser? _me;
-    private Panel? _header;
+    private ChatService? _chat;
     private string Nick => _me?.Nick ?? _cfg.Nick;
 
+    // voz
     private RoomSession? _session;
     private VoiceEngine? _voice;
-    private string _roomName = "";
+    private string _voiceRoomId = "";
+    private string _voiceRoomName = "";
 
     // shell
     private readonly Panel _body = new() { Dock = DockStyle.Fill, BackColor = Pv.Charcoal };
@@ -31,18 +35,24 @@ public sealed class MainForm : Form
         TextAlign = ContentAlignment.MiddleCenter, Font = Pv.Body, Visible = false,
     };
 
-    // lobby
-    private Panel? _roomList;
-    private PrimInput? _newRoomInput;
-    private System.Windows.Forms.Timer? _lobbyTimer;
-
-    // sala
+    private Panel? _railList, _voiceStrip, _userPanel, _membersList, _contentHost;
+    private ChatView? _chatView;
+    private Panel? _roomPanel;
     private FlowLayoutPanel? _tiles;
     private readonly Dictionary<uint, PeerTile> _peerTiles = new();
     private PeerTile? _myTile;
-    private PrimButton? _muteBtn;
     private Label? _roomStatus;
-    private System.Windows.Forms.Timer? _roomTimer;
+
+    // estado da navegacao: "geral" | "dm:<nick>" | "room:<id>"
+    private string _view = "geral";
+    private List<RoomInfo> _rooms = new();
+    private List<string> _members = new();
+    private Dictionary<string, MemberPresence> _presence = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<string> _openDms = new();
+
+    private System.Windows.Forms.Timer? _pollTimer, _voiceTimer;
+    private int _pollTick;
+    private bool _polling;
 
     public MainForm()
     {
@@ -50,8 +60,6 @@ public sealed class MainForm : Form
         _cfg = Config.Load();
 
         Text = "PRIMICORD";
-        // O icone vem embutido no proprio exe (ApplicationIcon) — funciona tambem
-        // no publish single-file, onde nao existe .ico solto ao lado do binario.
         try
         {
             string? exe = Environment.ProcessPath;
@@ -59,90 +67,20 @@ public sealed class MainForm : Form
         }
         catch (Exception ex) { Log.Write("icone da janela: " + ex.Message); }
 
-        ClientSize = new Size(960, 660);
-        MinimumSize = new Size(720, 540);
+        ClientSize = new Size(1100, 700);
+        MinimumSize = new Size(880, 560);
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Pv.Charcoal;
         ForeColor = Pv.Bone;
         Font = Pv.Body;
         DoubleBuffered = true;
 
-        _header = BuildHeader();
-        Controls.Add(_body);      // Fill entra primeiro: fica com o espaco restante
+        Controls.Add(_body);
         Controls.Add(_banner);
-        Controls.Add(_header);
 
         ShowLogin();
-        // Ja logou antes? Re-valida em silencio contra o Primitivao.
         if (!string.IsNullOrWhiteSpace(_cfg.Nick) && !string.IsNullOrWhiteSpace(_cfg.SenhaHash))
             _ = TryAutoLoginAsync();
-    }
-
-    // ─── SHELL ───────────────────────────────────────────────────────────────
-
-    private Panel BuildHeader()
-    {
-        var header = new Panel { Dock = DockStyle.Top, Height = 62, BackColor = Pv.Charcoal };
-        header.Paint += (_, e) =>
-        {
-            var g = e.Graphics;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-            using (var b = new SolidBrush(Pv.Orange))
-                Pv.DrawTracked(g, "PRIMICORD", Pv.Display, b, 18, 14, 2.5f);
-            using (var p = new Pen(Pv.Orange, 3))
-                g.DrawLine(p, 0, header.Height - 2, header.Width, header.Height - 2);
-
-            if (_me == null) return;
-
-            // Canto direito: foto do site + nick + saldo de PC (dados do Primitivao).
-            int right = header.Width - 18;
-            const int av = 36;
-            var ac = new Rectangle(right - av, (header.Height - av) / 2 - 1, av, av);
-            var photo = Primitivao.AvatarFor(_me.Nick);
-            if (photo != null)
-            {
-                using var clip = new System.Drawing.Drawing2D.GraphicsPath();
-                clip.AddEllipse(ac);
-                var saved = g.Save();
-                g.SetClip(clip);
-                int side = Math.Min(photo.Width, photo.Height);
-                g.DrawImage(photo, ac,
-                    new Rectangle((photo.Width - side) / 2, (photo.Height - side) / 2, side, side),
-                    GraphicsUnit.Pixel);
-                g.Restore(saved);
-                using var pen = new Pen(Pv.Orange, 2);
-                g.DrawEllipse(pen, ac);
-            }
-            else
-            {
-                using var b = new SolidBrush(Pv.Orange);
-                g.FillEllipse(b, ac);
-                using var f = new Font("Bahnschrift", 15f, FontStyle.Bold);
-                using var tb = new SolidBrush(Pv.Charcoal);
-                string ini = _me.Nick[..1].ToUpperInvariant();
-                var sz = g.MeasureString(ini, f);
-                g.DrawString(ini, f, tb, ac.X + (av - sz.Width) / 2, ac.Y + (av - sz.Height) / 2);
-            }
-
-            float textRight = ac.Left - 12;
-            string who = _me.Nick.ToUpperInvariant();
-            if (_me.Badge.Length > 0) who += " · " + _me.Badge;
-            using (var b = new SolidBrush(Pv.Bone))
-            {
-                float w = Pv.TrackedWidth(g, who, Pv.Label, 1.8f);
-                Pv.DrawTracked(g, who, Pv.Label, b, textRight - w, 16, 1.8f);
-            }
-
-            string coins = _me.PcShort + " PC";
-            if (_me.TeamName.Length > 0) coins = _me.TeamName.ToUpperInvariant() + " · " + coins;
-            using (var b = new SolidBrush(Pv.Orange))
-            {
-                float w = Pv.TrackedWidth(g, coins, Pv.Label, 1.2f);
-                Pv.DrawTracked(g, coins, Pv.Label, b, textRight - w, 34, 1.2f);
-            }
-        };
-        header.Resize += (_, _) => header.Invalidate();
-        return header;
     }
 
     private void SetBody(Control c)
@@ -169,75 +107,75 @@ public sealed class MainForm : Form
         Text = text, Font = Pv.Label, ForeColor = Pv.BoneDim, AutoSize = true,
     };
 
-    // ─── LOGIN (conta do Primitivao) ─────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════════
+    // LOGIN
+    // ═══════════════════════════════════════════════════════════════════════
 
-    private PrimInput? _loginNick;
-    private PrimInput? _loginPass;
+    private PrimInput? _loginNick, _loginPass;
     private Label? _loginErr;
     private PrimButton? _loginBtn;
 
     private void ShowLogin(string? presetNick = null)
     {
         _me = null;
-        _header?.Invalidate();
+        StopTimers();
 
         var host = new Panel { BackColor = Pv.Charcoal };
-        var card = new Panel { Size = new Size(410, 300), BackColor = Pv.Char2 };
+        var card = new Panel { Size = new Size(410, 356), BackColor = Pv.Char2 };
         card.Paint += (_, e) =>
         {
-            using var p = new Pen(Pv.Char3, 2);
-            e.Graphics.DrawRectangle(p, 0, 0, card.Width - 1, card.Height - 1);
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            using (var p = new Pen(Pv.Char3, 2)) g.DrawRectangle(p, 0, 0, card.Width - 1, card.Height - 1);
+            using (var b = new SolidBrush(Pv.Orange))
+                Pv.DrawTracked(g, "PRIMICORD", Pv.Display, b, 24, 22, 2.5f);
         };
 
-        var title = new Label
-        {
-            Text = "ENTRAR", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
-            Location = new Point(24, 20), AutoSize = true,
-        };
         var hint = new Label
         {
-            Text = "Mesma conta do site do Primitivao.", Font = Pv.Body, ForeColor = Pv.BoneDim,
-            Location = new Point(24, 48), AutoSize = true,
+            Text = "Entra com a mesma conta do site do Primitivao.",
+            Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(24, 62), AutoSize = true,
         };
 
         var lblNick = SectionLabel("NICK");
-        lblNick.Location = new Point(24, 82);
+        lblNick.Location = new Point(24, 100);
         _loginNick = new PrimInput("seu nick")
         {
-            Location = new Point(24, 100), Width = 362,
+            Location = new Point(24, 120), Width = 362,
             Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
         };
         _loginNick.Value = presetNick ?? _cfg.Nick;
 
         var lblPass = SectionLabel("SENHA");
-        lblPass.Location = new Point(24, 148);
+        lblPass.Location = new Point(24, 170);
         _loginPass = new PrimInput("sua senha")
         {
-            Location = new Point(24, 166), Width = 362,
+            Location = new Point(24, 190), Width = 362,
             Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
         };
         _loginPass.Box.UseSystemPasswordChar = true;
 
         _loginErr = new Label
         {
-            Text = "", Font = Pv.Body, ForeColor = Pv.Red, Location = new Point(24, 210),
-            Size = new Size(362, 34), AutoSize = false,
+            Text = "", Font = Pv.Body, ForeColor = Pv.Red, Location = new Point(24, 236),
+            Size = new Size(362, 44), AutoSize = false,
             Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
         };
 
         _loginBtn = new PrimButton("ENTRAR")
         {
-            Location = new Point(24, 244), Size = new Size(362, 40),
+            Location = new Point(24, 288), Size = new Size(362, 44),
             Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
         };
         _loginBtn.Click += async (_, _) => await DoLoginAsync();
-        _loginNick.Box.KeyDown += async (_, e) =>
-        { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; _loginPass.Box.Focus(); } };
+        _loginNick.Box.KeyDown += (_, e) =>
+        { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; _loginPass!.Box.Focus(); } };
         _loginPass.Box.KeyDown += async (_, e) =>
         { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; await DoLoginAsync(); } };
 
         card.Controls.AddRange(new Control[]
-            { title, hint, lblNick, _loginNick, lblPass, _loginPass, _loginErr, _loginBtn });
+            { hint, lblNick, _loginNick, lblPass, _loginPass, _loginErr, _loginBtn });
         host.Controls.Add(card);
 
         void Center() => card.Location = new Point(
@@ -252,25 +190,18 @@ public sealed class MainForm : Form
 
     private async Task DoLoginAsync()
     {
-        if (_loginNick == null || _loginPass == null || _loginBtn == null) return;
+        if (_loginNick == null || _loginPass == null) return;
         SetLoginBusy(true, "");
         var res = await Primitivao.AuthenticateAsync(_fs, _loginNick.Value, _loginPass.Value);
-        if (!res.Ok)
-        {
-            SetLoginBusy(false, res.Error ?? "Nao consegui entrar");
-            return;
-        }
+        if (!res.Ok) { SetLoginBusy(false, res.Error ?? "Nao consegui entrar"); return; }
         OnLoggedIn(res.User!);
     }
 
-    /// <summary>Boot: revalida a sessao salva sem incomodar o usuario.</summary>
     private async Task TryAutoLoginAsync()
     {
         SetLoginBusy(true, "");
         var res = await Primitivao.AuthenticateWithHashAsync(_fs, _cfg.Nick, _cfg.SenhaHash);
         if (res.Ok) { OnLoggedIn(res.User!); return; }
-
-        // Senha mudou no site, ou conta sumiu: cai no login normal.
         Log.Write("auto-login falhou: " + res.Error);
         SetLoginBusy(false, res.Error ?? "");
     }
@@ -282,8 +213,8 @@ public sealed class MainForm : Form
         _cfg.Nick = user.Nick;
         _cfg.SenhaHash = user.SenhaHash;
         _cfg.Save();
-        _header?.Invalidate();
-        ShowLobby();
+        _chat = new ChatService(_fs, user.Nick);
+        BuildShell();
     }
 
     private void SetLoginBusy(bool busy, string error)
@@ -298,142 +229,466 @@ public sealed class MainForm : Form
 
     private void Logout()
     {
+        LeaveVoice();
+        _ = _chat?.ClearPresenceAsync();
         _cfg.SenhaHash = "";
         _cfg.Save();
         ShowLogin(_cfg.Nick);
     }
 
-    // ─── LOBBY ───────────────────────────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════════
+    // SHELL
+    // ═══════════════════════════════════════════════════════════════════════
 
-    private void ShowLobby()
+    private void BuildShell()
     {
-        StopRoomTimers();
-
         var host = new Panel { BackColor = Pv.Charcoal };
 
-        // Topo: criar sala.
-        var top = new Panel { Dock = DockStyle.Top, Height = 92, BackColor = Pv.Charcoal };
-        var lblNew = SectionLabel("ABRIR SALA NOVA");
-        lblNew.Location = new Point(24, 16);
-        _newRoomInput = new PrimInput("nome da sala (ex: RANQUEADA, RESENHA...)")
-        { Location = new Point(24, 40) };
-        var createBtn = new PrimButton("CRIAR") { Size = new Size(130, 38) };
-        createBtn.Click += async (_, _) => await CreateRoomAsync();
-        _newRoomInput.Box.KeyDown += async (_, e) =>
+        // ── RAIL ESQUERDO ──
+        var rail = new Panel { Dock = DockStyle.Left, Width = 236, BackColor = Pv.Char2 };
+        rail.Paint += (_, e) =>
         {
-            if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; await CreateRoomAsync(); }
-        };
-        void LayoutTop()
-        {
-            int right = top.ClientSize.Width - 24;
-            createBtn.Location = new Point(right - createBtn.Width, 40);
-            _newRoomInput.Width = Math.Max(160, createBtn.Left - 12 - 24);
-        }
-        top.Resize += (_, _) => LayoutTop();
-        top.Controls.AddRange(new Control[] { lblNew, _newRoomInput, createBtn });
-
-        // Rodape: dispositivos de audio.
-        var devices = BuildDevicePanel();
-
-        // Rotulo da lista + trocar de conta.
-        var lblRooms = new Panel { Dock = DockStyle.Top, Height = 34, BackColor = Pv.Charcoal };
-        var lr = SectionLabel("SALAS");
-        lr.Location = new Point(24, 12);
-        var logoutBtn = new PrimButton("TROCAR CONTA", PrimButton.Style.Ghost) { Size = new Size(140, 28) };
-        logoutBtn.Click += (_, _) => Logout();
-        lblRooms.Resize += (_, _) =>
-            logoutBtn.Location = new Point(lblRooms.ClientSize.Width - logoutBtn.Width - 24, 3);
-        lblRooms.Controls.AddRange(new Control[] { lr, logoutBtn });
-        logoutBtn.Location = new Point(Math.Max(160, ClientSize.Width - logoutBtn.Width - 24), 3);
-
-        // Lista (preenche o resto).
-        _roomList = new Panel
-        {
-            Dock = DockStyle.Fill, AutoScroll = true, BackColor = Pv.Charcoal,
-            Padding = new Padding(24, 0, 24, 12),
+            using var p = new Pen(Pv.Char3, 2);
+            e.Graphics.DrawLine(p, rail.Width - 1, 0, rail.Width - 1, rail.Height);
         };
 
-        host.Controls.Add(_roomList);   // Fill primeiro
-        host.Controls.Add(lblRooms);
-        host.Controls.Add(top);
-        host.Controls.Add(devices);
+        var brand = new Panel { Dock = DockStyle.Top, Height = 58, BackColor = Pv.Char2 };
+        brand.Paint += (_, e) =>
+        {
+            var g = e.Graphics;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            using (var b = new SolidBrush(Pv.Orange))
+                Pv.DrawTracked(g, "PRIMICORD", Pv.DisplaySm, b, 16, 18, 2.2f);
+            using (var p = new Pen(Pv.Char3, 2)) g.DrawLine(p, 0, brand.Height - 1, brand.Width, brand.Height - 1);
+        };
+
+        _userPanel = BuildUserPanel();
+        _voiceStrip = BuildVoiceStrip();
+        _railList = new Panel
+        {
+            Dock = DockStyle.Fill, AutoScroll = true, BackColor = Pv.Char2,
+            Padding = new Padding(0, 8, 0, 8),
+        };
+
+        rail.Controls.Add(_railList);   // Fill primeiro
+        rail.Controls.Add(_voiceStrip);
+        rail.Controls.Add(_userPanel);
+        rail.Controls.Add(brand);
+
+        // ── MEMBROS (direita) ──
+        var members = new Panel { Dock = DockStyle.Right, Width = 212, BackColor = Pv.Char2 };
+        members.Paint += (_, e) =>
+        {
+            using var p = new Pen(Pv.Char3, 2);
+            e.Graphics.DrawLine(p, 0, 0, 0, members.Height);
+        };
+        var mHead = new Panel { Dock = DockStyle.Top, Height = 56, BackColor = Pv.Char2 };
+        mHead.Paint += (_, e) =>
+        {
+            var g = e.Graphics;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            using var b = new SolidBrush(Pv.BoneDim);
+            Pv.DrawTracked(g, "MEMBROS", Pv.Label, b, 18, 22, 2.4f);
+        };
+        _membersList = new Panel
+        {
+            Dock = DockStyle.Fill, AutoScroll = true, BackColor = Pv.Char2,
+            Padding = new Padding(0, 4, 0, 8),
+        };
+        members.Controls.Add(_membersList);
+        members.Controls.Add(mHead);
+
+        // ── CONTEUDO ──
+        _contentHost = new Panel { Dock = DockStyle.Fill, BackColor = Pv.Charcoal };
+
+        host.Controls.Add(_contentHost);   // Fill primeiro
+        host.Controls.Add(members);
+        host.Controls.Add(rail);
         SetBody(host);
-        LayoutTop();
 
-        _lobbyTimer = new System.Windows.Forms.Timer { Interval = 3000 };
-        _lobbyTimer.Tick += async (_, _) => await RefreshRoomsAsync();
-        _lobbyTimer.Start();
-        _ = RefreshRoomsAsync();
+        _chatView = new ChatView { Dock = DockStyle.Fill };
+        _chatView.Send += OnSendMessageAsync;
+
+        SelectView("geral");
+        RebuildRail();
+
+        _pollTimer = new System.Windows.Forms.Timer { Interval = 2000 };
+        _pollTimer.Tick += async (_, _) => await PollAsync();
+        _pollTimer.Start();
+        _ = PollAsync();
     }
 
-    private Panel BuildDevicePanel()
+    private Panel BuildUserPanel()
     {
-        var p = new Panel { Dock = DockStyle.Bottom, Height = 84, BackColor = Pv.Charcoal };
+        var p = new Panel { Dock = DockStyle.Bottom, Height = 62, BackColor = Pv.Char3 };
         p.Paint += (_, e) =>
         {
-            using var pen = new Pen(Pv.Char3, 2);
-            e.Graphics.DrawLine(pen, 24, 1, p.Width - 24, 1);
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            if (_me == null) return;
+
+            var box = new Rectangle(12, (p.Height - 34) / 2, 34, 34);
+            Glyphs.Avatar(g, box, _me.Nick, Pv.Orange, Pv.Charcoal);
+            Glyphs.StatusDot(g, new RectangleF(box.Right - 10, box.Bottom - 10, 12, 12), Pv.Green, Pv.Char3);
+
+            using (var b = new SolidBrush(Pv.Bone))
+                g.DrawString(_me.Nick, Pv.BodyBold, b, box.Right + 10, box.Y + 1);
+            string sub = _me.Badge.Length > 0 ? _me.Badge : _me.PcShort + " PC";
+            using (var b = new SolidBrush(_me.Badge.Length > 0 ? Pv.Orange : Pv.BoneDim))
+                g.DrawString(sub, Pv.Label, b, box.Right + 10, box.Y + 19);
         };
 
-        var micLbl = SectionLabel("MICROFONE");
-        micLbl.Location = new Point(24, 14);
-        var micCombo = new ComboBox
-        {
-            Location = new Point(24, 36), DropDownStyle = ComboBoxStyle.DropDownList,
-            FlatStyle = FlatStyle.Flat, BackColor = Pv.Char2, ForeColor = Pv.Bone, Font = Pv.Body,
-        };
-        foreach (var d in VoiceEngine.ListInputs()) micCombo.Items.Add(d);
-        if (micCombo.Items.Count > 0)
-            micCombo.SelectedIndex = Math.Clamp(_cfg.MicDevice, 0, micCombo.Items.Count - 1);
-        micCombo.SelectedIndexChanged += (_, _) =>
-        {
-            if (micCombo.SelectedItem is InputDeviceItem it) { _cfg.MicDevice = it.DeviceNumber; _cfg.Save(); }
-        };
+        var gear = new GlyphButton(Glyphs.Gear) { Size = new Size(34, 34) };
+        gear.ToolTipText = "Configuracoes de som";
+        gear.Click += (_, _) => OpenSettings();
+        var logout = new GlyphButton(Glyphs.Exit) { Size = new Size(34, 34) };
+        logout.ToolTipText = "Trocar de conta";
+        logout.Click += (_, _) => Logout();
 
-        var outLbl = SectionLabel("SAIDA (USE FONE — SEM CANCELAMENTO DE ECO)");
-        var outCombo = new ComboBox
+        void Layout()
         {
-            DropDownStyle = ComboBoxStyle.DropDownList,
-            FlatStyle = FlatStyle.Flat, BackColor = Pv.Char2, ForeColor = Pv.Bone, Font = Pv.Body,
-        };
-        outCombo.Items.Add(new OutputDeviceItem("", "Padrao do Windows"));
-        foreach (var d in VoiceEngine.ListOutputs()) outCombo.Items.Add(d);
-        outCombo.SelectedIndex = 0;
-        for (int i = 0; i < outCombo.Items.Count; i++)
-            if (outCombo.Items[i] is OutputDeviceItem o && o.Id == _cfg.OutputDeviceId) outCombo.SelectedIndex = i;
-        outCombo.SelectedIndexChanged += (_, _) =>
-        {
-            if (outCombo.SelectedItem is OutputDeviceItem it) { _cfg.OutputDeviceId = it.Id; _cfg.Save(); }
-        };
-
-        void LayoutDev()
-        {
-            int usable = p.ClientSize.Width - 48;
-            int col = Math.Max(140, (usable - 20) / 2);
-            micCombo.Width = col;
-            outLbl.Location = new Point(24 + col + 20, 14);
-            outCombo.Location = new Point(24 + col + 20, 36);
-            outCombo.Width = col;
+            gear.Location = new Point(p.ClientSize.Width - 44, (p.Height - gear.Height) / 2);
+            logout.Location = new Point(p.ClientSize.Width - 82, (p.Height - logout.Height) / 2);
         }
-        p.Resize += (_, _) => LayoutDev();
-        p.Controls.AddRange(new Control[] { micLbl, micCombo, outLbl, outCombo });
-        LayoutDev();
+        p.Resize += (_, _) => Layout();
+        p.Controls.AddRange(new Control[] { gear, logout });
+        Layout();
         return p;
+    }
+
+    /// <summary>Faixa "voce esta numa call" no rodape do rail (some fora de call).</summary>
+    private Panel BuildVoiceStrip()
+    {
+        var p = new Panel { Dock = DockStyle.Bottom, Height = 0, BackColor = Pv.Char2, Visible = false };
+        p.Paint += (_, e) =>
+        {
+            var g = e.Graphics;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            using (var pen = new Pen(Pv.Char3, 2)) g.DrawLine(pen, 0, 0, p.Width, 0);
+            using (var b = new SolidBrush(Pv.Green))
+                Pv.DrawTracked(g, "VOZ CONECTADA", Pv.Label, b, 14, 10, 1.6f);
+            using (var b = new SolidBrush(Pv.Bone))
+                g.DrawString(_voiceRoomName, Pv.Body, b, 14, 24);
+        };
+        return p;
+    }
+
+    private void UpdateVoiceStrip()
+    {
+        if (_voiceStrip == null) return;
+        bool on = _session != null;
+        _voiceStrip.Visible = on;
+        _voiceStrip.Height = on ? 92 : 0;
+        _voiceStrip.Controls.Clear();
+        if (!on) return;
+
+        var mute = new GlyphButton((g, r, c, w) => Glyphs.Mic(g, r, c, _session!.Muted))
+        { Size = new Size(34, 34), Location = new Point(14, 48) };
+        mute.Accent = _session!.Muted ? Pv.Red : Pv.Bone;
+        mute.ToolTipText = _session.Muted ? "Desmutar" : "Mutar";
+        mute.Click += (_, _) => { ToggleMute(); UpdateVoiceStrip(); };
+
+        var leave = new GlyphButton(Glyphs.Exit) { Size = new Size(34, 34), Location = new Point(54, 48) };
+        leave.Accent = Pv.Red;
+        leave.ToolTipText = "Sair da call";
+        leave.Click += (_, _) => LeaveVoice();
+
+        _voiceStrip.Controls.AddRange(new Control[] { mute, leave });
+        _voiceStrip.Invalidate();
+    }
+
+    private void OpenSettings()
+    {
+        using var dlg = new SettingsDialog(_cfg);
+        dlg.Applied += () =>
+        {
+            // Ja numa call? Reabre o audio com os dispositivos novos, sem derrubar a sala.
+            if (_voice == null || _session == null) return;
+            try
+            {
+                _voice.Dispose();
+                _voice = new VoiceEngine();
+                _voice.Failed += ShowBanner;
+                _voice.AttachSession(_session);
+                _voice.Start(_cfg.MicDevice,
+                    string.IsNullOrEmpty(_cfg.OutputDeviceId) ? null : _cfg.OutputDeviceId);
+                Log.Write("audio reaberto com os dispositivos novos");
+            }
+            catch (Exception ex)
+            {
+                Log.Write("troca de dispositivo falhou: " + ex.Message);
+                ShowBanner("Nao consegui trocar o dispositivo: " + ex.Message);
+            }
+        };
+        dlg.ShowDialog(this);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // RAIL
+    // ═══════════════════════════════════════════════════════════════════════
+
+    private void RebuildRail()
+    {
+        if (_railList == null || _railList.IsDisposed) return;
+        _railList.SuspendLayout();
+        foreach (Control c in _railList.Controls.Cast<Control>().ToList()) c.Dispose();
+        _railList.Controls.Clear();
+
+        // Dock=Top empilha ao contrario: montamos a lista e adicionamos invertida.
+        var items = new List<Control>();
+
+        items.Add(RailHeader("CANAIS"));
+        var geral = new RailItem("geral", RailItem.Kind.TextChannel)
+        { Dock = DockStyle.Top, Active = _view == "geral" };
+        geral.Click += (_, _) => SelectView("geral");
+        items.Add(geral);
+
+        items.Add(RailHeader("SALAS DE VOZ"));
+        foreach (var room in _rooms)
+        {
+            var it = new RailItem(room.Name, RailItem.Kind.Voice)
+            {
+                Dock = DockStyle.Top,
+                Active = _view == "room:" + room.Id,
+                Suffix = room.Count > 0 ? room.Count.ToString() : "",
+            };
+            string id = room.Id, name = room.Name;
+            it.Click += async (_, _) => await OnRoomClickedAsync(id, name);
+            items.Add(it);
+        }
+        var novaSala = new RailItem("Nova sala", RailItem.Kind.Action) { Dock = DockStyle.Top };
+        novaSala.Click += async (_, _) => await CreateRoomAsync();
+        items.Add(novaSala);
+
+        if (_openDms.Count > 0)
+        {
+            items.Add(RailHeader("CONVERSAS"));
+            foreach (string other in _openDms)
+            {
+                var it = new RailItem(other, RailItem.Kind.Dm)
+                {
+                    Dock = DockStyle.Top,
+                    Active = _view == "dm:" + other,
+                    AvatarNick = other,
+                    Online = _presence.TryGetValue(other, out var pr) && pr.Online,
+                };
+                string o = other;
+                it.Click += (_, _) => SelectView("dm:" + o);
+                items.Add(it);
+            }
+        }
+
+        items.Reverse();
+        foreach (var c in items) _railList.Controls.Add(c);
+        _railList.ResumeLayout();
+    }
+
+    private static Panel RailHeader(string text)
+    {
+        var p = new Panel { Dock = DockStyle.Top, Height = 28, BackColor = Pv.Char2 };
+        p.Paint += (_, e) =>
+        {
+            var g = e.Graphics;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            using var b = new SolidBrush(Pv.BoneDim);
+            Pv.DrawTracked(g, text, Pv.Label, b, 14, 12, 2.0f);
+        };
+        return p;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // NAVEGACAO
+    // ═══════════════════════════════════════════════════════════════════════
+
+    private void SelectView(string view)
+    {
+        _view = view;
+        if (_contentHost == null) return;
+
+        _contentHost.SuspendLayout();
+        _contentHost.Controls.Clear();
+
+        if (view.StartsWith("room:"))
+        {
+            _contentHost.Controls.Add(EnsureRoomPanel());
+        }
+        else
+        {
+            if (_chatView == null) return;
+            _contentHost.Controls.Add(_chatView);
+            if (view == "geral")
+                _chatView.SetHeader("# geral", "O canal de todo mundo.");
+            else
+            {
+                string other = view[3..];
+                _chatView.SetHeader("@ " + other,
+                    "Conversa direta — nao e criptografada, evita segredo aqui.");
+            }
+            _chatView.SetMessages(new List<ChatMessage>(), Nick);
+            _chatView.FocusComposer();
+            _ = RefreshChatAsync();
+        }
+        _contentHost.ResumeLayout();
+        RebuildRail();
+    }
+
+    private async Task OnRoomClickedAsync(string roomId, string roomName)
+    {
+        // Ja estou nessa call? So mostra os tiles. Senao, entra.
+        if (_voiceRoomId != roomId) await JoinVoiceAsync(roomId, roomName);
+        SelectView("room:" + roomId);
+    }
+
+    private void OpenDm(string other)
+    {
+        other = other.ToLowerInvariant();
+        if (string.Equals(other, Nick, StringComparison.OrdinalIgnoreCase)) return;
+        if (!_openDms.Contains(other)) _openDms.Add(other);
+        SelectView("dm:" + other);
+    }
+
+    private async Task OnSendMessageAsync(string text)
+    {
+        if (_chat == null) return;
+        try
+        {
+            if (_view == "geral") await _chat.SendToChannelAsync(ChatService.GeneralChannel, text);
+            else if (_view.StartsWith("dm:")) await _chat.SendDmAsync(_view[3..], text);
+            await RefreshChatAsync();
+        }
+        catch (FirestoreException ex) when (ex.IsPermissionDenied)
+        {
+            ShowBanner("O Firestore recusou — falta publicar as rules (pc_chat/pc_dm) no Console.");
+        }
+        catch (Exception ex)
+        {
+            Log.Write("envio de mensagem falhou: " + ex.Message);
+            ShowBanner("Nao consegui enviar: " + ex.Message);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // POLL (Firestore nao tem listener no REST)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    private async Task PollAsync()
+    {
+        if (_polling || _me == null || _chat == null) return;
+        _polling = true;
+        try
+        {
+            _pollTick++;
+
+            // Heartbeat de presenca a cada ~20s.
+            if (_pollTick % 10 == 1)
+                try { await _chat.HeartbeatAsync(_voiceRoomId.Length > 0 ? _voiceRoomName : ""); }
+                catch (FirestoreException ex) when (ex.IsPermissionDenied)
+                {
+                    ShowBanner("O Firestore recusou a escrita — falta publicar as rules no Console.");
+                    _pollTimer?.Stop();
+                    return;
+                }
+
+            if (_members.Count == 0) _members = await Primitivao.ListMembersAsync(_fs);
+
+            try { _presence = await _chat.ReadPresenceAsync(); } catch { }
+
+            var rooms = await _dir.ListAsync();
+            bool roomsChanged = rooms.Count != _rooms.Count ||
+                rooms.Zip(_rooms).Any(t => t.First.Id != t.Second.Id || t.First.Count != t.Second.Count);
+            _rooms = rooms;
+
+            await RefreshChatAsync();
+            RefreshMembers();
+            if (roomsChanged || _pollTick % 5 == 1) RebuildRail();
+        }
+        catch (FirestoreException ex) when (ex.IsPermissionDenied)
+        {
+            ShowBanner("O Firestore recusou a leitura — falta publicar as rules no Firebase Console.");
+            _pollTimer?.Stop();
+        }
+        catch (Exception ex) { Log.Write("poll falhou: " + ex.Message); }
+        finally { _polling = false; }
+    }
+
+    private async Task RefreshChatAsync()
+    {
+        if (_chat == null || _chatView == null || _chatView.IsDisposed) return;
+        if (_view.StartsWith("room:")) return;
+        try
+        {
+            var msgs = _view == "geral"
+                ? await _chat.ReadChannelAsync(ChatService.GeneralChannel)
+                : await _chat.ReadDmAsync(_view[3..]);
+            if (!_chatView.IsDisposed) _chatView.SetMessages(msgs, Nick);
+        }
+        catch (FirestoreException ex) when (ex.IsPermissionDenied) { throw; }
+        catch (Exception ex) { Log.Write("ler chat falhou: " + ex.Message); }
+    }
+
+    private void RefreshMembers()
+    {
+        if (_membersList == null || _membersList.IsDisposed) return;
+
+        var ordered = _members
+            .OrderByDescending(n => _presence.TryGetValue(n, out var p) && p.Online)
+            .ThenBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // Recria so quando a composicao muda (o poll roda a cada 2s).
+        string sig = string.Join(",", ordered.Select(n =>
+            n + (_presence.TryGetValue(n, out var p) && p.Online ? "+" + p.Room : "-")));
+        if ((string?)_membersList.Tag == sig) return;
+        _membersList.Tag = sig;
+
+        _membersList.SuspendLayout();
+        foreach (Control c in _membersList.Controls.Cast<Control>().ToList()) c.Dispose();
+        _membersList.Controls.Clear();
+
+        var rows = new List<Control>();
+        int online = ordered.Count(n => _presence.TryGetValue(n, out var p) && p.Online);
+        rows.Add(RailHeader($"ONLINE — {online}"));
+        bool addedOffline = false;
+        foreach (string n in ordered)
+        {
+            bool isOn = _presence.TryGetValue(n, out var pr) && pr.Online;
+            if (!isOn && !addedOffline)
+            {
+                rows.Add(RailHeader($"OFFLINE — {ordered.Count - online}"));
+                addedOffline = true;
+            }
+            var row = new MemberRow
+            {
+                Dock = DockStyle.Top, Nick = n, Online = isOn,
+                Room = isOn ? (pr!.Room ?? "") : "",
+                IsMe = string.Equals(n, Nick, StringComparison.OrdinalIgnoreCase),
+            };
+            string target = n;
+            row.Click += (_, _) => OpenDm(target);
+            rows.Add(row);
+        }
+        rows.Reverse();
+        foreach (var c in rows) _membersList.Controls.Add(c);
+        _membersList.ResumeLayout();
     }
 
     private async Task CreateRoomAsync()
     {
-        string name = _newRoomInput?.Value.Trim() ?? "";
-        if (string.IsNullOrEmpty(name)) return;
+        string? name = PromptDialog.Ask(this, "NOVA SALA DE VOZ", "Nome da sala",
+                                        "ex: RANQUEADA, RESENHA...");
+        if (string.IsNullOrWhiteSpace(name)) return;
         try
         {
-            var room = await _dir.CreateAsync(name, _cfg.Nick);
-            if (_newRoomInput != null) _newRoomInput.Value = "";
-            await JoinRoomAsync(room.Id, room.Name);
+            var room = await _dir.CreateAsync(name.Trim(), Nick);
+            _rooms = await _dir.ListAsync();
+            RebuildRail();
+            await JoinVoiceAsync(room.Id, room.Name);
+            SelectView("room:" + room.Id);
         }
         catch (FirestoreException ex) when (ex.IsPermissionDenied)
         {
-            ShowBanner("O Firestore recusou a escrita — falta publicar as rules do pc_rooms no Firebase Console.");
+            ShowBanner("O Firestore recusou a escrita — falta publicar as rules do pc_rooms no Console.");
         }
         catch (Exception ex)
         {
@@ -442,102 +697,54 @@ public sealed class MainForm : Form
         }
     }
 
-    private async Task RefreshRoomsAsync()
+    // ═══════════════════════════════════════════════════════════════════════
+    // VOZ
+    // ═══════════════════════════════════════════════════════════════════════
+
+    private Panel EnsureRoomPanel()
     {
-        if (_roomList == null || _roomList.IsDisposed) return;
-        List<RoomInfo> rooms;
-        try { rooms = await _dir.ListAsync(); }
-        catch (FirestoreException ex) when (ex.IsPermissionDenied)
-        {
-            ShowBanner("O Firestore recusou a leitura — falta publicar as rules do pc_rooms no Firebase Console.");
-            _lobbyTimer?.Stop();
-            return;
-        }
-        catch (Exception ex) { Log.Write("listar salas falhou: " + ex.Message); return; }
+        if (_roomPanel != null && !_roomPanel.IsDisposed) return _roomPanel;
 
-        if (_roomList.IsDisposed) return;
-        _roomList.SuspendLayout();
-        foreach (Control c in _roomList.Controls.Cast<Control>().ToList()) c.Dispose();
-        _roomList.Controls.Clear();
+        _roomPanel = new Panel { Dock = DockStyle.Fill, BackColor = Pv.Charcoal };
 
-        if (rooms.Count == 0)
-        {
-            _roomList.Controls.Add(new Label
-            {
-                Text = "Nenhuma sala ainda. Abre a primeira ai em cima.",
-                ForeColor = Pv.BoneDim, Font = Pv.Body, AutoSize = true, Location = new Point(4, 10),
-            });
-        }
-        else
-        {
-            // Dock=Top empilha na ordem INVERSA de adicao — por isso o Reverse().
-            foreach (var room in Enumerable.Reverse(rooms))
-                _roomList.Controls.Add(BuildRoomRow(room));
-        }
-        _roomList.ResumeLayout();
-    }
-
-    private Panel BuildRoomRow(RoomInfo room)
-    {
-        // Height inclui 10px de respiro embaixo; a moldura e desenhada so nos 68 de cima.
-        var row = new Panel { Dock = DockStyle.Top, Height = 78, BackColor = Pv.Charcoal };
-        const int CardH = 68;
-
-        row.Paint += (_, e) =>
+        var head = new Panel { Dock = DockStyle.Top, Height = 56, BackColor = Pv.Charcoal };
+        head.Paint += (_, e) =>
         {
             var g = e.Graphics;
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-            var card = new Rectangle(0, 0, row.Width - 1, CardH);
-            using (var b = new SolidBrush(Pv.Char2)) g.FillRectangle(b, card);
-            using (var p = new Pen(Pv.Char3, 2)) g.DrawRectangle(p, card);
-            using (var b = new SolidBrush(Pv.Bone))
-                Pv.DrawTracked(g, room.Name, Pv.DisplaySm, b, 16, 12, 1.6f);
-
-            string meta = room.Count > 0
-                ? room.Count + " na sala: " + string.Join(", ", room.Occupants)
-                : "vazia · criada por " + (room.CreatedBy.Length > 0 ? room.CreatedBy : "?");
-            using (var b = new SolidBrush(room.Count > 0 ? Pv.Green : Pv.BoneDim))
-                g.DrawString(meta, Pv.Body, b, 16, 38);
+            using (var p = new Pen(Pv.Char3, 2)) g.DrawLine(p, 0, head.Height - 1, head.Width, head.Height - 1);
+            var ic = new RectangleF(20, 18, 18, 18);
+            Glyphs.Speaker(g, ic, Pv.Bone);
+            using var b = new SolidBrush(Pv.Bone);
+            g.DrawString(_voiceRoomName, Pv.DisplaySm, b, 46, 12);
         };
 
-        var enter = new PrimButton("ENTRAR") { Size = new Size(112, 34) };
-        enter.Click += async (_, _) => await JoinRoomAsync(room.Id, room.Name);
-        row.Controls.Add(enter);
-
-        PrimButton? del = null;
-        if (room.Count == 0)
+        _roomStatus = new Label
         {
-            del = new PrimButton("X", PrimButton.Style.Ghost) { Size = new Size(38, 34) };
-            del.Click += async (_, _) =>
-            {
-                if (MessageBox.Show($"Excluir a sala \"{room.Name}\"?", "PRIMICORD",
-                        MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-                try { await _dir.DeleteAsync(room.Id); await RefreshRoomsAsync(); }
-                catch (Exception ex) { Log.Write("excluir falhou: " + ex.Message); }
-            };
-            row.Controls.Add(del);
-        }
+            Dock = DockStyle.Top, Height = 30, Font = Pv.Body, ForeColor = Pv.BoneDim,
+            Padding = new Padding(22, 8, 0, 0), Text = "conectando...",
+        };
 
-        void LayoutRow()
+        _tiles = new FlowLayoutPanel
         {
-            int y = (CardH - enter.Height) / 2;
-            enter.Location = new Point(row.ClientSize.Width - enter.Width - 16, y);
-            if (del != null) del.Location = new Point(enter.Left - del.Width - 8, y);
-        }
-        row.Resize += (_, _) => LayoutRow();
-        LayoutRow();
-        return row;
+            Dock = DockStyle.Fill, AutoScroll = true, WrapContents = true,
+            BackColor = Pv.Charcoal, Padding = new Padding(16, 8, 16, 8),
+        };
+
+        _roomPanel.Controls.Add(_tiles);
+        _roomPanel.Controls.Add(_roomStatus);
+        _roomPanel.Controls.Add(head);
+        return _roomPanel;
     }
 
-    // ─── SALA ────────────────────────────────────────────────────────────────
-
-    private async Task JoinRoomAsync(string roomId, string roomName)
+    private async Task JoinVoiceAsync(string roomId, string roomName)
     {
-        _lobbyTimer?.Stop();
-        _roomName = roomName;
+        LeaveVoice();
+        _voiceRoomId = roomId;
+        _voiceRoomName = roomName;
 
-        string peerId = Sanitize(_cfg.Nick) + "-" + Random.Shared.Next(0x10000, 0xFFFFF).ToString("x5");
-        _session = new RoomSession(_fs, roomId, peerId, _cfg.Nick);
+        string peerId = Sanitize(Nick) + "-" + Random.Shared.Next(0x10000, 0xFFFFF).ToString("x5");
+        _session = new RoomSession(_fs, roomId, peerId, Nick);
         _session.PeersChanged += OnPeersChanged;
         _session.Failed += ShowBanner;
 
@@ -545,85 +752,55 @@ public sealed class MainForm : Form
         _voice.Failed += ShowBanner;
         _voice.AttachSession(_session);
 
-        BuildRoomUi();
+        // Recria os tiles do zero pra esta sala.
+        _peerTiles.Clear();
+        EnsureRoomPanel();
+        _tiles!.Controls.Clear();
+        _myTile = new PeerTile { Nick = Nick, IsMe = true, Connected = true, Margin = new Padding(6) };
+        _tiles.Controls.Add(_myTile);
+
+        UpdateVoiceStrip();
 
         try
         {
-            _voice.Start(_cfg.MicDevice, string.IsNullOrEmpty(_cfg.OutputDeviceId) ? null : _cfg.OutputDeviceId);
+            _voice.Start(_cfg.MicDevice,
+                string.IsNullOrEmpty(_cfg.OutputDeviceId) ? null : _cfg.OutputDeviceId);
             await _session.StartAsync();
             UpdateRoomStatus();
         }
         catch (FirestoreException ex) when (ex.IsPermissionDenied)
         {
-            ShowBanner("O Firestore recusou a escrita — falta publicar as rules do pc_rooms no Firebase Console.");
+            ShowBanner("O Firestore recusou a escrita — falta publicar as rules do pc_rooms no Console.");
         }
         catch (Exception ex)
         {
             Log.Write("entrar na sala falhou: " + ex.Message);
             ShowBanner("Nao consegui entrar: " + ex.Message);
         }
+
+        _voiceTimer?.Stop();
+        _voiceTimer = new System.Windows.Forms.Timer { Interval = 100 };
+        _voiceTimer.Tick += (_, _) => TickVoice();
+        _voiceTimer.Start();
     }
 
-    private void BuildRoomUi()
+    private void LeaveVoice()
     {
-        var host = new Panel { BackColor = Pv.Charcoal };
+        _voiceTimer?.Stop();
+        _voiceTimer?.Dispose();
+        _voiceTimer = null;
 
-        // Barra de controles (rodape).
-        var bar = new Panel { Dock = DockStyle.Bottom, Height = 76, BackColor = Pv.Charcoal };
-        bar.Paint += (_, e) =>
-        {
-            using var p = new Pen(Pv.Orange, 3);
-            e.Graphics.DrawLine(p, 0, 1, bar.Width, 1);
-        };
+        try { _voice?.Dispose(); } catch { }
+        try { _session?.Dispose(); } catch { }
+        _voice = null;
+        _session = null;
+        _voiceRoomId = "";
+        _voiceRoomName = "";
+        _peerTiles.Clear();
+        _myTile = null;
 
-        _muteBtn = new PrimButton("MUTAR") { Size = new Size(150, 44) };
-        _muteBtn.Click += (_, _) => ToggleMute();
-        var leaveBtn = new PrimButton("SAIR", PrimButton.Style.Danger) { Size = new Size(130, 44) };
-        leaveBtn.Click += (_, _) => LeaveRoom();
-
-        void LayoutBar()
-        {
-            int total = _muteBtn.Width + 12 + leaveBtn.Width;
-            int x = Math.Max(8, (bar.ClientSize.Width - total) / 2);
-            int y = (bar.ClientSize.Height - _muteBtn.Height) / 2;
-            _muteBtn.Location = new Point(x, y);
-            leaveBtn.Location = new Point(x + _muteBtn.Width + 12, y);
-        }
-        bar.Resize += (_, _) => LayoutBar();
-        bar.Controls.AddRange(new Control[] { _muteBtn, leaveBtn });
-
-        // Cabecalho da sala.
-        var head = new Panel { Dock = DockStyle.Top, Height = 64, BackColor = Pv.Charcoal };
-        var title = new Label
-        {
-            Text = _roomName, Font = Pv.DisplaySm, ForeColor = Pv.Bone,
-            Location = new Point(24, 14), AutoSize = true,
-        };
-        _roomStatus = new Label
-        {
-            Text = "conectando...", Font = Pv.Body, ForeColor = Pv.BoneDim,
-            Location = new Point(24, 40), AutoSize = true,
-        };
-        head.Controls.AddRange(new Control[] { title, _roomStatus });
-
-        // Tiles (preenchem o resto e quebram linha sozinhos).
-        _tiles = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill, AutoScroll = true, WrapContents = true,
-            BackColor = Pv.Charcoal, Padding = new Padding(18, 4, 18, 8),
-        };
-        _myTile = new PeerTile { Nick = _cfg.Nick, IsMe = true, Connected = true, Margin = new Padding(6) };
-        _tiles.Controls.Add(_myTile);
-
-        host.Controls.Add(_tiles);   // Fill primeiro
-        host.Controls.Add(head);
-        host.Controls.Add(bar);
-        SetBody(host);
-        LayoutBar();
-
-        _roomTimer = new System.Windows.Forms.Timer { Interval = 100 };
-        _roomTimer.Tick += (_, _) => TickRoom();
-        _roomTimer.Start();
+        UpdateVoiceStrip();
+        if (_view.StartsWith("room:")) SelectView("geral");
     }
 
     private void OnPeersChanged()
@@ -656,24 +833,20 @@ public sealed class MainForm : Form
             _peerTiles.Remove(sid);
             _tiles.Controls.Remove(tile);
             tile.Dispose();
-            _voice?.RemovePeer(sid);   // tira a voz morta do mixer
+            _voice?.RemovePeer(sid);
         }
-
         UpdateRoomStatus();
     }
 
-    /// <summary>Roda a 10fps: so atualiza niveis de voz (o resto vem por evento).</summary>
-    private void TickRoom()
+    private void TickVoice()
     {
         if (_voice == null || _session == null) return;
-
         if (_myTile != null && !_myTile.IsDisposed)
         {
             _myTile.Level = _session.Muted ? 0f : _voice.MyPeak;
             _myTile.Muted = _session.Muted;
             _myTile.Invalidate();
         }
-
         foreach (var p in _session.Peers)
         {
             if (!_peerTiles.TryGetValue(p.SenderId, out var tile) || tile.IsDisposed) continue;
@@ -696,49 +869,31 @@ public sealed class MainForm : Form
         int connected = peers.Count(p => p.Connected);
         int punching = peers.Count(p => !p.Connected);
 
-        string s;
-        if (peers.Count == 0) s = "voce esta sozinho na sala — chama a galera";
-        else if (punching == 0) s = $"{connected + 1} na call · conectado direto (P2P)";
-        else s = $"{connected + 1} na call · {punching} conectando...";
-
-        if (_session.PublicEndpoint == null)
-            s += " · sem STUN (so conecta na mesma rede)";
-
+        string s = peers.Count == 0 ? "voce esta sozinho na sala — chama a galera"
+                 : punching == 0 ? $"{connected + 1} na call · conectado direto (P2P)"
+                 : $"{connected + 1} na call · {punching} conectando...";
+        if (_session.PublicEndpoint == null) s += " · sem STUN (so conecta na mesma rede)";
         _roomStatus.Text = s;
     }
 
     private void ToggleMute()
     {
-        if (_session == null || _muteBtn == null) return;
+        if (_session == null) return;
         _session.Muted = !_session.Muted;
-        _muteBtn.Text = _session.Muted ? "FALAR" : "MUTAR";
-        _muteBtn.Kind = _session.Muted ? PrimButton.Style.Danger : PrimButton.Style.Solid;
-        _muteBtn.Invalidate();
     }
 
-    private void LeaveRoom()
+    private void StopTimers()
     {
-        StopRoomTimers();
-        try { _voice?.Dispose(); } catch { }
-        try { _session?.Dispose(); } catch { }
-        _voice = null;
-        _session = null;
-        _peerTiles.Clear();
-        _myTile = null;
-        ShowLobby();
-    }
-
-    private void StopRoomTimers()
-    {
-        try { _roomTimer?.Stop(); _roomTimer?.Dispose(); } catch { }
-        _roomTimer = null;
-        try { _lobbyTimer?.Stop(); _lobbyTimer?.Dispose(); } catch { }
-        _lobbyTimer = null;
+        try { _pollTimer?.Stop(); _pollTimer?.Dispose(); } catch { }
+        _pollTimer = null;
+        try { _voiceTimer?.Stop(); _voiceTimer?.Dispose(); } catch { }
+        _voiceTimer = null;
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
-        StopRoomTimers();
+        StopTimers();
+        try { _chat?.ClearPresenceAsync().Wait(1200); } catch { }
         try { _voice?.Dispose(); } catch { }
         try { _session?.Dispose(); } catch { }
         base.OnFormClosing(e);

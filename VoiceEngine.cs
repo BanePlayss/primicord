@@ -254,6 +254,35 @@ public sealed class VoiceEngine : IDisposable
             if (_streams.TryGetValue(senderId, out var st)) st.Volume.Volume = Math.Clamp(volume, 0f, 2f);
     }
 
+    /// <summary>
+    /// Abre um microfone SO pra medir nivel (a barrinha do teste nas configuracoes).
+    /// Nao manda nada pra rede nem toca em lugar nenhum.
+    /// </summary>
+    public sealed class MicMonitor : IDisposable
+    {
+        private WaveInEvent? _mic;
+        public event Action<float>? LevelChanged;
+
+        public MicMonitor(int deviceNumber)
+        {
+            _mic = new WaveInEvent
+            {
+                DeviceNumber = deviceNumber,
+                WaveFormat = Pcm48Mono,
+                BufferMilliseconds = 50,
+                NumberOfBuffers = 3,
+            };
+            _mic.DataAvailable += (_, a) => LevelChanged?.Invoke(ComputePeak(a.Buffer, 0, a.BytesRecorded));
+            _mic.StartRecording();
+        }
+
+        public void Dispose()
+        {
+            try { _mic?.StopRecording(); _mic?.Dispose(); } catch { }
+            _mic = null;
+        }
+    }
+
     private static float ComputePeak(byte[] buf, int offset, int count)
     {
         int peak = 0;
