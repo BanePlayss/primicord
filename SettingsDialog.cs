@@ -18,6 +18,33 @@ public sealed class SettingsDialog : Form
     private readonly Label _secsLabel = new();
     private readonly PrimCheck _autoBuf = new("Gravar sozinho enquanto alguem compartilha tela");
 
+    private readonly ComboBox _bw = new();
+
+    /// <summary>Degraus de banda pro compartilhamento (KB/s, rotulo).</summary>
+    /// <summary>
+    /// Os rotulos mostram o que CADA degrau entregou de verdade numa medicao com a
+    /// tela em movimento (video rodando) — assim da pra escolher sabendo o resultado,
+    /// em vez de adivinhar pelo nome.
+    /// </summary>
+    private static readonly (int Kb, string Nome)[] BandwidthChoices =
+    {
+        (450,  "Economico — 3,5 Mbps  ->  800x450 a 30fps"),
+        (900,  "Equilibrado — 7 Mbps  ->  1024x576 a 30fps"),
+        (2000, "Alta — 16 Mbps  ->  1920x1080 a 26fps"),
+        (4000, "Maxima — 32 Mbps  ->  1920x1080 nitido, 20fps"),
+    };
+
+    private static int NearestBandwidthIndex(int kb)
+    {
+        int best = 1, dist = int.MaxValue;
+        for (int i = 0; i < BandwidthChoices.Length; i++)
+        {
+            int d = Math.Abs(BandwidthChoices[i].Kb - kb);
+            if (d < dist) { dist = d; best = i; }
+        }
+        return best;
+    }
+
     private void UpdateSecsLabel()
         => _secsLabel.Text = $"o clipe salva os ultimos {_secs.Value} segundos";
 
@@ -33,7 +60,7 @@ public sealed class SettingsDialog : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(460, 560);
+        ClientSize = new Size(460, 720);
         BackColor = Pv.Char2;
         ForeColor = Pv.Bone;
         Font = Pv.Body;
@@ -104,15 +131,35 @@ public sealed class SettingsDialog : Form
         _autoBuf.Size = new Size(412, 26);
         _autoBuf.Checked = cfg.AutoBuffer;
 
-        var save = new PrimButton("SALVAR") { Location = new Point(24, 506), Size = new Size(200, 40) };
+        // ── TELA ──
+        var titleScr = new Label
+        {
+            Text = "COMPARTILHAR TELA", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
+            Location = new Point(24, 516), AutoSize = true,
+        };
+        var lblBw = Section("QUALIDADE — QUANTO DA SUA INTERNET PODE USAR", new Point(24, 554));
+        StyleCombo(_bw, new Point(24, 574));
+        foreach (var (kb, nome) in BandwidthChoices) _bw.Items.Add(nome);
+        _bw.SelectedIndex = NearestBandwidthIndex(cfg.ScreenBudgetKb);
+
+        var bwHint = new Label
+        {
+            Text = "A captura e pela GPU, entao a imagem so depende disto. Se a voz\n"
+                 + "comecar a picotar, sua subida nao aguenta — desce um degrau.",
+            Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(24, 612),
+            Size = new Size(412, 40),
+        };
+
+        var save = new PrimButton("SALVAR") { Location = new Point(24, 664), Size = new Size(200, 40) };
         save.Click += (_, _) => Apply();
         var cancel = new PrimButton("CANCELAR", PrimButton.Style.Ghost)
-        { Location = new Point(236, 506), Size = new Size(200, 40) };
+        { Location = new Point(236, 664), Size = new Size(200, 40) };
         cancel.Click += (_, _) => Close();
 
         Controls.AddRange(new Control[]
             { title, lblMic, _mic, lblTest, _level, lblOut, _out, warn,
               titleClip, lblKey, _hotkeyBox, lblSecs, _secs, _secsLabel, _autoBuf,
+              titleScr, lblBw, _bw, bwHint,
               save, cancel });
 
         Shown += (_, _) => RestartMonitor();
@@ -167,6 +214,7 @@ public sealed class SettingsDialog : Form
         _cfg.ClipHotkey = HotkeyBinding.Serialize(_hotkeyBox.Mods, _hotkeyBox.Key);
         _cfg.ClipSeconds = _secs.Value;
         _cfg.AutoBuffer = _autoBuf.Checked;
+        if (_bw.SelectedIndex >= 0) _cfg.ScreenBudgetKb = BandwidthChoices[_bw.SelectedIndex].Kb;
         _cfg.Save();
         Applied?.Invoke();
         Close();

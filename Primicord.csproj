@@ -15,6 +15,8 @@
     <ApplicationIcon>Primicord.ico</ApplicationIcon>
     <!-- Trimming quebra reflection do WinForms/NAudio — deixar desligado. -->
     <PublishTrimmed>false</PublishTrimmed>
+    <!-- unsafe: copia linha a linha da memoria mapeada da GPU (DxgiCapture). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- As flags de self-contained/single-file NAO ficam aqui: elas contaminam o
          build normal e impedem que outro projeto referencie este (NETSDK1151, que
          quebrou o harness de teste). Vao como argumentos do publish, no build.ps1. -->
@@ -25,6 +27,8 @@
     <PackageReference Include="NAudio" Version="2.3.0" />
     <PackageReference Include="SpeexDSPSharp" Version="1.3.0" />
     <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
+    <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
   </ItemGroup>
 
 </Project>

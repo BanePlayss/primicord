@@ -157,10 +157,44 @@ public sealed class CaptureTarget
     /// faz copia e reducao de uma vez dentro do GDI, e o bitmap intermediario de 8MB
     /// por quadro deixa de existir.
     /// </remarks>
+    public enum CaptureResult { Ok, NoChange, Failed }
+
+    private DxgiCapture? _dxgi;
+    private bool _dxgiTried;
+
+    /// <summary>true se este alvo esta sendo lido pela GPU.</summary>
+    public bool UsingGpu => _dxgi != null;
+
     /// <param name="fast">
     /// true = prioriza velocidade (cena com movimento, onde ninguem repara na
     /// suavidade); false = prioriza nitidez (tela parada, onde ler texto importa).
     /// </param>
+    public CaptureResult Capture(Bitmap dest, Graphics gDest, bool fast = false)
+    {
+        // Monitor: tenta a GPU primeiro (2x mais rapido que o GDI, medido).
+        // Janela nao da: o Desktop Duplication so entrega a tela inteira.
+        if (!IsWindow)
+        {
+            if (!_dxgiTried)
+            {
+                _dxgiTried = true;
+                _dxgi = DxgiCapture.TryCreate(MonitorBounds);
+            }
+            if (_dxgi != null)
+            {
+                if (_dxgi.CaptureInto(dest, gDest, fast)) return CaptureResult.Ok;
+                // Sem quadro novo = a tela nao mudou. O DXGI so entrega quando muda,
+                // entao isso e informacao util: da pra pular o quadro inteiro.
+                if (_dxgi.Ready) return CaptureResult.NoChange;
+                // Duplicacao morreu de vez: solta e segue no GDI.
+                _dxgi.Dispose();
+                _dxgi = null;
+                Log.Write("DXGI: desistindo, voltando pro GDI");
+            }
+        }
+        return CaptureScaledInto(dest, gDest, fast) ? CaptureResult.Ok : CaptureResult.Failed;
+    }
+
     public bool CaptureScaledInto(Bitmap dest, Graphics gDest, bool fast = false)
     {
         try
@@ -214,6 +248,13 @@ public sealed class CaptureTarget
         if (_winBmp == IntPtr.Zero) { DeleteDC(_winDc); _winDc = IntPtr.Zero; return; }
         _winOld = SelectObject(_winDc, _winBmp);
         _winDcSize = size;
+    }
+
+    public void ReleaseGpu()
+    {
+        try { _dxgi?.Dispose(); } catch { }
+        _dxgi = null;
+        _dxgiTried = false;
     }
 
     public void ReleaseWindowDc()

@@ -121,6 +121,13 @@ public sealed class Config
     /// </summary>
     public bool AutoBuffer = true;
 
+    /// <summary>
+    /// Teto de subida do compartilhamento de tela, em KB/s (total, dividido entre
+    /// os espectadores). Depois que a captura passou a ser pela GPU, ESTE virou o
+    /// unico limite da qualidade — nao ha mais gargalo de CPU pra contornar.
+    /// </summary>
+    public int ScreenBudgetKb = 900;
+
     private static string Path_ => System.IO.Path.Combine(AppEnv.DataDir, "config.txt");
 
     public static Config Load()
@@ -144,6 +151,7 @@ public sealed class Config
                     case "cliphotkey": c.ClipHotkey = v; break;
                     case "clipsecs": if (int.TryParse(v, out var cs)) c.ClipSeconds = Math.Clamp(cs, 5, 60); break;
                     case "autobuf": c.AutoBuffer = v != "0"; break;
+                    case "scrkb": if (int.TryParse(v, out var sk)) c.ScreenBudgetKb = Math.Clamp(sk, 200, 6000); break;
                 }
             }
         }
@@ -165,6 +173,7 @@ public sealed class Config
                 "cliphotkey=" + ClipHotkey,
                 "clipsecs=" + ClipSeconds,
                 "autobuf=" + (AutoBuffer ? "1" : "0"),
+                "scrkb=" + ScreenBudgetKb,
             });
         }
         catch (Exception ex) { Log.Write("config nao salvou: " + ex.Message); }

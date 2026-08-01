@@ -1060,7 +1060,8 @@ public sealed class MainForm : Form
 
         try
         {
-            _screenSender = new ScreenSender(_session, targets[pick]);
+            _screenSender = new ScreenSender(_session, targets[pick])
+            { TotalUploadBudget = Math.Clamp(_cfg.ScreenBudgetKb, 200, 6000) * 1000 };
             _screenSender.FullFrameProduced += OnMyFrame;
             _screenSender.TargetLost += () =>
             {

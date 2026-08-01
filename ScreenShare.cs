@@ -30,12 +30,15 @@ public sealed class ScreenSender : IDisposable
     private const int TileSize = 128;
 
     /// <summary>
-    /// Larguras possiveis, da melhor pra pior. Sob movimento intenso (jogo, video)
-    /// nao adianta insistir em 1600: melhor CAIR DE RESOLUCAO e manter a fluidez do
-    /// que segurar resolucao alta com qualidade destruida. E o que codec de verdade
-    /// faz, e e o motivo do "144p" — antes so a qualidade caia, nunca a resolucao.
+    /// Degraus de resolucao, do melhor pro pior. Sob movimento intenso nao adianta
+    /// insistir na resolucao cheia: melhor CEDER RESOLUCAO e manter a fluidez do que
+    /// segurar tamanho grande com qualidade destruida — e o que codec de verdade faz,
+    /// e era o motivo do "144p" (antes so a qualidade caia, nunca a resolucao).
+    ///
+    /// O degrau 0 e ZERO = tamanho NATIVO da fonte: sem reamostragem nenhuma, que e
+    /// ao mesmo tempo o mais nitido e o mais barato (copia direta).
     /// </summary>
-    private static readonly int[] WidthLadder = { 1600, 1280, 1024, 800 };
+    private static readonly int[] WidthLadder = { 0, 1280, 1024, 800 };
 
     /// <summary>
     /// Blocos re-enviados por quadro mesmo sem terem mudado. E o conserto de perda:
@@ -48,11 +51,12 @@ public sealed class ScreenSender : IDisposable
     /// Teto TOTAL de subida da tela (bytes/s), dividido entre os espectadores.
     /// </summary>
     /// <remarks>
-    /// 900KB/s = ~7 Mbps. Parece muito perto dos ~2,5 Mbps que o Discord usa, mas o
-    /// Discord manda H.264, que rende umas 5x mais que JPEG solto. Pra chegar numa
-    /// imagem parecida com JPEG e preciso gastar mais banda mesmo — em fibra sobra.
+    /// Depois que a captura virou GPU (4ms por quadro, teto de 166fps), ESTE numero
+    /// e o unico limite da qualidade — nao ha mais gargalo de CPU. Por isso e ajustavel
+    /// nas configuracoes: quem tem fibra sobrando poe mais e ganha resolucao.
+    /// O Discord usa ~2,5 Mbps, mas com H.264, que rende umas 5x mais que JPEG solto.
     /// </remarks>
-    private const int TotalUploadBudget = 900_000;
+    public int TotalUploadBudget { get; set; } = 900_000;
 
     private readonly RoomSession _session;
     private readonly CaptureTarget _target;
@@ -142,7 +146,9 @@ public sealed class ScreenSender : IDisposable
         {
             int w = targetW, h = targetH;
             int maxW = WidthLadder[ladderIdx];
-            if (w > maxW) { h = (int)Math.Round(h * (maxW / (double)w)); w = maxW; }
+            // 0 = nativo (sem reduzir). Tambem nao amplia: se a fonte ja e menor
+            // que o degrau, fica no tamanho dela.
+            if (maxW > 0 && w > maxW) { h = (int)Math.Round(h * (maxW / (double)w)); w = maxW; }
             w -= w % 2; h -= h % 2;
             if (w < 2 || h < 2) return;
 
@@ -191,8 +197,16 @@ public sealed class ScreenSender : IDisposable
                 // Em cena com movimento usa o modo rapido (vale ~10 fps); parada,
                 // usa o nitido, que e quando da pra ler texto na tela do outro.
                 var tCap = System.Diagnostics.Stopwatch.StartNew();
-                if (!_target.CaptureScaledInto(scaled, gScale!, fast: _sceneBusy))
-                { Thread.Sleep(80); continue; }
+                var grabbed = _target.Capture(scaled, gScale!, fast: _sceneBusy);
+                if (grabbed == CaptureTarget.CaptureResult.Failed) { Thread.Sleep(80); continue; }
+                if (grabbed == CaptureTarget.CaptureResult.NoChange)
+                {
+                    // A GPU avisou que nada mudou na tela. Nao ha o que comparar nem
+                    // mandar — so o rodizio de conserto, que segue no proximo ciclo.
+                    MsCapture = (int)tCap.ElapsedMilliseconds;
+                    framesSec++;
+                    goto pacing;
+                }
                 DrawCursorScaled(gScale!, _target.ScreenRect(), outW, outH);
                 tCap.Stop();
                 MsCapture = (int)tCap.ElapsedMilliseconds;
@@ -366,6 +380,7 @@ public sealed class ScreenSender : IDisposable
                 Thread.Sleep(300);
             }
 
+        pacing:
             if (Environment.TickCount64 - lastStat >= 1000)
             {
                 Fps = framesSec;
@@ -381,6 +396,7 @@ public sealed class ScreenSender : IDisposable
         gScale?.Dispose(); scaled?.Dispose();
         gTile?.Dispose(); tile?.Dispose();
         _target.ReleaseWindowDc();
+        _target.ReleaseGpu();
         ep.Dispose();
         payload.Dispose();
         tileMs.Dispose();
