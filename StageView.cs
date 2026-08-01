@@ -21,6 +21,19 @@ public sealed class StageView : Control
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public bool Recording { get; set; }
 
+    /// <summary>
+    /// Ligado quando EU sou quem compartilha: em vez do video ao vivo, mostra um
+    /// cartao. Ver a propria tela aqui criava espelho infinito (o Primicord aparecia
+    /// dentro da propria captura), e como o espelho muda a cada quadro, TODOS os
+    /// blocos ficavam sujos sempre — a tela gastava a banda inteira se filmando.
+    /// </summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool SelfPreview { get; set; }
+
+    /// <summary>Linha de status mostrada no cartao (resolucao, fps, banda).</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public string SelfInfo { get; set; } = "";
+
     public StageView()
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
@@ -39,6 +52,8 @@ public sealed class StageView : Control
     {
         var g = e.Graphics;
         g.Clear(Color.Black);
+
+        if (SelfPreview) { DrawSelfCard(g); return; }
 
         var f = _frame;
         if (f == null)
@@ -63,6 +78,47 @@ public sealed class StageView : Control
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
         if (SharerNick.Length > 0) DrawTag(g, "TELA DE " + SharerNick.ToUpperInvariant(), true);
+        if (StatusRight.Length > 0) DrawTag(g, StatusRight, false);
+    }
+
+    /// <summary>Cartao de "voce esta transmitindo" — sem video, sem espelho.</summary>
+    private void DrawSelfCard(Graphics g)
+    {
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+
+        int cw = Math.Min(520, Width - 60), ch = 190;
+        var card = new Rectangle((Width - cw) / 2, (Height - ch) / 2, cw, ch);
+        using (var b = new SolidBrush(Pv.Char2))
+        using (var p = Pv.RoundRect(card, 8))
+            g.FillPath(b, p);
+        using (var pen = new Pen(Pv.Orange, 2))
+        using (var p = Pv.RoundRect(card, 8))
+            g.DrawPath(pen, p);
+
+        // Monitor estilizado, so pra dar cara de "transmitindo".
+        var icon = new RectangleF(card.X + (cw - 56) / 2f, card.Y + 26, 56, 56);
+        Glyphs.Speaker(g, icon, Pv.Orange, 2f);
+
+        using (var b = new SolidBrush(Pv.Bone))
+        {
+            const string t = "VOCE ESTA TRANSMITINDO";
+            float w = Pv.TrackedWidth(g, t, Pv.DisplaySm, 1.6f);
+            Pv.DrawTracked(g, t, Pv.DisplaySm, b, card.X + (cw - w) / 2f, card.Y + 96, 1.6f);
+        }
+        using (var b = new SolidBrush(Pv.BoneDim))
+        {
+            const string t = "a galera esta vendo — sua propria tela nao aparece aqui";
+            var sz = g.MeasureString(t, Pv.Body);
+            g.DrawString(t, Pv.Body, b, card.X + (cw - sz.Width) / 2, card.Y + 128);
+        }
+        if (SelfInfo.Length > 0)
+            using (var b = new SolidBrush(Pv.Green))
+            {
+                float w = Pv.TrackedWidth(g, SelfInfo, Pv.Label, 1.4f);
+                Pv.DrawTracked(g, SelfInfo, Pv.Label, b, card.X + (cw - w) / 2f, card.Y + 154, 1.4f);
+            }
+
         if (StatusRight.Length > 0) DrawTag(g, StatusRight, false);
     }
 

@@ -777,21 +777,31 @@ public sealed class MainForm : Form
 
     private Panel BuildRoomActions()
     {
-        var bar = new Panel { Dock = DockStyle.Bottom, Height = 62, BackColor = Pv.Charcoal };
+        // FlowLayoutPanel com quebra: os 5 botoes somam ~800px e nao cabiam na
+        // largura util (~650) — o CINEMA ficava fora da tela, inalcancavel.
+        var bar = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Bottom,
+            BackColor = Pv.Charcoal,
+            WrapContents = true,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Padding = new Padding(16, 10, 16, 10),
+        };
         bar.Paint += (_, e) =>
         {
             using var p = new Pen(Pv.Char3, 2);
             e.Graphics.DrawLine(p, 16, 0, bar.Width - 16, 0);
         };
 
-        _btnShare = new PrimButton("COMPARTILHAR TELA", PrimButton.Style.Ghost) { Size = new Size(190, 38) };
+        _btnShare = new PrimButton("COMPARTILHAR", PrimButton.Style.Ghost) { Size = new Size(160, 38) };
         _btnShare.Click += (_, _) => ToggleScreenShare();
 
         // Largura fixa e generosa: o rotulo cresce pra caber a tecla do atalho.
-        _btnClip = new PrimButton("CLIPE", PrimButton.Style.Ghost) { Size = new Size(200, 38) };
+        _btnClip = new PrimButton("CLIPE", PrimButton.Style.Ghost) { Size = new Size(170, 38) };
         _btnClip.Click += (_, _) => SaveClip();
 
-        _btnRec = new PrimButton("GRAVAR", PrimButton.Style.Ghost) { Size = new Size(120, 38) };
+        _btnRec = new PrimButton("GRAVAR", PrimButton.Style.Ghost) { Size = new Size(180, 38) };
         _btnRec.Click += (_, _) => ToggleClipBuffer();
 
         _btnDj = new PrimButton("MODO DJ", PrimButton.Style.Ghost) { Size = new Size(130, 38) };
@@ -800,18 +810,9 @@ public sealed class MainForm : Form
         _btnCinema = new PrimButton("CINEMA", PrimButton.Style.Ghost) { Size = new Size(130, 38) };
         _btnCinema.Click += (_, _) => OpenCinema();
 
-        void Layout()
-        {
-            int x = 16, y = (bar.ClientSize.Height - 38) / 2;
-            foreach (var b in new[] { _btnShare, _btnRec, _btnClip, _btnDj, _btnCinema })
-            {
-                b!.Location = new Point(x, y);
-                x += b.Width + 8;
-            }
-        }
-        bar.Resize += (_, _) => Layout();
+        foreach (var b in new[] { _btnShare, _btnRec, _btnClip, _btnDj, _btnCinema })
+            b!.Margin = new Padding(0, 0, 8, 8);
         bar.Controls.AddRange(new Control[] { _btnShare, _btnRec, _btnClip, _btnDj, _btnCinema });
-        Layout();
         return bar;
     }
 
@@ -967,8 +968,20 @@ public sealed class MainForm : Form
         }
         else if (_stage != null && !_stage.IsDisposed && _focusedSharer == 0)
         {
-            _stage.SharerNick = _iAmSharing ? Nick : "";
-            if (!_iAmSharing) _stage.SetFrame(null);
+            _stage.SharerNick = "";
+            _stage.SetFrame(null);
+        }
+
+        // Minha propria tela NAO e exibida aqui — ver a si mesmo criava espelho
+        // infinito e fazia todo bloco mudar a cada quadro, torrando a banda.
+        if (_stage != null && !_stage.IsDisposed)
+        {
+            bool self = _iAmSharing && _focusedSharer == 0;
+            _stage.SelfPreview = self;
+            _stage.SelfInfo = self && _screenSender != null
+                ? $"{_screenSender.OutWidth}x{_screenSender.OutHeight} · {_screenSender.Fps} FPS · "
+                  + $"{_screenSender.KbPerSecond} KB/s"
+                : "";
         }
 
         if (_stage != null && !_stage.IsDisposed)
@@ -1082,26 +1095,16 @@ public sealed class MainForm : Form
         }
     }
 
-    /// <summary>Meu proprio quadro: alimenta o palco local e o buffer de clipe.</summary>
+    /// <summary>
+    /// Meu proprio quadro — serve SO pro buffer de clipe. Nao decodificamos pra
+    /// exibir: o palco mostra um cartao quando sou eu que transmito (ver a propria
+    /// tela criava espelho infinito), entao decodificar aqui seria trabalho jogado
+    /// fora 30 vezes por segundo.
+    /// </summary>
     private void OnMyFrame(byte[] jpeg, int w, int h)
     {
         AutoStartBuffer();
         _clips?.PushFrame(jpeg, w, h);
-        if (_focusedSharer != 0) return;
-        try
-        {
-            using var ms = new MemoryStream(jpeg);
-            using var img = Image.FromStream(ms);
-            var bmp = new Bitmap(img);
-            BeginInvoke(() =>
-            {
-                var old = _stage?.Tag as Bitmap;
-                _stage?.SetFrame(bmp);
-                if (_stage != null) _stage.Tag = bmp;
-                try { old?.Dispose(); } catch { }
-            });
-        }
-        catch { }
     }
 
     private void OnPeerFrame(uint senderId, byte[] payload, int w, int h)
