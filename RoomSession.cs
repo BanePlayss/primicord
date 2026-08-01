@@ -23,6 +23,13 @@ public sealed class RemotePeer
 
     public bool Connected => Locked != null &&
         (DateTime.UtcNow.Ticks - Interlocked.Read(ref LastRecvTicks)) < TimeSpan.TicksPerSecond * 6;
+
+    /// <summary>
+    /// true quando o caminho que fechou foi por endereco PRIVADO — ou seja, os dois
+    /// estao na mesma rede local. Muda tudo: LAN e gigabit e nao tem teto de subida,
+    /// entao da pra mandar tela em qualidade cheia com audio sem pesar em nada.
+    /// </summary>
+    public bool OnLan => Locked != null && AppEnv.IsPrivateAddress(Locked.Address);
 }
 
 /// <summary>

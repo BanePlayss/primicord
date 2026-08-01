@@ -140,6 +140,12 @@ public sealed class Config
     /// <summary>Bipe quando alguem entra ou sai da sala de voz.</summary>
     public bool JoinLeaveSound = true;
 
+    /// <summary>
+    /// Mandar o som do sistema junto com a tela. Sem isso o pessoal ve o jogo/video
+    /// mudo — so a voz passa.
+    /// </summary>
+    public bool ShareAudioWithScreen = true;
+
     private static string Path_ => System.IO.Path.Combine(AppEnv.DataDir, "config.txt");
 
     public static Config Load()
@@ -168,6 +174,7 @@ public sealed class Config
                     case "musicvol": if (int.TryParse(v, out var mv)) c.MusicVolume = Math.Clamp(mv, 0, 200); break;
                     case "tray": c.TrayOnClose = v != "0"; break;
                     case "joinsound": c.JoinLeaveSound = v != "0"; break;
+                    case "screenaudio": c.ShareAudioWithScreen = v != "0"; break;
                 }
             }
         }
@@ -194,6 +201,7 @@ public sealed class Config
                 "musicvol=" + MusicVolume,
                 "tray=" + (TrayOnClose ? "1" : "0"),
                 "joinsound=" + (JoinLeaveSound ? "1" : "0"),
+                "screenaudio=" + (ShareAudioWithScreen ? "1" : "0"),
             });
         }
         catch (Exception ex) { Log.Write("config nao salvou: " + ex.Message); }

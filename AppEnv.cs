@@ -73,6 +73,25 @@ public static class AppEnv
         return list;
     }
 
+    /// <summary>
+    /// Faixas privadas (RFC 1918) + link-local. Se o par fechou num endereco desses,
+    /// o trafego nao sai pra internet — esta na mesma rede que a gente.
+    /// </summary>
+    public static bool IsPrivateAddress(IPAddress ip)
+    {
+        if (IPAddress.IsLoopback(ip)) return true;
+        if (ip.AddressFamily != AddressFamily.InterNetwork) return false;
+        var b = ip.GetAddressBytes();
+        return b[0] switch
+        {
+            10 => true,                              // 10.0.0.0/8
+            172 => b[1] >= 16 && b[1] <= 31,         // 172.16.0.0/12
+            192 => b[1] == 168,                      // 192.168.0.0/16
+            169 => b[1] == 254,                      // 169.254.0.0/16 (link-local)
+            _ => false,
+        };
+    }
+
     public static bool IsOwnAddress(IPAddress ip)
     {
         if (IPAddress.IsLoopback(ip)) return true;

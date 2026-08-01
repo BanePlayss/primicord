@@ -776,58 +776,120 @@ public sealed class MainForm : Form
 
         _stage = new StageView { Dock = DockStyle.Fill };
 
+        // A barra de icones fica encostada nos participantes (Dock=Top dentro de um
+        // container que tambem segura os tiles), pra ficar claro que agem sobre a call.
+        var rodape = new Panel { Dock = DockStyle.Bottom, BackColor = Pv.Charcoal, AutoSize = true };
+        rodape.Paint += (_, e) =>
+        {
+            using var p = new Pen(Pv.Char3, 2);
+            e.Graphics.DrawLine(p, 16, 0, rodape.Width - 16, 0);
+        };
+        rodape.Controls.Add(_tiles);
+        rodape.Controls.Add(actions);
+
         _roomPanel.Controls.Add(_stage);      // Fill primeiro
-        _roomPanel.Controls.Add(_tiles);
-        _roomPanel.Controls.Add(actions);
+        _roomPanel.Controls.Add(rodape);
         _roomPanel.Controls.Add(_djLabel);
         _roomPanel.Controls.Add(_roomStatus);
         _roomPanel.Controls.Add(head);
         return _roomPanel;
     }
 
-    private PrimButton? _btnShare, _btnClip, _btnRec, _btnDj, _btnCinema;
+    private ActionIcon? _icMic, _icShare, _icRec, _icClip, _icDj, _icCinema, _icQuick, _icLeave;
+    private Label? _lanBadge;
     private CinemaSession? _cinema;
     private Form? _cinemaWindow;
 
+    /// <summary>
+    /// Barra de icones acima dos participantes. Antes eram botoes de texto largos:
+    /// cinco rotulos por extenso somavam ~800px e o ultimo saia da tela.
+    /// </summary>
     private Panel BuildRoomActions()
     {
-        // FlowLayoutPanel com quebra: os 5 botoes somam ~800px e nao cabiam na
-        // largura util (~650) — o CINEMA ficava fora da tela, inalcancavel.
         var bar = new FlowLayoutPanel
         {
-            Dock = DockStyle.Bottom,
+            Dock = DockStyle.Top,
             BackColor = Pv.Charcoal,
-            WrapContents = true,
+            WrapContents = false,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Padding = new Padding(16, 10, 16, 10),
+            Padding = new Padding(18, 8, 18, 4),
         };
-        bar.Paint += (_, e) =>
+
+        _icMic = new ActionIcon((g, r, c, w) => Glyphs.Mic(g, r, c, _session?.Muted == true), "MIC")
+        { ToolTipText = "Mutar / desmutar o microfone" };
+        _icMic.Click += (_, _) => { ToggleMute(); SyncRoomButtons(); };
+
+        _icShare = new ActionIcon((g, r, c, w) => Glyphs.Screen(g, r, c, _iAmSharing), "TELA")
+        { ToolTipText = "Compartilhar tela ou janela (com som)" };
+        _icShare.Click += (_, _) => ToggleScreenShare();
+
+        _icRec = new ActionIcon(Glyphs.Record, "BUFFER")
+        { ToolTipText = "Liga o buffer que permite salvar o que ja passou" };
+        _icRec.Click += (_, _) => ToggleClipBuffer();
+
+        _icClip = new ActionIcon(Glyphs.Scissors, "CLIPE")
+        { ToolTipText = "Salvar os ultimos segundos" };
+        _icClip.Click += (_, _) => SaveClip();
+
+        _icDj = new ActionIcon(Glyphs.Music, "DJ")
+        { ToolTipText = "Transmitir o som do sistema pra sala" };
+        _icDj.Click += (_, _) => ToggleDj();
+
+        _icCinema = new ActionIcon(Glyphs.Film, "CINEMA")
+        { ToolTipText = "Assistir um video junto, na qualidade original" };
+        _icCinema.Click += (_, _) => OpenCinema();
+
+        _icQuick = new ActionIcon(Glyphs.Gear, "AJUSTES")
+        { ToolTipText = "Microfone, saida e qualidade (sem sair da call)" };
+        _icQuick.Click += (_, _) => OpenQuickSettings();
+
+        _icLeave = new ActionIcon(Glyphs.Exit, "SAIR") { ToolTipText = "Sair da sala de voz" };
+        _icLeave.Click += (_, _) => LeaveVoice();
+
+        _lanBadge = new Label
         {
-            using var p = new Pen(Pv.Char3, 2);
-            e.Graphics.DrawLine(p, 16, 0, bar.Width - 16, 0);
+            Font = Pv.Label, ForeColor = Pv.Green, AutoSize = true, Text = "",
+            Margin = new Padding(14, 22, 0, 0), Visible = false,
         };
 
-        _btnShare = new PrimButton("COMPARTILHAR", PrimButton.Style.Ghost) { Size = new Size(160, 38) };
-        _btnShare.Click += (_, _) => ToggleScreenShare();
-
-        // Largura fixa e generosa: o rotulo cresce pra caber a tecla do atalho.
-        _btnClip = new PrimButton("CLIPE", PrimButton.Style.Ghost) { Size = new Size(170, 38) };
-        _btnClip.Click += (_, _) => SaveClip();
-
-        _btnRec = new PrimButton("GRAVAR", PrimButton.Style.Ghost) { Size = new Size(180, 38) };
-        _btnRec.Click += (_, _) => ToggleClipBuffer();
-
-        _btnDj = new PrimButton("MODO DJ", PrimButton.Style.Ghost) { Size = new Size(130, 38) };
-        _btnDj.Click += (_, _) => ToggleDj();
-
-        _btnCinema = new PrimButton("CINEMA", PrimButton.Style.Ghost) { Size = new Size(130, 38) };
-        _btnCinema.Click += (_, _) => OpenCinema();
-
-        foreach (var b in new[] { _btnShare, _btnRec, _btnClip, _btnDj, _btnCinema })
-            b!.Margin = new Padding(0, 0, 8, 8);
-        bar.Controls.AddRange(new Control[] { _btnShare, _btnRec, _btnClip, _btnDj, _btnCinema });
+        foreach (var ic in new[] { _icMic, _icShare, _icRec, _icClip, _icDj, _icCinema, _icQuick, _icLeave })
+            ic!.Margin = new Padding(0, 0, 6, 0);
+        bar.Controls.AddRange(new Control[]
+            { _icMic, _icShare, _icRec, _icClip, _icDj, _icCinema, _icQuick, _icLeave, _lanBadge });
         return bar;
+    }
+
+    private void OpenQuickSettings()
+    {
+        if (_icQuick == null) return;
+        var pos = _icQuick.PointToScreen(new Point(_icQuick.Width / 2, 0));
+        using var q = new QuickSettings(_cfg, pos);
+        q.Applied += () =>
+        {
+            if (_screenSender != null)
+                _screenSender.TotalUploadBudget = Math.Clamp(_cfg.ScreenBudgetKb, 200, 6000) * 1000;
+            _screenAudio = _cfg.ShareAudioWithScreen;
+            SyncSystemAudio();
+            // Dispositivo pode ter mudado: reabre o audio sem derrubar a sala.
+            if (_voice != null && _session != null)
+            {
+                try
+                {
+                    _voice.Dispose();
+                    _voice = new VoiceEngine { MusicVolume = _cfg.MusicVolume / 100f };
+                    _voice.Failed += ShowBanner;
+                    _voice.AttachSession(_session);
+                    _voice.HeardPcm += (b, o, c) => _clips?.PushHeard(b, o, c);
+                    _voice.MicPcm += (b, o, c) => _clips?.PushMic(b, o, c);
+                    _voice.Start(_cfg.MicDevice,
+                        string.IsNullOrEmpty(_cfg.OutputDeviceId) ? null : _cfg.OutputDeviceId);
+                }
+                catch (Exception ex) { Log.Write("troca rapida de dispositivo: " + ex.Message); }
+            }
+            SyncRoomButtons();
+        };
+        q.ShowDialog(this);
     }
 
     private async Task JoinVoiceAsync(string roomId, string roomName)
@@ -1081,6 +1143,7 @@ public sealed class MainForm : Form
             _screenSender = null;
             _iAmSharing = false;
             _session.Sharing = false;
+            SyncSystemAudio();      // sem tela, o som do sistema so segue se for DJ
             SyncRoomButtons();
             return;
         }
@@ -1107,6 +1170,9 @@ public sealed class MainForm : Form
             _iAmSharing = true;
             _session.Sharing = true;
             _focusedSharer = 0;   // foca a minha propria tela
+            // Tela sem som e tela pela metade: o pessoal veria o jogo mudo.
+            _screenAudio = _cfg.ShareAudioWithScreen;
+            SyncSystemAudio();
             SyncRoomButtons();
         }
         catch (Exception ex)
@@ -1191,32 +1257,47 @@ public sealed class MainForm : Form
 
     // ─── MODO DJ ─────────────────────────────────────────────────────────────
 
+    private bool _djMode;
+    private bool _screenAudio;
+
     private void ToggleDj()
     {
         if (_session == null) { ShowBanner("Entra numa sala de voz primeiro."); return; }
+        _djMode = !_djMode;
+        if (!_djMode) _nowPlaying = "";
+        SyncSystemAudio();
+        SyncRoomButtons();
+    }
 
-        if (_music != null)
+    /// <summary>
+    /// Liga/desliga a captura do som do sistema. Existe UMA so, compartilhada entre
+    /// "tela com audio" e "modo DJ" — abrir duas capturas do mesmo dispositivo
+    /// duplicaria o audio na sala.
+    /// </summary>
+    private void SyncSystemAudio()
+    {
+        bool querem = _djMode || (_screenAudio && _iAmSharing);
+
+        if (!querem)
         {
-            _music.Dispose();
-            _music = null;
-            _nowPlaying = "";
-            SyncRoomButtons();
+            if (_music != null) { _music.Dispose(); _music = null; Log.Write("som do sistema: parou"); }
             return;
         }
+        if (_music != null) return;   // ja rodando
 
         try
         {
-            _music = new MusicShare(_session);
+            _music = new MusicShare(_session!);
             _music.Start();
             if (_music.EchoRisk)
                 ShowBanner("Windows sem process loopback: o audio das vozes vai voltar junto (eco).");
-            SyncRoomButtons();
         }
         catch (Exception ex)
         {
-            Log.Write("modo DJ falhou: " + ex.Message);
+            Log.Write("som do sistema falhou: " + ex.Message);
             ShowBanner("Nao consegui capturar o audio do sistema: " + ex.Message);
             _music = null;
+            _djMode = false;
         }
     }
 
@@ -1257,37 +1338,44 @@ public sealed class MainForm : Form
 
     private void SyncRoomButtons()
     {
-        if (_btnShare == null) return;
+        if (_icMic == null) return;
 
-        _btnShare.Text = _iAmSharing ? "PARAR TELA" : "COMPARTILHAR TELA";
-        _btnShare.Kind = _iAmSharing ? PrimButton.Style.Solid : PrimButton.Style.Ghost;
-        _btnShare.Invalidate();
+        bool muted = _session?.Muted == true || _voice == null;
+        _icMic.Alert = muted;
+        _icMic.Caption = muted ? "MUDO" : "MIC";
+        _icMic.Invalidate();
 
-        // Liga/desliga explicito do buffer: o rotulo diz o ESTADO, nao a acao,
-        // pra ficar claro se esta gravando pra tras ou nao.
+        _icShare!.Active = _iAmSharing;
+        _icShare.Caption = _iAmSharing ? "NA TELA" : "TELA";
+        _icShare.Invalidate();
+
         bool buffering = _clips?.Active == true;
-        _btnRec!.Text = buffering ? "BUFFER: LIGADO" : "BUFFER: DESLIGADO";
-        _btnRec.Kind = buffering ? PrimButton.Style.Solid : PrimButton.Style.Ghost;
-        _btnRec.Invalidate();
+        _icRec!.Alert = buffering;
+        _icRec.Caption = buffering ? "GRAVANDO" : "BUFFER";
+        _icRec.Invalidate();
 
-        // Mostra a tecla no proprio botao — e assim que o usuario descobre o atalho.
+        // A tecla aparece no proprio icone — e assim que o atalho e descoberto.
         var (hkMods, hkKey) = HotkeyBinding.Parse(_cfg.ClipHotkey, HotkeyBinding.Mods.None, Keys.F9);
-        _btnClip!.Enabled = buffering;
-        _btnClip.Text = _clipHotkey.IsRegistered
-            ? "CLIPE · " + HotkeyBinding.Format(hkMods, hkKey)
-            : "CLIPE";
-        _btnClip.Invalidate();
+        _icClip!.Enabled = buffering;
+        _icClip.Badge = _clipHotkey.IsRegistered ? HotkeyBinding.Format(hkMods, hkKey) : "";
+        _icClip.Invalidate();
 
-        bool dj = _music != null;
-        _btnDj!.Text = dj ? "PARAR DJ" : "MODO DJ";
-        _btnDj.Kind = dj ? PrimButton.Style.Solid : PrimButton.Style.Ghost;
-        _btnDj.Invalidate();
+        _icDj!.Active = _djMode;
+        _icDj.Invalidate();
 
         if (_djLabel != null)
         {
-            bool show = dj && _nowPlaying.Length > 0;
+            bool show = _music != null && _nowPlaying.Length > 0;
             _djLabel.Text = show ? "TOCANDO AGORA: " + _nowPlaying.ToUpperInvariant() : "";
             _djLabel.Visible = show;
+        }
+
+        // Selo de sessao local: avisa que a qualidade esta liberada.
+        if (_lanBadge != null)
+        {
+            bool lan = _screenSender?.LanSession == true;
+            _lanBadge.Text = lan ? "SESSAO EM LAN — QUALIDADE LIBERADA" : "";
+            _lanBadge.Visible = lan;
         }
     }
 

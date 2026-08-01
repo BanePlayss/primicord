@@ -104,6 +104,62 @@ public static class Glyphs
         });
     }
 
+    /// <summary>Monitor — compartilhar tela. Com risco quando desligado.</summary>
+    public static void Screen(Graphics g, RectangleF r, Color c, bool on, float w = 1.8f)
+    {
+        using var p = P(c, w);
+        float s = Math.Min(r.Width, r.Height), x = r.X, y = r.Y;
+        g.DrawRectangle(p, x + s * 0.10f, y + s * 0.18f, s * 0.80f, s * 0.54f);
+        g.DrawLine(p, x + s * 0.34f, y + s * 0.86f, x + s * 0.66f, y + s * 0.86f);
+        g.DrawLine(p, x + s * 0.5f, y + s * 0.72f, x + s * 0.5f, y + s * 0.86f);
+        if (!on) g.DrawLine(p, x + s * 0.14f, y + s * 0.12f, x + s * 0.86f, y + s * 0.88f);
+    }
+
+    /// <summary>Circulo com ponto — buffer de gravacao.</summary>
+    public static void Record(Graphics g, RectangleF r, Color c, float w = 1.8f)
+    {
+        using var p = P(c, w);
+        float s = Math.Min(r.Width, r.Height);
+        g.DrawEllipse(p, r.X + s * 0.10f, r.Y + s * 0.10f, s * 0.80f, s * 0.80f);
+        using var b = new SolidBrush(c);
+        g.FillEllipse(b, r.X + s * 0.34f, r.Y + s * 0.34f, s * 0.32f, s * 0.32f);
+    }
+
+    /// <summary>Tesoura — clipe.</summary>
+    public static void Scissors(Graphics g, RectangleF r, Color c, float w = 1.8f)
+    {
+        using var p = P(c, w);
+        float s = Math.Min(r.Width, r.Height), x = r.X, y = r.Y;
+        g.DrawEllipse(p, x + s * 0.08f, y + s * 0.62f, s * 0.28f, s * 0.28f);
+        g.DrawEllipse(p, x + s * 0.64f, y + s * 0.62f, s * 0.28f, s * 0.28f);
+        g.DrawLine(p, x + s * 0.22f, y + s * 0.66f, x + s * 0.82f, y + s * 0.10f);
+        g.DrawLine(p, x + s * 0.78f, y + s * 0.66f, x + s * 0.18f, y + s * 0.10f);
+    }
+
+    /// <summary>Nota musical — modo DJ.</summary>
+    public static void Music(Graphics g, RectangleF r, Color c, float w = 1.8f)
+    {
+        using var p = P(c, w);
+        float s = Math.Min(r.Width, r.Height), x = r.X, y = r.Y;
+        g.DrawLine(p, x + s * 0.38f, y + s * 0.74f, x + s * 0.38f, y + s * 0.14f);
+        g.DrawLine(p, x + s * 0.82f, y + s * 0.62f, x + s * 0.82f, y + s * 0.08f);
+        g.DrawLine(p, x + s * 0.38f, y + s * 0.14f, x + s * 0.82f, y + s * 0.08f);
+        g.DrawEllipse(p, x + s * 0.16f, y + s * 0.66f, s * 0.24f, s * 0.20f);
+        g.DrawEllipse(p, x + s * 0.60f, y + s * 0.54f, s * 0.24f, s * 0.20f);
+    }
+
+    /// <summary>Claquete — sessao cinema.</summary>
+    public static void Film(Graphics g, RectangleF r, Color c, float w = 1.8f)
+    {
+        using var p = P(c, w);
+        float s = Math.Min(r.Width, r.Height), x = r.X, y = r.Y;
+        g.DrawRectangle(p, x + s * 0.08f, y + s * 0.34f, s * 0.84f, s * 0.52f);
+        g.DrawLine(p, x + s * 0.08f, y + s * 0.34f, x + s * 0.30f, y + s * 0.14f);
+        g.DrawLine(p, x + s * 0.40f, y + s * 0.34f, x + s * 0.62f, y + s * 0.14f);
+        g.DrawLine(p, x + s * 0.72f, y + s * 0.34f, x + s * 0.92f, y + s * 0.16f);
+        g.DrawLine(p, x + s * 0.08f, y + s * 0.20f, x + s * 0.92f, y + s * 0.14f);
+    }
+
     /// <summary>Bolinha de status (online/offline/em call).</summary>
     public static void StatusDot(Graphics g, RectangleF r, Color fill, Color ring)
     {

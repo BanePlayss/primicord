@@ -58,6 +58,16 @@ public sealed class ScreenSender : IDisposable
     /// </remarks>
     public int TotalUploadBudget { get; set; } = 900_000;
 
+    /// <summary>
+    /// Teto quando TODO MUNDO da sala esta na mesma rede local. LAN e gigabit: nao
+    /// existe gargalo de subida, entao nao faz sentido apertar a imagem. Com isso a
+    /// tela fica em resolucao nativa e qualidade alta.
+    /// </summary>
+    private const int LanBudget = 8_000_000;
+
+    /// <summary>true quando a sessao inteira e local (mostrado na UI).</summary>
+    public bool LanSession { get; private set; }
+
     private readonly RoomSession _session;
     private readonly CaptureTarget _target;
     private Thread? _thread;
@@ -234,7 +244,12 @@ public sealed class ScreenSender : IDisposable
                 int tileCount = cols * rows;
                 // Orcamento DESTE quadro. Quem nao couber fica sujo e vai no proximo,
                 // entao o movimento continua fluido em vez de travar esperando.
-                int perViewer = TotalUploadBudget / Math.Max(1, viewers);
+                // Sessao em LAN: todos os espectadores conectaram por endereco privado.
+                var conectados = _session.Peers.Where(p => p.Locked != null).ToList();
+                LanSession = conectados.Count > 0 && conectados.All(p => p.OnLan);
+
+                int budget = LanSession ? LanBudget : TotalUploadBudget;
+                int perViewer = budget / Math.Max(1, viewers);
                 int frameBudget = Math.Max(12_000, perViewer / Math.Max(1, TargetFps));
 
                 var tCmp = System.Diagnostics.Stopwatch.StartNew();
