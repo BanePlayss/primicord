@@ -228,6 +228,12 @@ public sealed class MainForm : Form
         _cfg.SenhaHash = user.SenhaHash;
         _cfg.Save();
         _chat = new ChatService(_fs, user.Nick);
+
+        // Adota o tema escolhido no site (so leitura — trocar continua sendo la).
+        Pv.SetAccent(_cfg.UseSiteTheme ? user.ThemeAccent : null);
+        if (_cfg.UseSiteTheme && user.ThemeAccent != null)
+            Log.Write($"tema do site aplicado: {user.ThemeId}");
+
         BuildShell();
     }
 
@@ -418,6 +424,14 @@ public sealed class MainForm : Form
         dlg.Applied += () =>
         {
             ApplyClipHotkey();     // a tecla pode ter mudado
+            if (_voice != null) _voice.MusicVolume = _cfg.MusicVolume / 100f;
+            if (_screenSender != null)
+                _screenSender.TotalUploadBudget = Math.Clamp(_cfg.ScreenBudgetKb, 200, 6000) * 1000;
+            if (_me != null)
+            {
+                Pv.SetAccent(_cfg.UseSiteTheme ? _me.ThemeAccent : null);
+                Invalidate(true);
+            }
             SyncRoomButtons();
 
             // Ja numa call? Reabre o audio com os dispositivos novos, sem derrubar a sala.
@@ -829,7 +843,7 @@ public sealed class MainForm : Form
 
         _session.ScreenFrameReceived += OnPeerFrame;
 
-        _voice = new VoiceEngine();
+        _voice = new VoiceEngine { MusicVolume = _cfg.MusicVolume / 100f };
         _voice.Failed += ShowBanner;
         _voice.AttachSession(_session);
 
@@ -938,6 +952,13 @@ public sealed class MainForm : Form
                 tile.Click += (_, _) => { _focusedSharer = sid; };
             }
             tile.Invalidate();
+        }
+
+        // Bipe de entrada/saida — util quando a janela esta minimizada.
+        if (_cfg.JoinLeaveSound && _peerTiles.Count > 0)
+        {
+            if (peers.Count > _peerTiles.Count) Chime.Ok();
+            else if (peers.Count < _peerTiles.Count) Chime.Fail();
         }
 
         foreach (uint sid in _peerTiles.Keys.Where(k => !alive.Contains(k)).ToList())
@@ -1340,8 +1361,57 @@ public sealed class MainForm : Form
         catch (Exception ex) { Log.Write("aviso flutuante falhou: " + ex.Message); }
     }
 
+    private NotifyIcon? _tray;
+
+    /// <summary>
+    /// Icone na bandeja: fechar a janela minimiza em vez de sair, pra nao derrubar
+    /// a call sem querer. Sair de verdade e pelo menu do icone.
+    /// </summary>
+    private void EnsureTray()
+    {
+        if (_tray != null || !_cfg.TrayOnClose) return;
+        try
+        {
+            var menu = new ContextMenuStrip();
+            menu.Items.Add("Abrir o Primicord", null, (_, _) => RestoreFromTray());
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Sair de vez", null, (_, _) => { _reallyClosing = true; Close(); });
+
+            _tray = new NotifyIcon
+            {
+                Text = "Primicord",
+                Visible = true,
+                ContextMenuStrip = menu,
+                Icon = Icon ?? SystemIcons.Application,
+            };
+            _tray.DoubleClick += (_, _) => RestoreFromTray();
+        }
+        catch (Exception ex) { Log.Write("bandeja falhou: " + ex.Message); }
+    }
+
+    private void RestoreFromTray()
+    {
+        Show();
+        WindowState = FormWindowState.Normal;
+        Activate();
+    }
+
+    private bool _reallyClosing;
+
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        // Fechar com uma call em andamento so minimiza — derrubar a voz por engano
+        // no X e o tipo de coisa que irrita todo mundo na sala.
+        if (!_reallyClosing && _cfg.TrayOnClose && e.CloseReason == CloseReason.UserClosing && _me != null)
+        {
+            e.Cancel = true;
+            EnsureTray();
+            Hide();
+            return;
+        }
+
+        try { _tray?.Dispose(); } catch { }
+        _tray = null;
         _clipHotkey.Unregister();
         try { _toast?.Dispose(); } catch { }
         StopTimers();

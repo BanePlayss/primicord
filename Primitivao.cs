@@ -20,6 +20,12 @@ public sealed class PrimitivaoUser
 
     public string Badge => IsAdmin ? "ADMIN" : IsMod ? "MOD" : "";
 
+    /// <summary>Id do tema escolhido no site (users[nick].theme).</summary>
+    public string ThemeId = "";
+
+    /// <summary>Cor de destaque do tema do site, ou null se nao tem/nao reconhecido.</summary>
+    public Color? ThemeAccent => Primitivao.AccentOf(ThemeId);
+
     /// <summary>
     /// Saldo compacto pro cabecalho. Os saldos reais chegam a 15 digitos
     /// (939.640.313.391.648 PC), que estouraria a largura da barra.
@@ -61,6 +67,38 @@ public static class Primitivao
     private const string AdminNick = "admin";
     private const string AdminPassHash = "969c1c616baed41d32c81907be42da9185cff6193cb6d067c94a32ab933c7ab9";
     private static readonly string[] ModNicks = { "bane", "vitinho", "mohamed" };
+
+    /// <summary>
+    /// Cores dos temas do site (espelha a lista de THEMES no apostas-app.jsx).
+    /// O jogador escolhe o tema no site; aqui so LEMOS pra pintar o Primicord com a
+    /// mesma cor — trocar o tema continua sendo no site, porque isso mora dentro do
+    /// doc critico de apostas e este app nunca escreve la.
+    /// </summary>
+    private static readonly Dictionary<string, Color> ThemeAccents = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["ametista"] = Color.FromArgb(0x7a, 0x4d, 0xc9),
+        ["borgonha"] = Color.FromArgb(0xb5, 0x47, 0x6a),
+        ["breu"] = Color.FromArgb(0xd7, 0x64, 0x14),
+        ["campo"] = Color.FromArgb(0x2a, 0x8f, 0x3f),
+        ["carmesim"] = Color.FromArgb(0xd6, 0x1f, 0x2b),
+        ["celin"] = Color.FromArgb(0x3a, 0x86, 0xc8),
+        ["chiclete"] = Color.FromArgb(0xc2, 0x18, 0x5b),
+        ["classico"] = Color.FromArgb(0xd7, 0x64, 0x14),
+        ["floresta"] = Color.FromArgb(0x4a, 0x9d, 0x5a),
+        ["grafite"] = Color.FromArgb(0x5a, 0x50, 0x48),
+        ["hortela"] = Color.FromArgb(0x1c, 0x8f, 0x86),
+        ["musgo"] = Color.FromArgb(0x4f, 0x5a, 0x28),
+        ["neon"] = Color.FromArgb(0x1c, 0x8f, 0x86),
+        ["oceano"] = Color.FromArgb(0x2f, 0x6f, 0xb0),
+        ["orgulho"] = Color.FromArgb(0xd0, 0x2a, 0x9c),
+        ["ouro"] = Color.FromArgb(0xc9, 0xa2, 0x27),
+        ["petroleo"] = Color.FromArgb(0x1b, 0x49, 0x65),
+        ["sangue"] = Color.FromArgb(0xc0, 0x39, 0x2b),
+        ["vinho"] = Color.FromArgb(0x8a, 0x28, 0x46),
+    };
+
+    public static Color? AccentOf(string? themeId)
+        => !string.IsNullOrEmpty(themeId) && ThemeAccents.TryGetValue(themeId, out var c) ? c : null;
 
     // teamId -> nome de exibicao (espelha TEAMS no apostas-app.jsx)
     private static readonly Dictionary<string, string> TeamNames = new(StringComparer.OrdinalIgnoreCase)
@@ -163,6 +201,7 @@ public static class Primitivao
             Pc = ReadLong(entry["pc"]),
             Cc = ReadLong(entry["cc"]),
             IsMod = ModNicks.Contains(nick, StringComparer.OrdinalIgnoreCase),
+            ThemeId = entry["theme"]?.GetValue<string>() ?? "",
             SenhaHash = senhaHash.Length > 0 ? senhaHash : HashPassword(senhaPlain ?? ""),
         };
 

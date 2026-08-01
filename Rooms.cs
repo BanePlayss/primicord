@@ -126,7 +126,19 @@ public sealed class Config
     /// os espectadores). Depois que a captura passou a ser pela GPU, ESTE virou o
     /// unico limite da qualidade — nao ha mais gargalo de CPU pra contornar.
     /// </summary>
-    public int ScreenBudgetKb = 900;
+    public int ScreenBudgetKb = 2000;
+
+    /// <summary>Usar o tema (cor) que o jogador escolheu no site do Primitivao.</summary>
+    public bool UseSiteTheme = true;
+
+    /// <summary>Volume da musica do DJ (0..200%), separado do volume das vozes.</summary>
+    public int MusicVolume = 70;
+
+    /// <summary>Minimizar pra bandeja em vez de fechar.</summary>
+    public bool TrayOnClose = true;
+
+    /// <summary>Bipe quando alguem entra ou sai da sala de voz.</summary>
+    public bool JoinLeaveSound = true;
 
     private static string Path_ => System.IO.Path.Combine(AppEnv.DataDir, "config.txt");
 
@@ -152,6 +164,10 @@ public sealed class Config
                     case "clipsecs": if (int.TryParse(v, out var cs)) c.ClipSeconds = Math.Clamp(cs, 5, 60); break;
                     case "autobuf": c.AutoBuffer = v != "0"; break;
                     case "scrkb": if (int.TryParse(v, out var sk)) c.ScreenBudgetKb = Math.Clamp(sk, 200, 6000); break;
+                    case "sitetheme": c.UseSiteTheme = v != "0"; break;
+                    case "musicvol": if (int.TryParse(v, out var mv)) c.MusicVolume = Math.Clamp(mv, 0, 200); break;
+                    case "tray": c.TrayOnClose = v != "0"; break;
+                    case "joinsound": c.JoinLeaveSound = v != "0"; break;
                 }
             }
         }
@@ -174,6 +190,10 @@ public sealed class Config
                 "clipsecs=" + ClipSeconds,
                 "autobuf=" + (AutoBuffer ? "1" : "0"),
                 "scrkb=" + ScreenBudgetKb,
+                "sitetheme=" + (UseSiteTheme ? "1" : "0"),
+                "musicvol=" + MusicVolume,
+                "tray=" + (TrayOnClose ? "1" : "0"),
+                "joinsound=" + (JoinLeaveSound ? "1" : "0"),
             });
         }
         catch (Exception ex) { Log.Write("config nao salvou: " + ex.Message); }

@@ -45,6 +45,17 @@ public sealed class SettingsDialog : Form
         return best;
     }
 
+    private readonly PrimCheck _siteTheme = new("Usar a cor do meu tema do Primitivao");
+    private readonly PrimSlider _music = new();
+    private readonly Label _musicLabel = new();
+    private readonly PrimCheck _tray = new("Fechar minimiza pra bandeja (continua na call)");
+    private readonly PrimCheck _joinSound = new("Bipe quando alguem entra ou sai da sala");
+
+    private void UpdateMusicLabel()
+        => _musicLabel.Text = _music.Value == 0
+            ? "musica do DJ desligada"
+            : $"musica do DJ em {_music.Value}% (a voz nao muda)";
+
     private void UpdateSecsLabel()
         => _secsLabel.Text = $"o clipe salva os ultimos {_secs.Value} segundos";
 
@@ -60,7 +71,9 @@ public sealed class SettingsDialog : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(460, 720);
+        // Rolagem: a lista cresceu e nem toda tela cabe 1000px de altura.
+        ClientSize = new Size(478, Math.Min(880, Screen.PrimaryScreen!.WorkingArea.Height - 80));
+        AutoScroll = true;
         BackColor = Pv.Char2;
         ForeColor = Pv.Bone;
         Font = Pv.Body;
@@ -150,16 +163,56 @@ public sealed class SettingsDialog : Form
             Size = new Size(412, 40),
         };
 
-        var save = new PrimButton("SALVAR") { Location = new Point(24, 664), Size = new Size(200, 40) };
+        // ── DO PRIMITIVAO / APP ──
+        var titleApp = new Label
+        {
+            Text = "PRIMITIVAO E APP", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
+            Location = new Point(24, 666), AutoSize = true,
+        };
+
+        _siteTheme.Location = new Point(24, 706);
+        _siteTheme.Size = new Size(412, 26);
+        _siteTheme.Checked = cfg.UseSiteTheme;
+
+        var themeHint = new Label
+        {
+            Text = "A cor vem do tema escolhido no site. Trocar de tema e la:\n"
+                 + "o Primicord so le, nunca escreve no doc de apostas.",
+            Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(48, 734),
+            Size = new Size(400, 44),
+        };
+
+        var lblMusic = Section("VOLUME DA MUSICA DO DJ", new Point(24, 782));
+        _music.Location = new Point(24, 800);
+        _music.Size = new Size(412, 30);
+        _music.Minimum = 0; _music.Maximum = 200;
+        _music.Value = Math.Clamp(cfg.MusicVolume, 0, 200);
+        _musicLabel.Location = new Point(24, 832);
+        _musicLabel.AutoSize = true;
+        _musicLabel.Font = Pv.Body;
+        _musicLabel.ForeColor = Pv.BoneDim;
+        _music.ValueChanged += (_, _) => UpdateMusicLabel();
+        UpdateMusicLabel();
+
+        _tray.Location = new Point(24, 860);
+        _tray.Size = new Size(412, 26);
+        _tray.Checked = cfg.TrayOnClose;
+
+        _joinSound.Location = new Point(24, 890);
+        _joinSound.Size = new Size(412, 26);
+        _joinSound.Checked = cfg.JoinLeaveSound;
+
+        var save = new PrimButton("SALVAR") { Location = new Point(24, 930), Size = new Size(200, 40) };
         save.Click += (_, _) => Apply();
         var cancel = new PrimButton("CANCELAR", PrimButton.Style.Ghost)
-        { Location = new Point(236, 664), Size = new Size(200, 40) };
+        { Location = new Point(236, 930), Size = new Size(200, 40) };
         cancel.Click += (_, _) => Close();
 
         Controls.AddRange(new Control[]
             { title, lblMic, _mic, lblTest, _level, lblOut, _out, warn,
               titleClip, lblKey, _hotkeyBox, lblSecs, _secs, _secsLabel, _autoBuf,
               titleScr, lblBw, _bw, bwHint,
+              titleApp, _siteTheme, themeHint, lblMusic, _music, _musicLabel, _tray, _joinSound,
               save, cancel });
 
         Shown += (_, _) => RestartMonitor();
@@ -215,6 +268,10 @@ public sealed class SettingsDialog : Form
         _cfg.ClipSeconds = _secs.Value;
         _cfg.AutoBuffer = _autoBuf.Checked;
         if (_bw.SelectedIndex >= 0) _cfg.ScreenBudgetKb = BandwidthChoices[_bw.SelectedIndex].Kb;
+        _cfg.UseSiteTheme = _siteTheme.Checked;
+        _cfg.MusicVolume = _music.Value;
+        _cfg.TrayOnClose = _tray.Checked;
+        _cfg.JoinLeaveSound = _joinSound.Checked;
         _cfg.Save();
         Applied?.Invoke();
         Close();

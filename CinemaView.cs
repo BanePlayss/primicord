@@ -31,6 +31,7 @@ public sealed class CinemaView : Panel
     private readonly Label _status = new();
     private readonly ProgressPill _progress = new();
     private readonly PrimButton _pickBtn = new("ESCOLHER VIDEO");
+    private EventHandler _pickHandler = (_, _) => { };
     private readonly Panel _controls = new() { Dock = DockStyle.Bottom, Height = 58, BackColor = Pv.Charcoal };
     private PrimButton? _playBtn;
     private Label? _time;
@@ -50,8 +51,9 @@ public sealed class CinemaView : Panel
         _status.ForeColor = Pv.Bone;
         _status.AutoSize = true;
         _progress.Size = new Size(420, 10);
-        _pickBtn.Size = new Size(220, 42);
-        _pickBtn.Click += async (_, _) => await PickFileAsync();
+        _pickBtn.Size = new Size(260, 42);
+        _pickHandler = async (_, _) => await PickFileAsync();
+        _pickBtn.Click += _pickHandler;
 
         _overlay.Controls.AddRange(new Control[] { _status, _progress, _pickBtn });
         _overlay.Resize += (_, _) => LayoutOverlay();
@@ -180,7 +182,23 @@ public sealed class CinemaView : Panel
         var vlc = EnsureVlc();
         if (vlc == null)
         {
-            ShowMessage("O player nao carregou. O arquivo esta em: " + _cinema.LocalPath);
+            // Degrada com utilidade em vez de so falhar: o arquivo ja esta baixado,
+            // entao oferece abrir no player do sistema.
+            _progress.Visible = false;
+            _status.Text = "O PLAYER INTERNO NAO CARREGOU";
+            _pickBtn.Text = "ABRIR NO PLAYER DO WINDOWS";
+            _pickBtn.Visible = true;
+            _pickBtn.Click -= _pickHandler;
+            _pickBtn.Click += (_, _) =>
+            {
+                try
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    { FileName = _cinema.LocalPath!, UseShellExecute = true });
+                }
+                catch (Exception ex) { Log.Write("abrir no player externo: " + ex.Message); }
+            };
+            LayoutOverlay();
             return;
         }
 
@@ -215,14 +233,42 @@ public sealed class CinemaView : Panel
         }
     }
 
-    /// <summary>Carrega o libVLC uma vez por processo.</summary>
-    private static LibVLC? EnsureVlc()
+    /// <summary>
+    /// Carrega o libVLC uma vez por processo, instalando o motor se for a 1a vez.
+    /// </summary>
+    private LibVLC? EnsureVlc()
     {
         if (_libVlc != null) return _libVlc;
         if (_vlcBroken) return null;
         try
         {
-            Core.Initialize();
+            if (!VlcRuntime.Installed)
+            {
+                _status.Text = "PREPARANDO O PLAYER (so na primeira vez)";
+                _progress.Visible = true;
+                _progress.Percent = 0;
+                LayoutOverlay();
+                Application.DoEvents();
+            }
+
+            string? dir = VlcRuntime.Ensure(pct =>
+            {
+                if (IsDisposed) return;
+                try
+                {
+                    BeginInvoke(() =>
+                    {
+                        _progress.Percent = pct;
+                        _progress.Invalidate();
+                    });
+                }
+                catch { }
+            });
+            if (dir == null) { _vlcBroken = true; return null; }
+
+            // Aponta pra pasta instalada: sem isso o LibVLCSharp procura ao lado do
+            // exe, onde nada existe no publish de arquivo unico.
+            Core.Initialize(dir);
             _libVlc = new LibVLC("--no-osd", "--quiet");
             return _libVlc;
         }

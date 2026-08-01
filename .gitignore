@@ -2,7 +2,11 @@ bin/
 obj/
 *.user
 publish/
-# O exe publicado (56MB) nao vai pro git — gera com build.ps1
+# O exe publicado nao vai pro git — gera com build.ps1
 Primicord.exe
+Primicord-novo.exe
+# Motor de video empacotado pelo build.ps1 a partir do pacote NuGet
+vlc-runtime.zip
+vlc-runtime.stamp
 vpk-publish/
 Releases/

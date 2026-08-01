@@ -6,8 +6,21 @@ namespace Primicord;
 /// <summary>Paleta e fontes — mesma identidade do app de apostas, em "edicao noturna".</summary>
 public static class Pv
 {
-    public static readonly Color Orange = Color.FromArgb(0xD7, 0x64, 0x14);
-    public static readonly Color OrangeDim = Color.FromArgb(0xA8, 0x4A, 0x08);
+    /// <summary>
+    /// Cor de destaque. Nao e constante porque o app adota o TEMA que o jogador
+    /// escolheu no site do Primitivao — quem usa "Hortelã" la ve o Primicord verde.
+    /// </summary>
+    public static Color Orange { get; private set; } = Color.FromArgb(0xD7, 0x64, 0x14);
+    public static Color OrangeDim { get; private set; } = Color.FromArgb(0xA8, 0x4A, 0x08);
+
+    /// <summary>Troca a cor de destaque (null volta pro laranja padrao).</summary>
+    public static void SetAccent(Color? accent)
+    {
+        var c = accent ?? Color.FromArgb(0xD7, 0x64, 0x14);
+        Orange = c;
+        // Versao apagada pra estados secundarios (borda de "conectando", etc).
+        OrangeDim = Color.FromArgb((int)(c.R * 0.72), (int)(c.G * 0.72), (int)(c.B * 0.72));
+    }
     public static readonly Color Charcoal = Color.FromArgb(0x1C, 0x16, 0x12);
     public static readonly Color Char2 = Color.FromArgb(0x2A, 0x21, 0x1B);
     public static readonly Color Char3 = Color.FromArgb(0x38, 0x2C, 0x24);
