@@ -23,6 +23,32 @@ public sealed class SignalDoc
 }
 
 /// <summary>
+/// Onde os dois lados deixam recado um pro outro pra montar a conexao.
+/// </summary>
+/// <remarks>
+/// Existe como interface por dois motivos concretos, nao por gosto: o teste sobe
+/// duas malhas no mesmo processo e nao pode depender do Firestore de producao
+/// (<c>MemorySignaling</c> nos testes), e a sinalizacao e uma das duas costuras
+/// que o PLANO-DE-MIGRACAO.md ja marcava como certas de trocar quando o custo do
+/// poll doer.
+/// </remarks>
+public interface IWebRtcSignaling
+{
+    /// <summary>true se EU sou quem oferta neste par.</summary>
+    bool IsOfferer(string otherPeerId);
+
+    Task PublishOfferAsync(string otherPeerId, long epoch, string sdp,
+                           IEnumerable<string> candidates, CancellationToken ct = default);
+
+    Task PublishAnswerAsync(string otherPeerId, string sdp,
+                            IEnumerable<string> candidates, CancellationToken ct = default);
+
+    Task<SignalDoc?> ReadAsync(string otherPeerId, CancellationToken ct = default);
+
+    Task ClearAsync(string otherPeerId);
+}
+
+/// <summary>
 /// Troca de SDP e candidatos ICE pelo Firestore — o "ponto de encontro" do WebRTC.
 /// </summary>
 /// <remarks>
@@ -52,7 +78,7 @@ public sealed class SignalDoc
 /// sala. Nao piora o que o pc_rooms/peers ja expunha — os mesmos enderecos ja iam
 /// pra la em texto puro —, mas nao melhora, e some junto quando a autenticacao entrar.
 /// </remarks>
-public sealed class WebRtcSignaling
+public sealed class WebRtcSignaling : IWebRtcSignaling
 {
     private readonly Firestore _fs;
     private readonly string _roomId;

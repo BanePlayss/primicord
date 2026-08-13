@@ -47,6 +47,16 @@ Ou rodar direto do código:
 dotnet run --project Primicord.csproj
 ```
 
+## Testar
+
+```
+dotnet test tests/Primicord.Tests
+```
+
+Sobe a malha UDP em loopback e duas conexões WebRTC no mesmo processo — dá pra
+verificar o caminho de voz inteiro sem precisar de dois PCs. Não toca no
+Firestore nem na internet.
+
 ## Estado
 
 - [x] Fase 1 — salas de voz em grupo pela internet

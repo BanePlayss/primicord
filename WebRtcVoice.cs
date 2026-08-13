@@ -68,15 +68,27 @@ public sealed class WebRtcVoiceMesh : IVoiceTransport, IDisposable
 
     // ─── tempos ──────────────────────────────────────────────────────────────
 
-    private const int TickMs = 2000;            // mesmo compasso do poll de presenca
-    private const int GatherTimeoutMs = 4000;   // teto pra coleta de candidatos ICE
     private const int RenegotiateAfterMs = 15000;
+
+    /// <summary>
+    /// Compasso da negociacao. Em producao acompanha o poll de presenca (2s); os
+    /// testes baixam pra nao esperar 2 segundos por transicao de estado.
+    /// </summary>
+    public int TickMs { get; init; } = 2000;
+
+    /// <summary>Teto pra coleta de candidatos ICE antes de publicar assim mesmo.</summary>
+    public int GatherTimeoutMs { get; init; } = 4000;
+
+    /// <summary>
+    /// Servidores STUN, no formato host:porta. Lista vazia = so candidatos locais:
+    /// serve em LAN e e o que os testes usam, porque sem STUN a coleta termina na hora.
+    /// </summary>
+    public IReadOnlyList<string> StunServers { get; init; } = Stun.DefaultServers;
 
     // ─── estado ──────────────────────────────────────────────────────────────
 
-    private readonly WebRtcSignaling _sig;
+    private readonly IWebRtcSignaling _sig;
     private readonly RoomSession _session;
-    private readonly string _myPeerId;
 
     private readonly object _linksLock = new();
     private readonly Dictionary<string, Link> _links = new(StringComparer.Ordinal);
@@ -140,11 +152,14 @@ public sealed class WebRtcVoiceMesh : IVoiceTransport, IDisposable
         }
     }
 
+    /// <summary>Caminho normal: sinalizacao pelo Firestore.</summary>
     public WebRtcVoiceMesh(Firestore fs, string roomId, string myPeerId, RoomSession session)
+        : this(new WebRtcSignaling(fs, roomId, myPeerId), session) { }
+
+    public WebRtcVoiceMesh(IWebRtcSignaling signaling, RoomSession session)
     {
-        _sig = new WebRtcSignaling(fs, roomId, myPeerId);
+        _sig = signaling;
         _session = session;
-        _myPeerId = myPeerId;
 
         _encoder = OpusCodecFactory.CreateEncoder(48000, 1, OpusApplication.OPUS_APPLICATION_VOIP);
         _encoder.Bitrate = OpusBitrate;
@@ -390,7 +405,7 @@ public sealed class WebRtcVoiceMesh : IVoiceTransport, IDisposable
     {
         var config = new RTCConfiguration
         {
-            iceServers = Stun.DefaultServers
+            iceServers = StunServers
                 .Select(s => new RTCIceServer { urls = "stun:" + s })
                 .ToList(),
         };
@@ -434,7 +449,7 @@ public sealed class WebRtcVoiceMesh : IVoiceTransport, IDisposable
     /// sempre — melhor publicar so os candidatos locais e conectar em LAN do que
     /// nao publicar nada.
     /// </remarks>
-    private static async Task<List<string>> GatherAsync(RTCPeerConnection pc, CancellationToken ct)
+    private async Task<List<string>> GatherAsync(RTCPeerConnection pc, CancellationToken ct)
     {
         var cands = new List<string>();
         var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);

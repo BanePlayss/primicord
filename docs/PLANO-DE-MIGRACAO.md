@@ -184,7 +184,44 @@ passar no seu critério.
 
 ---
 
-### F1 — Harness de protocolo 🔴
+### F1 — Harness de protocolo 🔴 ✅ FEITO
+
+**Entregue:** `tests/Primicord.Tests` — 21 testes, ~6 s, sem rede externa e sem
+Firestore. Rode com:
+
+```bash
+dotnet test tests/Primicord.Tests
+```
+
+O que cobre:
+
+| Arquivo | O quê |
+|---|---|
+| `ProtocolTests.cs` | Malha UDP em loopback: punch/ack, voz íntegra, mudo, quadro de tela fragmentado remontando byte a byte, `Bye`, `HashId` |
+| `StunTests.cs` | `ParseResponse` aceitando XOR/legado e **recusando** transação errada, cookie errado, pacote de voz e pacote curto |
+| `WebRtcTests.cs` | Duas `WebRtcVoiceMesh` reais negociando e passando áudio Opus, mudo, e o par sumindo da presença |
+
+Duas coisas que apareceram no caminho:
+
+- **O `.csproj` do app engolia os testes.** O glob padrão do SDK é `**/*.cs` a
+  partir da pasta do projeto, e `tests/` mora lá dentro — o app tentava compilar
+  `Fact`/`Theory` sem referência ao xunit. Resolvido com `<Compile Remove="tests/**" />`.
+  É provavelmente parente do problema que derrubou o harness anterior.
+- **`WebRtcSignaling` virou `IWebRtcSignaling`.** Para os testes subirem duas
+  malhas sem tocar no Firestore de produção. É uma das duas costuras que a §1.3
+  já marcava como justificadas.
+
+**Verificado que a suíte falha:** mutei `Stun.ParseResponse` (removendo a
+checagem de transação) e `IsOfferer` (fazendo os dois lados ofertarem, o glare
+clássico). Os dois testes certos falharam e os outros 9 seguiram verdes — a
+suíte detecta com precisão, não por acaso. Mutações revertidas.
+
+> **Isto também é a resposta pra "como eu testo sem 2 PCs".** O caminho completo
+> de voz WebRTC — oferta, resposta, candidatos, DTLS, Opus ida e volta — roda numa
+> máquina só, em 6 segundos.
+
+<details>
+<summary>Motivação original</summary>
 
 **Por quê:** 9.000 linhas, zero testes, e o código já tem afordâncias de teste
 (`RoomSession.AddPeerDirect`, `StartNetworkOnlyAsync`, `PRIMICORD_DATA_DIR`)
@@ -203,30 +240,31 @@ refatoração de rede. Refatorar rede sem teste é apostar.
 **Pronto quando:** `dotnet test` roda verde em máquina limpa e um `git revert`
 proposital de qualquer commit de rede faz pelo menos um teste falhar.
 
+</details>
+
 ---
 
-### F2 — Opus + AEC 🔴
+### F2 — ~~Opus~~ + AEC 🔴 — metade feita
 
-**Por quê:** maior retorno por linha de código de todo o plano. Isolado em
-`VoiceEngine.cs`, sem tocar em arquitetura. Resolve dois problemas que hoje
-limitam o uso real: 4 Mbps de subida numa sala de 6, e a regra "todo mundo de fone".
+**Opus: feito**, mas por outro caminho — veio junto do WebRTC (§6) em vez de
+entrar na malha antiga. Medido: 798 → 49,2 kbps por par. O comentário errado de
+banda em `RoomSession.cs:41` foi corrigido.
 
-**Escopo:**
-- Opus no caminho `OnMicData` → `SendVoice` e no `OnStreamData`. Manter o frame
-  de 10 ms. 32 kbps, VBR, DTX ligado (silêncio não transmite).
-- Versionar o protocolo: hoje o tipo 0 é PCM cru e não há campo de versão. Ou se
-  adota um tipo novo (`TypeVoiceOpus = 8`) mantendo o 0 para compatibilidade
-  durante a transição, ou se aceita que todo mundo atualiza junto. **Escolher
-  agora, não na hora do bug.**
-- Ligar o `SpeexDSPSharp` que já está pago e não usado: AEC + supressão de ruído
-  + AGC na captura.
-- Corrigir o comentário errado de banda em `RoomSession.cs:41`.
+**AEC: continua aberto, e continua valendo.** É importante não confundir: o
+WebRTC-o-padrão inclui cancelamento de eco porque o *navegador* faz isso. O
+SIPSorcery é só o transporte — **não tem AEC nenhum**. Então a regra "todo mundo
+de fone" do README segue de pé, exatamente como antes.
 
-**Pronto quando:** sala de 4 pessoas com subida medida abaixo de 200 kbps por
-pessoa, e uma pessoa em caixa de som sem eco audível para os outros.
+**Escopo do que falta:**
+- Ligar o `SpeexDSPSharp`, que está no `.csproj` desde sempre e tem **zero
+  referências** no código: AEC + supressão de ruído + AGC na captura.
+- Vale para os dois transportes, porque acontece antes deles, em `VoiceEngine`.
+
+**Pronto quando:** uma pessoa em caixa de som, sem fone, sem eco audível para os
+outros.
 
 **Risco:** AEC precisa do sinal de referência (o que sai no alto-falante)
-alinhado no tempo com o microfone. O `TapProvider` em `VoiceEngine.cs:307` já
+alinhado no tempo com o microfone. O `TapProvider` em `VoiceEngine.cs` já
 entrega exatamente esse sinal — o alinhamento é o trabalho fino desta fase.
 
 ---

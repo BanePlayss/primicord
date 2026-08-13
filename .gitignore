@@ -10,3 +10,5 @@ vlc-runtime.zip
 vlc-runtime.stamp
 vpk-publish/
 Releases/
+tests/**/bin/
+tests/**/obj/
