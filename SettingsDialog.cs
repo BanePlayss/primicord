@@ -20,6 +20,12 @@ public sealed class SettingsDialog : Form
 
     private readonly ComboBox _bw = new();
 
+    private PrimButton _updateBtn = null!;
+    private readonly Label _updateStatus = new();
+    /// <summary>Versao ja encontrada e ainda nao instalada — o botao vira "INSTALAR".</summary>
+    private UpdateInfo? _pending;
+    private bool _updateBusy;
+
     /// <summary>Degraus de banda pro compartilhamento (KB/s, rotulo).</summary>
     /// <summary>
     /// Os rotulos mostram o que CADA degrau entregou de verdade numa medicao com a
@@ -111,7 +117,8 @@ public sealed class SettingsDialog : Form
 
         var warn = new Label
         {
-            Text = "Usa fone. Sem cancelamento de eco, caixa de som devolve a voz dos outros.",
+            Text = "O eco e cancelado, entao da pra usar caixa de som. Fone ainda e melhor:\n"
+                 + "so cancelamos o que o Primicord toca, nao o som do jogo.",
             Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(24, 238),
             Size = new Size(412, 34),
         };
@@ -202,10 +209,36 @@ public sealed class SettingsDialog : Form
         _joinSound.Size = new Size(412, 26);
         _joinSound.Checked = cfg.JoinLeaveSound;
 
-        var save = new PrimButton("SALVAR") { Location = new Point(24, 930), Size = new Size(200, 40) };
+        // ── ATUALIZAR ──
+        var titleUpd = new Label
+        {
+            Text = "ATUALIZAR", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
+            Location = new Point(24, 930), AutoSize = true,
+        };
+
+        var lblVersion = new Label
+        {
+            Text = $"voce esta na versao {Updater.CurrentVersion}",
+            Font = Pv.Body, ForeColor = Pv.BoneDim,
+            Location = new Point(24, 968), AutoSize = true,
+        };
+
+        _updateBtn = new PrimButton("PROCURAR ATUALIZACAO")
+        { Location = new Point(24, 994), Size = new Size(260, 38) };
+        _updateBtn.Click += async (_, _) => await CheckOrInstallAsync();
+
+        _updateStatus.Location = new Point(24, 1040);
+        _updateStatus.Size = new Size(412, 56);
+        _updateStatus.Font = Pv.Body;
+        _updateStatus.ForeColor = Pv.BoneDim;
+        _updateStatus.Text = Updater.CanSelfUpdate
+            ? $"procura em github.com/{cfg.UpdateRepo}"
+            : "rodando pelo dotnet run — a troca automatica so funciona no exe publicado";
+
+        var save = new PrimButton("SALVAR") { Location = new Point(24, 1108), Size = new Size(200, 40) };
         save.Click += (_, _) => Apply();
         var cancel = new PrimButton("CANCELAR", PrimButton.Style.Ghost)
-        { Location = new Point(236, 930), Size = new Size(200, 40) };
+        { Location = new Point(236, 1108), Size = new Size(200, 40) };
         cancel.Click += (_, _) => Close();
 
         Controls.AddRange(new Control[]
@@ -213,10 +246,68 @@ public sealed class SettingsDialog : Form
               titleClip, lblKey, _hotkeyBox, lblSecs, _secs, _secsLabel, _autoBuf,
               titleScr, lblBw, _bw, bwHint,
               titleApp, _siteTheme, themeHint, lblMusic, _music, _musicLabel, _tray, _joinSound,
+              titleUpd, lblVersion, _updateBtn, _updateStatus,
               save, cancel });
 
         Shown += (_, _) => RestartMonitor();
         FormClosed += (_, _) => { _monitor?.Dispose(); _monitor = null; };
+    }
+
+    /// <summary>
+    /// Um botao so, em dois tempos: primeiro clique procura, segundo instala. Evita
+    /// baixar 56MB de surpresa — quem clicou "procurar" nao pediu pra trocar de versao.
+    /// </summary>
+    private async Task CheckOrInstallAsync()
+    {
+        if (_updateBusy) return;
+        _updateBusy = true;
+        _updateBtn.Enabled = false;
+        try
+        {
+            if (_pending == null)
+            {
+                _updateStatus.Text = "procurando...";
+                var found = await Updater.CheckAsync(_cfg.UpdateRepo).ConfigureAwait(true);
+                if (found == null)
+                {
+                    _updateStatus.Text = $"voce ja esta na versao mais recente ({Updater.CurrentVersion}).";
+                    return;
+                }
+                _pending = found;
+                string notes = found.Notes.Length > 120 ? found.Notes[..120] + "..." : found.Notes;
+                _updateStatus.Text = $"versao {found.Version} disponivel ({found.SizeLabel})."
+                                   + (notes.Length > 0 ? "\n" + notes.Replace("\r", "").Replace("\n", " ") : "");
+                _updateBtn.Text = "INSTALAR " + found.Version;
+                return;
+            }
+
+            if (!Updater.CanSelfUpdate)
+            {
+                _updateStatus.Text = "rodando pelo dotnet run — gera o exe com build.ps1 pra poder trocar.";
+                return;
+            }
+
+            var progress = new Progress<int>(p => _updateStatus.Text = $"baixando... {p}%");
+            string file = await Updater.DownloadAsync(_pending, progress).ConfigureAwait(true);
+
+            _updateStatus.Text = "instalando...";
+            Updater.ApplyAndRestart(file);
+
+            // O processo novo ja esta subindo; este tem que sair pra soltar o mutex.
+            Application.Exit();
+        }
+        catch (Exception ex)
+        {
+            Log.Write("update falhou: " + ex);
+            _updateStatus.Text = "nao deu: " + ex.Message;
+            _pending = null;
+            _updateBtn.Text = "PROCURAR ATUALIZACAO";
+        }
+        finally
+        {
+            _updateBusy = false;
+            if (!IsDisposed) _updateBtn.Enabled = true;
+        }
     }
 
     private int IndexOfMic(int deviceNumber)

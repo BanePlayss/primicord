@@ -178,6 +178,12 @@ public sealed class Config
     /// </summary>
     public bool MicAutoGain;
 
+    /// <summary>
+    /// Onde o botao de atualizar procura versao nova (dono/repositorio no GitHub).
+    /// Fica no config pra corrigir sem recompilar se o repositorio mudar de nome.
+    /// </summary>
+    public string UpdateRepo = Updater.DefaultRepo;
+
     private static string Path_ => System.IO.Path.Combine(AppEnv.DataDir, "config.txt");
 
     public static Config Load()
@@ -210,6 +216,7 @@ public sealed class Config
                     case "webrtc": c.UseWebRtc = v == "1"; break;
                     case "aec": c.EchoCancel = v != "0"; break;
                     case "agc": c.MicAutoGain = v == "1"; break;
+                    case "updaterepo": if (v.Length > 0) c.UpdateRepo = v; break;
                 }
             }
         }
@@ -240,6 +247,7 @@ public sealed class Config
                 "webrtc=" + (UseWebRtc ? "1" : "0"),
                 "aec=" + (EchoCancel ? "1" : "0"),
                 "agc=" + (MicAutoGain ? "1" : "0"),
+                "updaterepo=" + UpdateRepo,
             });
         }
         catch (Exception ex) { Log.Write("config nao salvou: " + ex.Message); }

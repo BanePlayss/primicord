@@ -19,18 +19,32 @@ $root = $PSScriptRoot
 # descoberta de rede: nada disso serve pra tocar um arquivo local.
 $vlcZip = Join-Path $root "vlc-runtime.zip"
 
-function Find-VlcSource($binRoot) {
-    if (-not (Test-Path $binRoot)) { return $null }
-    $hits = Get-ChildItem -Path $binRoot -Recurse -Filter "libvlc.dll" -File -ErrorAction SilentlyContinue
-    foreach ($h in $hits) { if ($h.Directory.Name -eq "win-x64") { return $h.Directory } }
+# O libvlc vem do CACHE DO NUGET, nao do bin. O csproj desliga a copia pro output
+# de proposito (Vlc*Enabled=false): as tres arquiteturas iam parar dentro do exe e
+# custavam ~135MB de peso que o app nunca usa. O que ele usa e este zip curado.
+function Find-VlcSource {
+    $roots = @()
+    if ($env:NUGET_PACKAGES) { $roots += $env:NUGET_PACKAGES }
+    $roots += (Join-Path $env:USERPROFILE ".nuget\packages")
+
+    foreach ($r in $roots) {
+        $pkg = Join-Path $r "videolan.libvlc.windows"
+        if (-not (Test-Path $pkg)) { continue }
+        $vers = Get-ChildItem $pkg -Directory -ErrorAction SilentlyContinue |
+                Sort-Object { try { [version]$_.Name } catch { [version]"0.0" } } -Descending
+        foreach ($v in $vers) {
+            $x64 = Join-Path $v.FullName "build\x64"
+            if (Test-Path (Join-Path $x64 "libvlc.dll")) { return (Get-Item $x64) }
+        }
+    }
     return $null
 }
 
-$vlcSrc = Find-VlcSource (Join-Path $root "bin")
+$vlcSrc = Find-VlcSource
 if (-not $vlcSrc) {
-    Write-Host "libvlc.dll ainda nao materializado - compilando uma vez..." -ForegroundColor DarkYellow
-    dotnet build "$root\Primicord.csproj" -c Release | Out-Null
-    $vlcSrc = Find-VlcSource (Join-Path $root "bin")
+    Write-Host "libvlc nao esta no cache do NuGet - restaurando uma vez..." -ForegroundColor DarkYellow
+    dotnet restore "$root\Primicord.csproj" | Out-Null
+    $vlcSrc = Find-VlcSource
 }
 
 if ($vlcSrc) {

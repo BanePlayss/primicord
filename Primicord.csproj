@@ -11,12 +11,24 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Primicord</AssemblyName>
     <RootNamespace>Primicord</RootNamespace>
-    <Version>0.1.0</Version>
+    <!-- E ESTE numero que o botao de atualizar compara com a tag da release do
+         GitHub. Subir aqui e publicar a release sao o mesmo ato: se o exe sair com
+         a versao antiga, todo mundo vai baixar de novo o que ja tem. -->
+    <Version>0.2.0</Version>
     <ApplicationIcon>Primicord.ico</ApplicationIcon>
     <!-- Trimming quebra reflection do WinForms/NAudio — deixar desligado. -->
     <PublishTrimmed>false</PublishTrimmed>
     <!-- unsafe: copia linha a linha da memoria mapeada da GPU (DxgiCapture). -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- O pacote do VLC copia libvlc\win-x64, win-x86 E win-arm64 pro output quando
+         Platform=AnyCPU, e o IncludeNativeLibrariesForSelfExtract enfia as TRES
+         dentro do exe: 227MB, sendo ~135MB de peso morto. O app nunca usa essa
+         copia — ele extrai o vlc-runtime.zip curado pra %APPDATA% (VlcRuntime.cs),
+         que ja esta embutido como recurso. O build.ps1 monta esse zip a partir do
+         pacote NuGet, entao nada aqui depende do output. -->
+    <VlcWindowsX64Enabled>false</VlcWindowsX64Enabled>
+    <VlcWindowsX86Enabled>false</VlcWindowsX86Enabled>
+    <VlcWindowsArm64Enabled>false</VlcWindowsArm64Enabled>
     <!-- As flags de self-contained/single-file NAO ficam aqui: elas contaminam o
          build normal e impedem que outro projeto referencie este (NETSDK1151, que
          quebrou o harness de teste). Vao como argumentos do publish, no build.ps1. -->

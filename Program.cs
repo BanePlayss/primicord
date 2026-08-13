@@ -6,11 +6,23 @@ internal static class Program
     private static Mutex? _single;
 
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
-        bool created;
-        try { _single = new Mutex(true, "Primicord.SingleInstance", out created); }
-        catch { created = true; }
+        // --updated: fomos abertos pelo atualizador e o processo velho ainda esta
+        // morrendo. Sem isso a versao nova bateria no "ja esta aberto" e sairia,
+        // deixando o usuario sem app nenhum na tela depois de atualizar.
+        bool afterUpdate = args.Contains("--updated", StringComparer.OrdinalIgnoreCase);
+
+        bool created = TryTakeMutex();
+        if (!created && afterUpdate)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(15);
+            while (!created && DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(250);
+                created = TryTakeMutex();
+            }
+        }
 
         if (!created)
         {
@@ -18,6 +30,9 @@ internal static class Program
                             MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
+
+        // Agora que nada mais segura o arquivo, apaga o exe da versao anterior.
+        Updater.CleanupOldVersion();
 
         Application.SetHighDpiMode(HighDpiMode.SystemAware);
         Application.EnableVisualStyles();
@@ -28,12 +43,24 @@ internal static class Program
         Application.ThreadException += (_, e) =>
             Log.Write("EXCECAO NA UI: " + e.Exception);
 
-        Log.Write("=== Primicord iniciando ===");
+        Log.Write($"=== Primicord {Updater.CurrentVersion} iniciando ===");
         try { Application.Run(new MainForm()); }
         finally
         {
             Log.Write("=== Primicord encerrado ===");
             try { _single?.ReleaseMutex(); } catch { }
         }
+    }
+
+    private static bool TryTakeMutex()
+    {
+        try
+        {
+            _single?.Dispose();
+            _single = new Mutex(true, "Primicord.SingleInstance", out bool created);
+            if (!created) { _single.Dispose(); _single = null; }
+            return created;
+        }
+        catch { return true; }   // sem mutex e melhor que sem app
     }
 }

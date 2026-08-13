@@ -42,9 +42,9 @@ cancelamento de eco de 16 dB pra 2,5 dB; só vale pra quem usa fone.
 ## Rodar
 
 Só abrir o `Primicord.exe` — é **um arquivo só** e não precisa de .NET instalado
-na máquina (self-contained, ~56MB). Na primeira vez o Windows mostra o aviso do
-SmartScreen ("Mais informações" → "Executar assim mesmo"), porque o exe não é
-assinado.
+na máquina (self-contained, ~100MB, dos quais 38MB são o motor de vídeo do
+cinema). Na primeira vez o Windows mostra o aviso do SmartScreen ("Mais
+informações" → "Executar assim mesmo"), porque o exe não é assinado.
 
 Pra gerar o exe de novo depois de mexer no código:
 
@@ -68,12 +68,38 @@ Sobe a malha UDP em loopback e duas conexões WebRTC no mesmo processo — dá p
 verificar o caminho de voz inteiro sem precisar de dois PCs. Não toca no
 Firestore nem na internet.
 
+## Atualizar
+
+O app se atualiza sozinho: **Configurações → ATUALIZAR → PROCURAR ATUALIZAÇÃO**.
+Ele consulta as releases do GitHub, baixa a versão nova, se troca no lugar e
+reabre. O primeiro clique só procura; o segundo é que baixa — pra ninguém levar
+100MB de surpresa.
+
+Pra publicar uma versão nova:
+
+1. Sobe o `<Version>` no `Primicord.csproj` (é ele que o app compara com a tag).
+2. `./build.ps1`
+3. `gh release create v0.2.0 Primicord.exe --title "0.2.0" --notes "o que mudou"`
+
+O anexo **precisa** se chamar `Primicord.exe`. Se junto vier um
+`Primicord.exe.sha256`, o app confere o hash antes de trocar.
+
+Onde ele procura sai de `updaterepo=dono/repo` no `config.txt`. O repositório
+tem que ser **público** — senão o download exigiria token, e token embutido em
+binário que se distribui por aí não é opção.
+
 ## Estado
 
-- [x] Fase 1 — salas de voz em grupo pela internet
-- [ ] Fase 2 — compartilhar tela
-- [ ] Fase 3 — clipes (buffer rolante + hotkey global)
+- [x] Salas de voz em grupo pela internet
+- [x] Compartilhar tela (captura por GPU, codec de blocos delta)
+- [x] Clipes (buffer rolante + hotkey global)
+- [x] Chat, DMs, modo DJ, sessão cinema
+- [x] Voz por WebRTC com Opus (`webrtc=1`)
+- [x] Cancelamento de eco
+- [x] Atualização pelo próprio app
 
-**Passo manual pendente:** publicar as rules do `pc_rooms` (arquivo
-`firestore.rules` do repo `primitivao`) no Firebase Console. Sem isso o app não
-lista nem cria sala.
+Ver [docs/PLANO-DE-MIGRACAO.md](docs/PLANO-DE-MIGRACAO.md) pro que vem depois.
+
+**Passo manual pendente:** publicar as rules do `pc_rooms` no Firebase Console,
+cobrindo `peers/**` e — se for usar `webrtc=1` — também `signal/**`. Sem isso o
+app não lista nem cria sala.
