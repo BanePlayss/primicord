@@ -41,6 +41,21 @@ public sealed class VoiceEngine : IDisposable
     private readonly FrameAccumulator _micAcc = new();
     private readonly byte[] _sendBuf = new byte[FrameBytes];
 
+    /// <summary>Tira eco e ruido do microfone. null = tratamento desligado no config.</summary>
+    private MicPreprocessor? _preproc;
+
+    /// <summary>Ligar o tratamento do microfone (cancelar eco, tirar ruido).</summary>
+    public bool PreprocessMic { get; init; } = true;
+
+    /// <summary>
+    /// Nivelar o volume do microfone. Desligado por padrao porque atrapalha o
+    /// cancelamento de eco — ver <see cref="MicPreprocessor.AutoGain"/>.
+    /// </summary>
+    public bool MicAutoGain { get; init; }
+
+    /// <summary>true se o tratamento subiu de verdade (a nativa do Speex carregou).</summary>
+    public bool MicPreprocessActive => _preproc?.Active == true;
+
     /// <summary>
     /// Por onde a voz vai e vem. Pode ser a malha UDP (<see cref="RoomSession"/>) ou
     /// o WebRTC (<see cref="WebRtcVoiceMesh"/>) — daqui os dois sao a mesma coisa.
@@ -137,9 +152,16 @@ public sealed class VoiceEngine : IDisposable
 
         _mixer = new MixingSampleProvider(Float48Mono) { ReadFully = true };
 
-        // Deriva o que sai pro fone, convertido pra PCM 16-bit — e exatamente isso
-        // que o clipe precisa gravar ("o que eu ouvi"), sem mexer no que e tocado.
-        var tap = new TapProvider(_mixer, (buf, count) => HeardPcm?.Invoke(buf, 0, count));
+        if (PreprocessMic) _preproc = new MicPreprocessor { AutoGain = MicAutoGain };
+
+        // Deriva o que sai pro fone, convertido pra PCM 16-bit. Serve pra duas coisas:
+        // o clipe grava "o que eu ouvi", e o cancelador de eco usa como REFERENCIA —
+        // ele so consegue tirar do microfone aquilo que sabe que foi tocado.
+        var tap = new TapProvider(_mixer, (buf, count) =>
+        {
+            _preproc?.PushPlayback(buf, 0, count);
+            HeardPcm?.Invoke(buf, 0, count);
+        });
 
         _out = OpenOutput(outputDeviceId);
         _out.Init(tap);
@@ -211,6 +233,11 @@ public sealed class VoiceEngine : IDisposable
         try { _out?.Stop(); _out?.Dispose(); } catch { }
         _out = null;
 
+        // Depois do microfone e da saida pararem: e de la que o Process e o
+        // PushPlayback sao chamados.
+        try { _preproc?.Dispose(); } catch { }
+        _preproc = null;
+
         lock (_streamsLock) _streams.Clear();
         _mixer = null;
         Log.Write("audio encerrado");
@@ -224,14 +251,26 @@ public sealed class VoiceEngine : IDisposable
         var transport = _voiceTx;
         if (transport == null) return;
 
+        // Nivel do microfone CRU de proposito: a barrinha responde ao que o
+        // dispositivo esta captando. Se ela lesse depois do tratamento, o AGC
+        // nivelaria tudo e ela pararia de servir pra "meu mic esta pegando?".
         MyPeak = ComputePeak(a.Buffer, 0, a.BytesRecorded);
-        if (!transport.Muted) MicPcm?.Invoke(a.Buffer, 0, a.BytesRecorded);
 
         // O driver entrega blocos de tamanho arbitrario; o acumulador recorta em
-        // frames exatos de 10ms pra rede receber sempre o mesmo tamanho.
+        // frames exatos de 10ms pra rede receber sempre o mesmo tamanho — que por
+        // sorte e tambem o quadro que o Speex quer.
         _micAcc.Append(a.Buffer, 0, a.BytesRecorded);
         while (_micAcc.TryDequeueFrame(_sendBuf, 0, FrameBytes))
+        {
+            _preproc?.Process(_sendBuf, 0, FrameBytes);
+
+            // O clipe grava o microfone JA LIMPO: e o que os outros ouviram. Gravar
+            // o cru colocaria no clipe o eco que acabamos de tirar da sala — e pior,
+            // somado ao HeardPcm ele apareceria duas vezes.
+            if (!transport.Muted) MicPcm?.Invoke(_sendBuf, 0, FrameBytes);
+
             transport.SendVoice(_sendBuf, 0, FrameBytes);
+        }
     }
 
     // ─── REDE -> ALTO-FALANTE ────────────────────────────────────────────────

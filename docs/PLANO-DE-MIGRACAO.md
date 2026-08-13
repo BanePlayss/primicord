@@ -244,28 +244,53 @@ proposital de qualquer commit de rede faz pelo menos um teste falhar.
 
 ---
 
-### F2 — ~~Opus~~ + AEC 🔴 — metade feita
+### F2 — ~~Opus + AEC~~ 🔴 ✅ FEITO
 
 **Opus: feito**, mas por outro caminho — veio junto do WebRTC (§6) em vez de
 entrar na malha antiga. Medido: 798 → 49,2 kbps por par. O comentário errado de
 banda em `RoomSession.cs:41` foi corrigido.
 
-**AEC: continua aberto, e continua valendo.** É importante não confundir: o
-WebRTC-o-padrão inclui cancelamento de eco porque o *navegador* faz isso. O
-SIPSorcery é só o transporte — **não tem AEC nenhum**. Então a regra "todo mundo
-de fone" do README segue de pé, exatamente como antes.
+**AEC: feito.** [MicPreprocessor.cs](../MicPreprocessor.cs), ligado por padrão
+(`aec=0` desliga). O `SpeexDSPSharp` estava no `.csproj` desde o primeiro commit
+com zero referências; agora está em uso. Roda em `VoiceEngine`, **antes** do
+transporte, então vale igual para a malha UDP e para o WebRTC.
 
-**Escopo do que falta:**
-- Ligar o `SpeexDSPSharp`, que está no `.csproj` desde sempre e tem **zero
-  referências** no código: AEC + supressão de ruído + AGC na captura.
-- Vale para os dois transportes, porque acontece antes deles, em `VoiceEngine`.
+Vale registrar, porque é fácil supor o contrário: **o WebRTC não trouxe AEC.** O
+WebRTC-o-padrão tem cancelamento de eco porque quem faz isso é o *navegador*. O
+SIPSorcery é só transporte.
 
-**Pronto quando:** uma pessoa em caixa de som, sem fone, sem eco audível para os
-outros.
+**Medido** (caminho de eco sintético: 50 ms de atraso, ganho 0,5):
 
-**Risco:** AEC precisa do sinal de referência (o que sai no alto-falante)
-alinhado no tempo com o microfone. O `TapProvider` em `VoiceEngine.cs` já
-entrega exatamente esse sinal — o alinhamento é o trabalho fino desta fase.
+| Configuração | Cancelamento |
+|---|---|
+| AEC puro | 16,0 dB |
+| AEC + denoise | 16,1 dB |
+| AEC + denoise + **AGC** | **2,5 dB** |
+
+**Dois achados que mudaram o desenho:**
+
+1. **`SPEEX_PREPROCESS_SET_AGC_LEVEL` é o único desses controles que o Speex lê
+   como `float`.** Passar um `int` não dá erro nenhum — os bytes são
+   reinterpretados, o alvo vira absurdo e o AGC **zera o microfone**. Voz muda
+   para todo mundo, sem uma linha de log, com o AEC ligado por padrão. O teste
+   pegou antes de sair.
+
+2. **O AGC come 13,5 dB do cancelamento.** O `SpeexDSPSharp` não expõe o handle
+   nativo do cancelador, então não dá para ligar o preprocessador nele
+   (`SPEEX_PREPROCESS_SET_ECHO_STATE`). Sem esse elo o preprocessador não sabe o
+   que é resíduo de eco e o AGC o trata como voz baixinha — amplificando de volta
+   o que o AEC acabou de tirar. Por isso **o AGC vai desligado** (`agc=1` liga,
+   e só faz sentido para quem usa fone). Se um dia o nivelamento com eco virar
+   necessidade, o caminho é `NativeSpeexDSP` direto e fazer o elo na mão.
+
+O teste do eco roda na configuração **padrão**, de propósito: se alguém ligar o
+AGC por padrão, o cancelamento desaba para 2,5 dB e o teste quebra na hora.
+
+**Limitação que fica:** só cancela o que o Primicord tocou. Som de jogo ou
+Spotify vazando no microfone continua vazando — não temos esse sinal como
+referência. É a mesma limitação de qualquer AEC de aplicativo.
+
+**Falta:** validar em campo, com alguém realmente em caixa de som.
 
 ---
 

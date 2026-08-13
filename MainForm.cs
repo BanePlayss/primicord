@@ -441,7 +441,11 @@ public sealed class MainForm : Form
             try
             {
                 _voice.Dispose();
-                _voice = new VoiceEngine();
+                _voice = new VoiceEngine
+                {
+                    PreprocessMic = _cfg.EchoCancel,
+                    MicAutoGain = _cfg.MicAutoGain,
+                };
                 _voice.Failed += ShowBanner;
                 // Reata no transporte que ja estava valendo — trocar de microfone
                 // nao pode renegociar as conexoes WebRTC.
@@ -881,7 +885,12 @@ public sealed class MainForm : Form
                 try
                 {
                     _voice.Dispose();
-                    _voice = new VoiceEngine { MusicVolume = _cfg.MusicVolume / 100f };
+                    _voice = new VoiceEngine
+            {
+                MusicVolume = _cfg.MusicVolume / 100f,
+                PreprocessMic = _cfg.EchoCancel,
+                MicAutoGain = _cfg.MicAutoGain,
+            };
                     _voice.Failed += ShowBanner;
                     _voice.AttachTransport((IVoiceTransport?)_webrtc ?? _session, _session);
                     _voice.HeardPcm += (b, o, c) => _clips?.PushHeard(b, o, c);
@@ -909,7 +918,12 @@ public sealed class MainForm : Form
 
         _session.ScreenFrameReceived += OnPeerFrame;
 
-        _voice = new VoiceEngine { MusicVolume = _cfg.MusicVolume / 100f };
+        _voice = new VoiceEngine
+            {
+                MusicVolume = _cfg.MusicVolume / 100f,
+                PreprocessMic = _cfg.EchoCancel,
+                MicAutoGain = _cfg.MicAutoGain,
+            };
         _voice.Failed += ShowBanner;
 
         // A malha UDP sobe SEMPRE — ela carrega tela, musica, cinema e presenca.

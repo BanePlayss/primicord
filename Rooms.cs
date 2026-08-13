@@ -158,6 +158,26 @@ public sealed class Config
     /// </remarks>
     public bool UseWebRtc;
 
+    /// <summary>
+    /// Tratar o microfone antes de mandar: cancelar eco, tirar chiado e nivelar volume.
+    /// </summary>
+    /// <remarks>
+    /// Ligado por padrao. E o que derruba a regra "todo mundo de fone" do README —
+    /// quem usa caixa de som para de devolver a voz dos outros pro microfone. Com
+    /// fone e quase inocuo (nao ha eco pra cancelar) e ainda assim o denoise e o
+    /// nivelamento ajudam, entao nao ha caso em que valha deixar desligado por
+    /// padrao. A chave existe pra desligar se o AGC incomodar num microfone especifico.
+    /// </remarks>
+    public bool EchoCancel = true;
+
+    /// <summary>
+    /// Nivelar o volume do microfone automaticamente. DESLIGADO por padrao: sem o
+    /// elo entre o preprocessador e o cancelador (limite do wrapper do Speex), ele
+    /// re-amplifica o residuo e derruba o cancelamento de eco de 16 dB pra 2,5 dB.
+    /// So vale ligar pra quem usa fone — ai nao ha eco pra cancelar mesmo.
+    /// </summary>
+    public bool MicAutoGain;
+
     private static string Path_ => System.IO.Path.Combine(AppEnv.DataDir, "config.txt");
 
     public static Config Load()
@@ -188,6 +208,8 @@ public sealed class Config
                     case "joinsound": c.JoinLeaveSound = v != "0"; break;
                     case "screenaudio": c.ShareAudioWithScreen = v != "0"; break;
                     case "webrtc": c.UseWebRtc = v == "1"; break;
+                    case "aec": c.EchoCancel = v != "0"; break;
+                    case "agc": c.MicAutoGain = v == "1"; break;
                 }
             }
         }
@@ -216,6 +238,8 @@ public sealed class Config
                 "joinsound=" + (JoinLeaveSound ? "1" : "0"),
                 "screenaudio=" + (ShareAudioWithScreen ? "1" : "0"),
                 "webrtc=" + (UseWebRtc ? "1" : "0"),
+                "aec=" + (EchoCancel ? "1" : "0"),
+                "agc=" + (MicAutoGain ? "1" : "0"),
             });
         }
         catch (Exception ex) { Log.Write("config nao salvou: " + ex.Message); }

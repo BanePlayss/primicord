@@ -14,8 +14,9 @@ LAN). O Primicord é feito pra **N pessoas pela internet**.
   a lista de salas, quem está em cada uma e o IP:porta público de cada um.
 - **NAT**: cada cliente descobre seu endereço público por STUN e os dois lados furam
   o NAT mandando pacotes ao mesmo tempo (hole punching).
-- **Áudio**: PCM 48kHz mono 16-bit, frames de 10ms, jitter buffer por pessoa,
-  mixados com NAudio.
+- **Áudio**: 48kHz mono, frames de 10ms, jitter buffer por pessoa, mixados com
+  NAudio. Na malha vai PCM cru (798 kbps por par); com `webrtc=1` vai Opus por
+  RTP/SRTP (49 kbps por par, e criptografado).
 
 ### Limite conhecido
 
@@ -25,8 +26,18 @@ resolveria. O app avisa na tela em vez de ficar mudo sem explicação.
 
 ### Eco
 
-Não tem cancelamento de eco acústico. **Todo mundo de fone.** Quem usar caixa de
-som vai devolver a voz dos outros pelo microfone.
+Tem cancelamento de eco (Speex AEC + supressão de ruído), ligado por padrão.
+Medido ~16 dB de atenuação num caminho sintético — dá pra usar caixa de som sem
+devolver a voz dos outros pra sala.
+
+**Fone ainda é melhor**, por um motivo que ajuste nenhum resolve: o cancelador só
+remove o que o *Primicord* tocou. Som de jogo, Spotify ou qualquer outra coisa do
+sistema que vaze no microfone continua vazando, porque não temos esse sinal como
+referência. É a mesma limitação de qualquer AEC de aplicativo.
+
+Se atrapalhar em algum microfone: `aec=0` no `config.txt`. E `agc=1` liga o
+nivelamento automático de volume — desligado por padrão porque derruba o
+cancelamento de eco de 16 dB pra 2,5 dB; só vale pra quem usa fone.
 
 ## Rodar
 
