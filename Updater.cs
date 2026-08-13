@@ -52,7 +52,14 @@ public static class Updater
     /// Onde procurar as versoes, no formato dono/repositorio. Da pra trocar sem
     /// recompilar pela chave `updaterepo` do config.txt.
     /// </summary>
-    public const string DefaultRepo = "BanePlayss/primicord";
+    /// <remarks>
+    /// E um repositorio SO DE RELEASES, separado do codigo, e publico de proposito:
+    /// baixar de repositorio privado exigiria um token, e token embutido num binario
+    /// que se distribui por ai nao e segredo nenhum. Aqui so moram os exes — o
+    /// codigo fica no repositorio privado, junto com a chave do Firebase e o hash
+    /// do admin, que nao tem por que ir pra um lugar indexado por robo.
+    /// </remarks>
+    public const string DefaultRepo = "BanePlayss/primicord-releases";
 
     private const string AssetName = "Primicord.exe";
 
@@ -63,7 +70,12 @@ public static class Updater
         {
             try
             {
-                var asm = Assembly.GetEntryAssembly() ?? typeof(Updater).Assembly;
+                // O assembly DESTE tipo, nao o de entrada: a versao que se compara
+                // com a tag da release e a do Primicord. No exe normal os dois sao o
+                // mesmo, mas quando o Primicord e carregado como biblioteca (teste,
+                // ferramenta de diagnostico) o de entrada e outro — e ai a conta
+                // sairia contra a versao do host, que nao quer dizer nada.
+                var asm = typeof(Updater).Assembly;
                 string? v = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
                                ?.InformationalVersion;
                 // O SDK cola "+<hash do commit>" quando o repo e git.
