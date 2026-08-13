@@ -41,7 +41,19 @@ public sealed class VoiceEngine : IDisposable
     private readonly FrameAccumulator _micAcc = new();
     private readonly byte[] _sendBuf = new byte[FrameBytes];
 
-    private RoomSession? _session;
+    /// <summary>
+    /// Por onde a voz vai e vem. Pode ser a malha UDP (<see cref="RoomSession"/>) ou
+    /// o WebRTC (<see cref="WebRtcVoiceMesh"/>) — daqui os dois sao a mesma coisa.
+    /// </summary>
+    private IVoiceTransport? _voiceTx;
+
+    /// <summary>
+    /// A musica do DJ continua vindo pela malha UDP mesmo quando a voz migrou pro
+    /// WebRTC: e um fluxo separado, com volume proprio, e a malha segue de pe pra
+    /// carregar tela e cinema de qualquer jeito.
+    /// </summary>
+    private RoomSession? _musicSource;
+
     private volatile bool _running;
 
     private readonly object _streamsLock = new();
@@ -172,21 +184,25 @@ public sealed class VoiceEngine : IDisposable
         return new WaveOutEvent { DesiredLatency = 100 };
     }
 
-    public void AttachSession(RoomSession session)
+    /// <summary>
+    /// Liga o motor de audio na rede: <paramref name="voice"/> carrega a voz,
+    /// <paramref name="musicSource"/> entrega o audio do DJ. Normalmente sao o
+    /// mesmo objeto (a malha UDP); com o WebRTC ligado, a voz vem de outro lugar.
+    /// </summary>
+    public void AttachTransport(IVoiceTransport voice, RoomSession musicSource)
     {
-        _session = session;
-        session.VoiceReceived += OnVoiceReceived;
-        session.MusicReceived += OnMusicReceived;
+        _voiceTx = voice;
+        voice.VoiceReceived += OnVoiceReceived;
+
+        _musicSource = musicSource;
+        musicSource.MusicReceived += OnMusicReceived;
     }
 
     public void Dispose()
     {
         _running = false;
-        if (_session != null)
-        {
-            _session.VoiceReceived -= OnVoiceReceived;
-            _session.MusicReceived -= OnMusicReceived;
-        }
+        if (_voiceTx != null) _voiceTx.VoiceReceived -= OnVoiceReceived;
+        if (_musicSource != null) _musicSource.MusicReceived -= OnMusicReceived;
 
         try { if (_mic != null) { _mic.DataAvailable -= OnMicData; _mic.StopRecording(); _mic.Dispose(); } }
         catch { }
@@ -205,17 +221,17 @@ public sealed class VoiceEngine : IDisposable
     private void OnMicData(object? sender, WaveInEventArgs a)
     {
         if (!_running) return;
-        var session = _session;
-        if (session == null) return;
+        var transport = _voiceTx;
+        if (transport == null) return;
 
         MyPeak = ComputePeak(a.Buffer, 0, a.BytesRecorded);
-        if (!session.Muted) MicPcm?.Invoke(a.Buffer, 0, a.BytesRecorded);
+        if (!transport.Muted) MicPcm?.Invoke(a.Buffer, 0, a.BytesRecorded);
 
         // O driver entrega blocos de tamanho arbitrario; o acumulador recorta em
         // frames exatos de 10ms pra rede receber sempre o mesmo tamanho.
         _micAcc.Append(a.Buffer, 0, a.BytesRecorded);
         while (_micAcc.TryDequeueFrame(_sendBuf, 0, FrameBytes))
-            session.SendVoice(_sendBuf, 0, FrameBytes);
+            transport.SendVoice(_sendBuf, 0, FrameBytes);
     }
 
     // ─── REDE -> ALTO-FALANTE ────────────────────────────────────────────────

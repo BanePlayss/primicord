@@ -146,6 +146,18 @@ public sealed class Config
     /// </summary>
     public bool ShareAudioWithScreen = true;
 
+    /// <summary>
+    /// Levar a voz por WebRTC (Opus + DTLS-SRTP) em vez da malha UDP com PCM cru.
+    /// </summary>
+    /// <remarks>
+    /// Fica desligado por padrao enquanto o caminho novo nao tiver rodado o
+    /// bastante em campo. A malha antiga e a que tem quilometragem; esta chave
+    /// existe justamente pra dar pra comparar as duas na mesma tarde — e pra
+    /// voltar atras sem precisar de outro build se algo der errado no meio da
+    /// sessao. Vale so pra VOZ: tela, musica e cinema seguem pela malha.
+    /// </remarks>
+    public bool UseWebRtc;
+
     private static string Path_ => System.IO.Path.Combine(AppEnv.DataDir, "config.txt");
 
     public static Config Load()
@@ -175,6 +187,7 @@ public sealed class Config
                     case "tray": c.TrayOnClose = v != "0"; break;
                     case "joinsound": c.JoinLeaveSound = v != "0"; break;
                     case "screenaudio": c.ShareAudioWithScreen = v != "0"; break;
+                    case "webrtc": c.UseWebRtc = v == "1"; break;
                 }
             }
         }
@@ -202,6 +215,7 @@ public sealed class Config
                 "tray=" + (TrayOnClose ? "1" : "0"),
                 "joinsound=" + (JoinLeaveSound ? "1" : "0"),
                 "screenaudio=" + (ShareAudioWithScreen ? "1" : "0"),
+                "webrtc=" + (UseWebRtc ? "1" : "0"),
             });
         }
         catch (Exception ex) { Log.Write("config nao salvou: " + ex.Message); }

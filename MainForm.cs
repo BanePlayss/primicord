@@ -24,6 +24,8 @@ public sealed class MainForm : Form
     // voz
     private RoomSession? _session;
     private VoiceEngine? _voice;
+    /// <summary>Malha WebRTC quando cfg.UseWebRtc esta ligado; null = voz pela malha UDP.</summary>
+    private WebRtcVoiceMesh? _webrtc;
     private string _voiceRoomId = "";
     private string _voiceRoomName = "";
 
@@ -441,7 +443,9 @@ public sealed class MainForm : Form
                 _voice.Dispose();
                 _voice = new VoiceEngine();
                 _voice.Failed += ShowBanner;
-                _voice.AttachSession(_session);
+                // Reata no transporte que ja estava valendo — trocar de microfone
+                // nao pode renegociar as conexoes WebRTC.
+                _voice.AttachTransport((IVoiceTransport?)_webrtc ?? _session, _session);
                 _voice.Start(_cfg.MicDevice,
                     string.IsNullOrEmpty(_cfg.OutputDeviceId) ? null : _cfg.OutputDeviceId);
                 Log.Write("audio reaberto com os dispositivos novos");
@@ -879,7 +883,7 @@ public sealed class MainForm : Form
                     _voice.Dispose();
                     _voice = new VoiceEngine { MusicVolume = _cfg.MusicVolume / 100f };
                     _voice.Failed += ShowBanner;
-                    _voice.AttachSession(_session);
+                    _voice.AttachTransport((IVoiceTransport?)_webrtc ?? _session, _session);
                     _voice.HeardPcm += (b, o, c) => _clips?.PushHeard(b, o, c);
                     _voice.MicPcm += (b, o, c) => _clips?.PushMic(b, o, c);
                     _voice.Start(_cfg.MicDevice,
@@ -907,7 +911,23 @@ public sealed class MainForm : Form
 
         _voice = new VoiceEngine { MusicVolume = _cfg.MusicVolume / 100f };
         _voice.Failed += ShowBanner;
-        _voice.AttachSession(_session);
+
+        // A malha UDP sobe SEMPRE — ela carrega tela, musica, cinema e presenca.
+        // A chave decide so quem leva a VOZ.
+        if (_cfg.UseWebRtc)
+        {
+            _webrtc = new WebRtcVoiceMesh(_fs, roomId, peerId, _session);
+            _webrtc.Failed += ShowBanner;
+            _webrtc.StateChanged += () =>
+            {
+                if (!IsDisposed) try { BeginInvoke(UpdateRoomStatus); } catch { }
+            };
+            _voice.AttachTransport(_webrtc, _session);
+        }
+        else
+        {
+            _voice.AttachTransport(_session, _session);
+        }
 
         // Buffer rolante de clipe: recebe o que eu ouço e o meu microfone.
         _clips = new ClipRecorder(60);
@@ -928,6 +948,9 @@ public sealed class MainForm : Form
             _voice.Start(_cfg.MicDevice,
                 string.IsNullOrEmpty(_cfg.OutputDeviceId) ? null : _cfg.OutputDeviceId);
             await _session.StartAsync();
+            // Depois da malha: a negociacao WebRTC usa a presenca dela pra saber
+            // com quem falar.
+            _webrtc?.Start();
             UpdateRoomStatus();
         }
         catch (FirestoreException ex) when (ex.IsPermissionDenied)
@@ -972,8 +995,11 @@ public sealed class MainForm : Form
         _nowPlaying = "";
 
         try { _voice?.Dispose(); } catch { }
+        // Antes da sessao: a malha WebRTC le a presenca dela pra saber quem saiu.
+        try { _webrtc?.Dispose(); } catch { }
         try { _session?.Dispose(); } catch { }
         _voice = null;
+        _webrtc = null;
         _session = null;
         _voiceRoomId = "";
         _voiceRoomName = "";
@@ -1122,13 +1148,28 @@ public sealed class MainForm : Form
                  : punching == 0 ? $"{connected + 1} na call · conectado direto (P2P)"
                  : $"{connected + 1} na call · {punching} conectando...";
         if (_session.PublicEndpoint == null) s += " · sem STUN (so conecta na mesma rede)";
+
+        // Com WebRTC a voz tem estado PROPRIO: a malha pode estar conectada (tela
+        // passando) e a voz ainda negociando. Mostrar so o da malha esconderia isso.
+        if (_webrtc != null)
+        {
+            int ok = _webrtc.ConnectedCount, total = _webrtc.LinkCount;
+            s += total == 0 ? " · voz WebRTC"
+               : ok == total ? $" · voz WebRTC (Opus, {ok}/{total})"
+               : $" · voz WebRTC negociando ({ok}/{total})";
+        }
+
         _roomStatus.Text = s;
     }
 
     private void ToggleMute()
     {
         if (_session == null) return;
-        _session.Muted = !_session.Muted;
+        bool muted = !_session.Muted;
+        // A malha sempre sabe: e ela que publica o estado de mudo na presenca do
+        // Firestore, que e o que os outros veem no tile.
+        _session.Muted = muted;
+        if (_webrtc != null) _webrtc.Muted = muted;
     }
 
     // ─── TELA ────────────────────────────────────────────────────────────────

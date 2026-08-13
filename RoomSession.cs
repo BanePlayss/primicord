@@ -52,7 +52,7 @@ public sealed class RemotePeer
 /// caso so um servidor relay (TURN) resolve — nao temos um, entao o par nao conecta.
 /// O app avisa na UI em vez de ficar mudo sem explicacao.
 /// </remarks>
-public sealed class RoomSession : IDisposable
+public sealed class RoomSession : IVoiceTransport, IDisposable
 {
     // ─── protocolo ───────────────────────────────────────────────────────────
     public const int HeaderBytes = 9;
