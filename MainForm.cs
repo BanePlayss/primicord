@@ -1063,6 +1063,7 @@ public sealed class MainForm : Form
             tile.Sharing = p.Sharing;
             tile.Connected = p.Connected;
             tile.Punching = p.Locked == null;
+            tile.SilentSeconds = p.SilentSeconds;
             // Clicar no tile de quem compartilha joga a tela dele no palco.
             if (p.Sharing && (string?)tile.Tag != "clickable")
             {
@@ -1193,9 +1194,19 @@ public sealed class MainForm : Form
         int connected = peers.Count(p => p.Connected);
         int punching = peers.Count(p => !p.Connected);
 
+        // Quem ja passou do prazo nao esta "conectando": nao vai conectar. Dizer o
+        // que aconteceu, com o que fazer, em vez de girar pra sempre — o README
+        // sempre prometeu esse aviso, e ate agora ele nao existia.
+        const int DesisteSegundos = 25;
+        int semRota = peers.Count(p => p.Locked == null && p.SilentSeconds >= DesisteSegundos);
+
         string s = peers.Count == 0 ? "voce esta sozinho na sala — chama a galera"
+                 : semRota > 0
+                     ? $"{semRota} sem rota — o furo de NAT nao fechou. Provavel NAT simetrico "
+                       + "(4G/CGNAT) ou firewall do Windows bloqueando o Primicord."
                  : punching == 0 ? $"{connected + 1} na call · conectado direto (P2P)"
                  : $"{connected + 1} na call · {punching} conectando...";
+
         if (_session.PublicEndpoint == null) s += " · sem STUN (so conecta na mesma rede)";
 
         // Com WebRTC a voz tem estado PROPRIO: a malha pode estar conectada (tela

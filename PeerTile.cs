@@ -14,6 +14,7 @@ public sealed class PeerTile : Control
     public bool Sharing;
     public bool Connected = true;
     public bool Punching;      // ainda furando o NAT
+    public int SilentSeconds;  // ha quanto tempo tenta furar sem resposta
     public float Level;        // 0..1 nivel de voz agora
 
     /// <summary>
@@ -155,12 +156,17 @@ public sealed class PeerTile : Control
         }
 
         // Estado embaixo.
-        string status = !Connected ? (Punching ? "CONECTANDO" : "SEM SINAL")
+        // Depois de ~25s o furo nao vai mais fechar. Dizer "CONECTANDO" pra sempre
+        // e mentir: quem le fica esperando algo que nao vem.
+        const int DesisteSegundos = 25;
+        string status = !Connected
+                      ? (Punching ? (SilentSeconds >= DesisteSegundos ? "SEM ROTA" : "CONECTANDO") : "SEM SINAL")
                       : Muted ? "MUDO"
                       : Sharing ? "NA TELA" : "";
         if (status.Length > 0)
         {
-            Color c = !Connected ? (Punching ? Pv.OrangeDim : Pv.Red)
+            Color c = !Connected
+                    ? (Punching && SilentSeconds < DesisteSegundos ? Pv.OrangeDim : Pv.Red)
                     : Muted ? Pv.Red : Pv.Orange;
             using var b = new SolidBrush(c);
             float w = Pv.TrackedWidth(g, status, Pv.Label, 1.4f);

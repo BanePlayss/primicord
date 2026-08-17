@@ -248,7 +248,7 @@ public sealed class Config
     {
         try
         {
-            File.WriteAllLines(Path_, new[]
+            var linhas = new List<string>
             {
                 "nick=" + Nick,
                 "hash=" + SenhaHash,
@@ -267,12 +267,24 @@ public sealed class Config
                 "webrtc=" + (UseWebRtc ? "1" : "0"),
                 "aec=" + (EchoCancel ? "1" : "0"),
                 "agc=" + (MicAutoGain ? "1" : "0"),
-                "updaterepo=" + UpdateRepo,
                 "camdevice=" + CamDevice,
                 "camw=" + CamWidth,
                 "camh=" + CamHeight,
                 "camfps=" + CamFps,
-            });
+            };
+
+            // updaterepo so vai pro arquivo se o usuario REALMENTE trocou.
+            //
+            // Gravando sempre, quem clicasse em SALVAR uma vez ficava congelado no
+            // padrao daquele dia: quando o padrao mudasse numa versao nova, o valor
+            // velho do arquivo continuaria vencendo, em silencio, e o botao de
+            // atualizar apontaria pro lugar errado pra sempre. Aconteceu de verdade
+            // — o app foi procurar release no repositorio do CODIGO, que e privado
+            // e nao tem release nenhuma.
+            if (!string.Equals(UpdateRepo, Updater.DefaultRepo, StringComparison.OrdinalIgnoreCase))
+                linhas.Add("updaterepo=" + UpdateRepo);
+
+            File.WriteAllLines(Path_, linhas);
         }
         catch (Exception ex) { Log.Write("config nao salvou: " + ex.Message); }
     }

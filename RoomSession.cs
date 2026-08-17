@@ -21,6 +21,20 @@ public sealed class RemotePeer
     public long LastRecvTicks;
     public long LastSeenMs;
 
+    /// <summary>Quando este par apareceu na sala.</summary>
+    public readonly long JoinedTicks = DateTime.UtcNow.Ticks;
+
+    /// <summary>
+    /// Ha quantos segundos tentamos furar sem UM pacote sequer ter chegado. Zero
+    /// quando ja conectou. O furo normal fecha em menos de 5s; passar muito disso
+    /// quer dizer que nao vai fechar — NAT simetrico dos dois lados, ou firewall.
+    /// </summary>
+    public int SilentSeconds => Locked != null ? 0
+        : (int)((DateTime.UtcNow.Ticks - JoinedTicks) / TimeSpan.TicksPerSecond);
+
+    /// <summary>Pra o aviso de "desisti" sair uma vez, e nao a cada 250ms.</summary>
+    public bool GaveUpLogged;
+
     public bool Connected => Locked != null &&
         (DateTime.UtcNow.Ticks - Interlocked.Read(ref LastRecvTicks)) < TimeSpan.TicksPerSecond * 6;
 
@@ -390,6 +404,18 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
                         SendTo(p.Locked, TypePunch, Array.Empty<byte>(), 0, 0);
                     continue;
                 }
+            }
+
+            // Passou muito do normal (o furo fecha em menos de 5s quando fecha):
+            // deixa registrado o que foi tentado, senao o diagnostico depois vira
+            // adivinhacao. Continua tentando — so o silencio e que fica explicado.
+            if (!p.GaveUpLogged && p.SilentSeconds >= 25)
+            {
+                p.GaveUpLogged = true;
+                Log.Write($"{p.Nick}: sem rota apos {p.SilentSeconds}s. Nenhum pacote chegou. "
+                        + $"Candidatos tentados: [{string.Join(", ", p.Candidates)}]. "
+                        + $"Meu publico: {_publicEp?.ToString() ?? "NENHUM (STUN falhou)"}. "
+                        + "Causas tipicas: NAT simetrico dos dois lados (4G/CGNAT) ou firewall.");
             }
 
             foreach (var ep in p.Candidates) SendTo(ep, TypePunch, Array.Empty<byte>(), 0, 0);
