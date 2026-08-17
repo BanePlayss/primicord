@@ -14,7 +14,7 @@
     <!-- E ESTE numero que o botao de atualizar compara com a tag da release do
          GitHub. Subir aqui e publicar a release sao o mesmo ato: se o exe sair com
          a versao antiga, todo mundo vai baixar de novo o que ja tem. -->
-    <Version>0.3.2</Version>
+    <Version>0.4.0</Version>
     <ApplicationIcon>Primicord.ico</ApplicationIcon>
     <!-- Trimming quebra reflection do WinForms/NAudio — deixar desligado. -->
     <PublishTrimmed>false</PublishTrimmed>
@@ -45,13 +45,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Motor de video empacotado pelo build.ps1 (ver VlcRuntime.cs). Sem ele o app
-         compila e roda normal; so a sessao cinema fica indisponivel. -->
-    <EmbeddedResource Include="vlc-runtime.zip" Condition="Exists('vlc-runtime.zip')"
-                      LogicalName="vlc-runtime.zip" />
-  </ItemGroup>
-
-  <ItemGroup>
     <!-- Opus. Ja vem como dependencia do SIPSorcery, mas usamos os tipos direto
          (encoder com DTX/FEC configurados), entao a referencia e explicita. -->
     <PackageReference Include="Concentus" Version="2.2.2" />
@@ -62,6 +55,8 @@
     <!-- WebRTC (RTCPeerConnection, ICE, DTLS-SRTP) — ver WebRtcVoice.cs. -->
     <PackageReference Include="SIPSorcery" Version="10.0.15" />
     <PackageReference Include="SpeexDSPSharp" Version="1.3.0" />
+    <!-- Instalador + atualizacao diferencial. Ver Updater.cs pro porque. -->
+    <PackageReference Include="Velopack" Version="1.2.0" />
     <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
     <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
     <PackageReference Include="Vortice.DXGI" Version="3.8.3" />

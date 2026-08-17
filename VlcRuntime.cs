@@ -26,8 +26,31 @@ public static class VlcRuntime
     public static bool Installed => File.Exists(Path.Combine(InstallDir, "libvlc.dll"))
                                  && Directory.Exists(Path.Combine(InstallDir, "plugins"));
 
-    /// <summary>true se o exe carrega o pacote embutido (build feito pelo build.ps1).</summary>
-    public static bool HasEmbeddedPackage => FindResource() != null;
+    /// <summary>true se este build tem o pacote (em arquivo ou embutido).</summary>
+    public static bool HasEmbeddedPackage => PackageFile() != null || FindResource() != null;
+
+    /// <summary>
+    /// O zip como ARQUIVO ao lado do exe — o formato preferido desde que o app passou
+    /// a ser instalado.
+    /// </summary>
+    /// <remarks>
+    /// Embutido no assembly, estes 38,7MB entravam no arquivo que muda a cada versao,
+    /// e a atualizacao diferencial precisaria baixar tudo de novo por causa de uma
+    /// linha de codigo. Como arquivo solto ele fica identico entre versoes, entao o
+    /// delta simplesmente nao o inclui. O caminho embutido continua existindo pra
+    /// nao quebrar quem estiver num exe antigo de arquivo unico.
+    /// </remarks>
+    private static string? PackageFile()
+    {
+        try
+        {
+            string? dir = Path.GetDirectoryName(Environment.ProcessPath ?? "");
+            if (string.IsNullOrEmpty(dir)) return null;
+            string p = Path.Combine(dir, ResourceName);
+            return File.Exists(p) ? p : null;
+        }
+        catch { return null; }
+    }
 
     private static string? FindResource()
     {
@@ -35,6 +58,15 @@ public static class VlcRuntime
         foreach (string n in asm.GetManifestResourceNames())
             if (n.EndsWith(ResourceName, StringComparison.OrdinalIgnoreCase)) return n;
         return null;
+    }
+
+    /// <summary>Abre o pacote, venha ele de onde vier.</summary>
+    private static Stream? OpenPackage()
+    {
+        string? file = PackageFile();
+        if (file != null) return File.OpenRead(file);
+        string? res = FindResource();
+        return res == null ? null : Assembly.GetExecutingAssembly().GetManifestResourceStream(res);
     }
 
     /// <summary>
@@ -47,10 +79,10 @@ public static class VlcRuntime
         {
             if (Installed) return InstallDir;
 
-            string? res = FindResource();
-            if (res == null)
+            var pacote = OpenPackage();
+            if (pacote == null)
             {
-                Log.Write("VLC: pacote embutido ausente neste build");
+                Log.Write("VLC: pacote ausente neste build");
                 return null;
             }
 
@@ -61,8 +93,8 @@ public static class VlcRuntime
             if (Directory.Exists(staging)) Directory.Delete(staging, true);
             Directory.CreateDirectory(staging);
 
-            using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(res)!)
-            using (var zip = new ZipArchive(stream, ZipArchiveMode.Read))
+            using (pacote)
+            using (var zip = new ZipArchive(pacote, ZipArchiveMode.Read))
             {
                 int total = zip.Entries.Count, done = 0, lastPct = -1;
                 foreach (var entry in zip.Entries)

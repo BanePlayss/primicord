@@ -1,84 +1,65 @@
-using System.Diagnostics;
-using System.Net.Http;
 using System.Reflection;
-using System.Security.Cryptography;
-using System.Text.Json.Nodes;
+using Velopack;
+using Velopack.Sources;
 
 namespace Primicord;
 
-/// <summary>Uma versao publicada la no GitHub, pronta pra baixar.</summary>
-public sealed class UpdateInfo
+/// <summary>Uma versao nova esperando pra ser instalada.</summary>
+public sealed class UpdateInfoView
 {
     public string Version = "";
-    public string Url = "";
     public long Size;
     public string Notes = "";
-    public string Sha256 = "";   // vazio se a release nao publicou o hash
+
+    /// <summary>true quando so o que mudou sera baixado, e nao o pacote inteiro.</summary>
+    public bool IsDelta;
 
     public string SizeLabel => Size <= 0 ? "" : $"{Size / (1024.0 * 1024.0):0.0} MB";
 }
 
 /// <summary>
-/// Atualizacao pelo proprio app: pergunta ao GitHub se tem versao nova, baixa e
-/// se troca no lugar.
+/// Atualizacao pelo proprio app, em cima do Velopack.
 /// </summary>
 /// <remarks>
-/// POR QUE GITHUB RELEASES: nao precisa de servidor nenhum e nao custa nada, que
-/// e a mesma regra do resto do projeto. Publicar uma versao vira um comando; o app
-/// so le a API publica de releases. Nada de infraestrutura nova pra manter.
+/// POR QUE VELOPACK E NAO O QUE ESTAVA AQUI: a versao anterior baixava o exe
+/// inteiro e se trocava no lugar renomeando o proprio arquivo. Funcionava, mas
+/// cada atualizacao custava 101MB — e 98 desses MB (runtime do .NET e motor de
+/// video) sao identicos entre uma versao e a seguinte.
 ///
-/// COMO SE TROCA UM EXE QUE ESTA RODANDO: o Windows nao deixa APAGAR nem
-/// SOBRESCREVER o arquivo de um processo vivo — mas deixa RENOMEAR. Entao o
-/// caminho e: renomeia o atual pra .old, poe o novo no lugar, sobe o novo e sai.
-/// O .old fica pra tras e o proximo boot apaga (ai ninguem esta usando).
-/// Isso evita ter que largar um .bat no disco pra fazer a troca depois, que e a
-/// solucao classica e a que mais quebra (antivirus, politica de execucao, o
-/// arquivo ficando pra tras quando algo falha no meio).
+/// O Velopack faz patch binario (zstd) por ARQUIVO do pacote: mudanca so de
+/// codigo baixa so o codigo. Ele tambem traz o instalador, a instalacao por
+/// usuario e o ciclo de reinicio — coisas que eu teria que escrever e manter na
+/// mao, cada uma com sua propria maneira de dar errado.
 ///
-/// A CORRIDA DO MUTEX: o Program usa um mutex pra impedir duas instancias. Na
-/// troca, o processo novo sobe enquanto o velho ainda esta morrendo, e ele bateria
-/// direto no "o Primicord ja esta aberto". Por isso o novo sobe com --updated, que
-/// manda ele INSISTIR no mutex por alguns segundos em vez de desistir de cara.
+/// INSTALACAO POR USUARIO (%LOCALAPPDATA%), nao Program Files, de proposito: o
+/// app troca o proprio binario ao atualizar, e em Program Files isso pediria
+/// UAC toda vez. E o mesmo motivo do Discord e do VS Code instalarem assim.
 ///
-/// CONFIANCA: o binario nao e assinado. Quem garante a origem e o HTTPS ate o
-/// GitHub — ou seja, a confianca esta em quem tem acesso de publicar no
-/// repositorio, nao no arquivo em si. Um hash publicado junto NAO mudaria isso
-/// (viria da mesma fonte); ele serve pra pegar download corrompido, e e so pra
-/// isso que e usado aqui. Assinatura de codigo de verdade e outra fase.
+/// O QUE O VELOPACK NAO RESOLVE: o SmartScreen. O aviso vem de o binario nao ser
+/// assinado; instalador tambem nao assinado avisa igual. So certificado resolve,
+/// e isso custa dinheiro por ano.
 /// </remarks>
 public static class Updater
 {
     /// <summary>
-    /// Onde procurar as versoes, no formato dono/repositorio. Da pra trocar sem
-    /// recompilar pela chave `updaterepo` do config.txt.
+    /// Repositorio de onde vem as versoes. So releases, publico, separado do
+    /// codigo — ver o README do primicord-releases.
     /// </summary>
-    /// <remarks>
-    /// E um repositorio SO DE RELEASES, separado do codigo, e publico de proposito:
-    /// baixar de repositorio privado exigiria um token, e token embutido num binario
-    /// que se distribui por ai nao e segredo nenhum. Aqui so moram os exes — o
-    /// codigo fica no repositorio privado, junto com a chave do Firebase e o hash
-    /// do admin, que nao tem por que ir pra um lugar indexado por robo.
-    /// </remarks>
     public const string DefaultRepo = "BanePlayss/primicord-releases";
 
-    private const string AssetName = "Primicord.exe";
-
-    /// <summary>Versao deste exe, vinda do &lt;Version&gt; do csproj.</summary>
+    /// <summary>Versao deste build, vinda do &lt;Version&gt; do csproj.</summary>
     public static string CurrentVersion
     {
         get
         {
             try
             {
-                // O assembly DESTE tipo, nao o de entrada: a versao que se compara
-                // com a tag da release e a do Primicord. No exe normal os dois sao o
-                // mesmo, mas quando o Primicord e carregado como biblioteca (teste,
-                // ferramenta de diagnostico) o de entrada e outro — e ai a conta
-                // sairia contra a versao do host, que nao quer dizer nada.
+                // O assembly DESTE tipo, e nao o de entrada: quando o Primicord e
+                // carregado como biblioteca (teste, diagnostico), o de entrada e
+                // outro e a conta sairia contra a versao do host.
                 var asm = typeof(Updater).Assembly;
                 string? v = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
                                ?.InformationalVersion;
-                // O SDK cola "+<hash do commit>" quando o repo e git.
                 if (!string.IsNullOrEmpty(v))
                 {
                     int plus = v.IndexOf('+');
@@ -90,217 +71,79 @@ public static class Updater
         }
     }
 
+    private static UpdateManager Manager(string repo)
+        => new(new GithubSource($"https://github.com/{repo}", null, false));
+
     /// <summary>
-    /// false quando rodando por `dotnet run`: nao ha um Primicord.exe pra trocar,
-    /// e mexer no apphost de desenvolvimento so quebraria o ambiente.
+    /// false quando rodando de dentro do projeto (dotnet run) ou de um exe solto:
+    /// nao ha instalacao pra atualizar.
     /// </summary>
     public static bool CanSelfUpdate
     {
         get
         {
-            string? exe = Environment.ProcessPath;
-            return exe != null &&
-                   Path.GetFileName(exe).Equals(AssetName, StringComparison.OrdinalIgnoreCase);
+            try { return Manager(DefaultRepo).IsInstalled; }
+            catch { return false; }
         }
     }
 
-    private static HttpClient NewClient()
+    /// <summary>Guarda o que foi encontrado, pro segundo clique saber o que instalar.</summary>
+    private static UpdateInfo? _pendente;
+
+    /// <summary>Procura versao nova. null = ja estamos na mais recente.</summary>
+    public static async Task<UpdateInfoView?> CheckAsync(string repo, CancellationToken ct = default)
     {
-        var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-        // Sem User-Agent a API do GitHub responde 403 direto.
-        http.DefaultRequestHeaders.Add("User-Agent", "Primicord/" + CurrentVersion);
-        http.DefaultRequestHeaders.Add("Accept", "application/vnd.github+json");
-        return http;
-    }
-
-    /// <summary>
-    /// Pergunta qual e a versao mais recente. Devolve null quando ja estamos nela
-    /// (ou quando a de la e mais velha).
-    /// </summary>
-    public static async Task<UpdateInfo?> CheckAsync(string repo, CancellationToken ct = default)
-    {
-        using var http = NewClient();
-        string url = $"https://api.github.com/repos/{repo}/releases/latest";
-
-        using var resp = await http.GetAsync(url, ct).ConfigureAwait(false);
-        if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
+        var mgr = Manager(repo);
+        if (!mgr.IsInstalled)
             throw new InvalidOperationException(
-                $"O repositorio {repo} nao tem nenhuma versao publicada (ou nao e publico).");
-        if (!resp.IsSuccessStatusCode)
-            throw new InvalidOperationException($"O GitHub respondeu {(int)resp.StatusCode}.");
+                "Esta copia nao foi instalada — a troca automatica so funciona na versao instalada. "
+              + "Baixa o instalador uma vez e depois nunca mais precisa.");
 
-        var node = JsonNode.Parse(await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
-        string tag = node?["tag_name"]?.GetValue<string>() ?? "";
-        string notes = node?["body"]?.GetValue<string>() ?? "";
-
-        var info = new UpdateInfo
+        var info = await mgr.CheckForUpdatesAsync().ConfigureAwait(false);
+        if (info == null)
         {
-            Version = tag.TrimStart('v', 'V'),
-            Notes = notes,
-        };
-
-        foreach (var a in node?["assets"]?.AsArray() ?? new JsonArray())
-        {
-            string name = a?["name"]?.GetValue<string>() ?? "";
-            if (name.Equals(AssetName, StringComparison.OrdinalIgnoreCase))
-            {
-                info.Url = a?["browser_download_url"]?.GetValue<string>() ?? "";
-                info.Size = a?["size"]?.GetValue<long>() ?? 0;
-            }
-            else if (name.Equals(AssetName + ".sha256", StringComparison.OrdinalIgnoreCase))
-            {
-                string? shaUrl = a?["browser_download_url"]?.GetValue<string>();
-                if (shaUrl != null)
-                {
-                    try
-                    {
-                        string txt = await http.GetStringAsync(shaUrl, ct).ConfigureAwait(false);
-                        // Aceita tanto "<hash>" quanto o formato do sha256sum: "<hash>  arquivo"
-                        info.Sha256 = txt.Trim().Split(' ', '\t')[0].Trim();
-                    }
-                    catch (Exception ex) { Log.Write("update: hash nao veio: " + ex.Message); }
-                }
-            }
-        }
-
-        if (info.Url.Length == 0)
-            throw new InvalidOperationException(
-                $"A versao {tag} nao tem o arquivo {AssetName} anexado.");
-
-        if (!IsNewer(info.Version, CurrentVersion))
-        {
-            Log.Write($"update: {CurrentVersion} ja e a mais recente (la esta {info.Version})");
+            Log.Write($"update: {CurrentVersion} ja e a mais recente");
+            _pendente = null;
             return null;
         }
 
-        Log.Write($"update: {CurrentVersion} -> {info.Version} disponivel ({info.SizeLabel})");
-        return info;
-    }
+        _pendente = info;
 
-    /// <summary>Compara duas versoes tipo "0.2.1". Texto invalido conta como antigo.</summary>
-    public static bool IsNewer(string candidate, string current)
-    {
-        static Version Parse(string s)
+        // Com delta, o que se baixa e a soma dos patches — nao o pacote cheio.
+        bool delta = info.DeltasToTarget is { Length: > 0 };
+        long tamanho = delta
+            ? info.DeltasToTarget.Sum(d => d.Size)
+            : info.TargetFullRelease.Size;
+
+        Log.Write($"update: {CurrentVersion} -> {info.TargetFullRelease.Version} "
+                + $"({(delta ? "delta" : "pacote cheio")}, {tamanho / 1024 / 1024.0:0.0} MB)");
+
+        return new UpdateInfoView
         {
-            var parts = s.Split('.', '-')
-                         .TakeWhile(p => p.Length > 0 && p.All(char.IsDigit))
-                         .Take(4).ToList();
-            while (parts.Count < 2) parts.Add("0");
-            return Version.TryParse(string.Join('.', parts), out var v) ? v : new Version(0, 0);
-        }
-        return Parse(candidate) > Parse(current);
+            Version = info.TargetFullRelease.Version.ToString(),
+            Size = tamanho,
+            Notes = info.TargetFullRelease.NotesMarkdown ?? "",
+            IsDelta = delta,
+        };
     }
 
     /// <summary>
-    /// Baixa pra %APPDATA%\Primicord\update e devolve o caminho. Confere o que da
-    /// pra conferir antes de deixar o arquivo virar o app da proxima vez.
+    /// Baixa e instala o que o <see cref="CheckAsync"/> achou, e reabre o app.
+    /// Nao retorna: o processo e substituido.
     /// </summary>
-    public static async Task<string> DownloadAsync(UpdateInfo info, IProgress<int>? progress,
+    public static async Task DownloadAndApplyAsync(string repo, IProgress<int>? progress,
                                                    CancellationToken ct = default)
     {
-        string dir = Path.Combine(AppEnv.DataDir, "update");
-        Directory.CreateDirectory(dir);
-        string dest = Path.Combine(dir, AssetName);
-        try { File.Delete(dest); } catch { }
+        var info = _pendente
+            ?? throw new InvalidOperationException("Procura a atualizacao antes de instalar.");
 
-        using var http = NewClient();
-        using (var resp = await http.GetAsync(info.Url, HttpCompletionOption.ResponseHeadersRead, ct)
-                                    .ConfigureAwait(false))
-        {
-            resp.EnsureSuccessStatusCode();
-            long total = resp.Content.Headers.ContentLength ?? info.Size;
-            long done = 0;
+        var mgr = Manager(repo);
+        await mgr.DownloadUpdatesAsync(info, p => progress?.Report(p), ct).ConfigureAwait(false);
 
-            using var src = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-            using var dst = File.Create(dest);
-            var buf = new byte[128 * 1024];
-            int n;
-            while ((n = await src.ReadAsync(buf, ct).ConfigureAwait(false)) > 0)
-            {
-                await dst.WriteAsync(buf.AsMemory(0, n), ct).ConfigureAwait(false);
-                done += n;
-                if (total > 0) progress?.Report((int)(done * 100 / total));
-            }
-        }
-
-        Verify(dest, info);
-        Log.Write($"update: baixado e conferido em {dest}");
-        return dest;
-    }
-
-    /// <summary>
-    /// Barreira antes da troca. O que importa aqui nao e ataque — e download pela
-    /// metade ou uma pagina de erro salva como se fosse o exe: sem estas contas, o
-    /// app se substituiria por lixo e nao abriria mais.
-    /// </summary>
-    private static void Verify(string path, UpdateInfo info)
-    {
-        var fi = new FileInfo(path);
-        if (!fi.Exists || fi.Length < 1024 * 1024)
-            throw new InvalidOperationException("O arquivo baixado veio pequeno demais pra ser o app.");
-
-        if (info.Size > 0 && fi.Length != info.Size)
-            throw new InvalidOperationException(
-                $"O arquivo veio com {fi.Length} bytes, mas a versao anuncia {info.Size}.");
-
-        // Todo .exe do Windows comeca com "MZ". Pega HTML de erro salvo por engano.
-        using (var fs = File.OpenRead(path))
-        {
-            if (fs.ReadByte() != 'M' || fs.ReadByte() != 'Z')
-                throw new InvalidOperationException("O arquivo baixado nao e um executavel.");
-        }
-
-        if (info.Sha256.Length > 0)
-        {
-            using var fs = File.OpenRead(path);
-            string got = Convert.ToHexString(SHA256.HashData(fs)).ToLowerInvariant();
-            if (!got.Equals(info.Sha256, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("O hash do arquivo baixado nao bate.");
-        }
-    }
-
-    /// <summary>
-    /// Poe o novo exe no lugar do atual e sobe ele. Quem chama deve encerrar o app
-    /// logo em seguida — os dois processos ficam vivos por um instante.
-    /// </summary>
-    public static void ApplyAndRestart(string downloadedExe)
-    {
-        string current = Environment.ProcessPath
-            ?? throw new InvalidOperationException("Nao consegui descobrir o caminho do proprio exe.");
-        string old = current + ".old";
-
-        try { File.Delete(old); } catch { }
-
-        // Renomear o proprio exe rodando E permitido; apagar ou sobrescrever nao.
-        File.Move(current, old);
-        try
-        {
-            File.Move(downloadedExe, current);
-        }
-        catch
-        {
-            // Falhou no meio: devolve o antigo pro lugar, senao o app some do disco.
-            try { File.Move(old, current); } catch { }
-            throw;
-        }
-
-        Process.Start(new ProcessStartInfo(current, "--updated") { UseShellExecute = true });
-        Log.Write("update: novo exe no lugar, subindo a versao nova");
-    }
-
-    /// <summary>
-    /// Apaga o exe da versao anterior. Chamado no boot, que e quando ninguem esta
-    /// mais usando aquele arquivo.
-    /// </summary>
-    public static void CleanupOldVersion()
-    {
-        try
-        {
-            string? exe = Environment.ProcessPath;
-            if (exe == null) return;
-            string old = exe + ".old";
-            if (File.Exists(old)) { File.Delete(old); Log.Write("update: versao antiga apagada"); }
-        }
-        catch (Exception ex) { Log.Write("update: nao consegui apagar a versao antiga: " + ex.Message); }
+        Log.Write("update: baixado, reiniciando na versao nova");
+        // --updated: o processo novo sobe enquanto este ainda morre, e sem isso ele
+        // bateria no mutex de instancia unica e sairia — deixando o usuario sem app
+        // nenhum na tela depois de mandar atualizar.
+        mgr.ApplyUpdatesAndRestart(info.TargetFullRelease, new[] { "--updated" });
     }
 }

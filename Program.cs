@@ -1,3 +1,5 @@
+using Velopack;
+
 namespace Primicord;
 
 internal static class Program
@@ -8,6 +10,11 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        // PRIMEIRA coisa do processo, sem excecao. Em instalacao, atualizacao e
+        // desinstalacao o Velopack faz o trabalho dele aqui e ENCERRA o processo —
+        // qualquer coisa antes disto (mutex, janela, log) roda a toa ou atrapalha.
+        VelopackApp.Build().Run();
+
         // --updated: fomos abertos pelo atualizador e o processo velho ainda esta
         // morrendo. Sem isso a versao nova bateria no "ja esta aberto" e sairia,
         // deixando o usuario sem app nenhum na tela depois de atualizar.
@@ -31,8 +38,6 @@ internal static class Program
             return;
         }
 
-        // Agora que nada mais segura o arquivo, apaga o exe da versao anterior.
-        Updater.CleanupOldVersion();
 
         Application.SetHighDpiMode(HighDpiMode.SystemAware);
         Application.EnableVisualStyles();

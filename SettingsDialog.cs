@@ -23,7 +23,7 @@ public sealed class SettingsDialog : Form
     private PrimButton _updateBtn = null!;
     private readonly Label _updateStatus = new();
     /// <summary>Versao ja encontrada e ainda nao instalada — o botao vira "INSTALAR".</summary>
-    private UpdateInfo? _pending;
+    private UpdateInfoView? _pending;
     private bool _updateBusy;
 
     /// <summary>Degraus de banda pro compartilhamento (KB/s, rotulo).</summary>
@@ -275,26 +275,19 @@ public sealed class SettingsDialog : Form
                 }
                 _pending = found;
                 string notes = found.Notes.Length > 120 ? found.Notes[..120] + "..." : found.Notes;
-                _updateStatus.Text = $"versao {found.Version} disponivel ({found.SizeLabel})."
+                // Dizer que e delta importa: e a diferenca entre 2MB e 100MB, e quem
+                // esta numa internet ruim quer saber disso antes de clicar.
+                _updateStatus.Text = $"versao {found.Version} disponivel — "
+                                   + (found.IsDelta ? $"so o que mudou, {found.SizeLabel}"
+                                                    : $"pacote completo, {found.SizeLabel}")
                                    + (notes.Length > 0 ? "\n" + notes.Replace("\r", "").Replace("\n", " ") : "");
                 _updateBtn.Text = "INSTALAR " + found.Version;
                 return;
             }
 
-            if (!Updater.CanSelfUpdate)
-            {
-                _updateStatus.Text = "rodando pelo dotnet run — gera o exe com build.ps1 pra poder trocar.";
-                return;
-            }
-
             var progress = new Progress<int>(p => _updateStatus.Text = $"baixando... {p}%");
-            string file = await Updater.DownloadAsync(_pending, progress).ConfigureAwait(true);
-
-            _updateStatus.Text = "instalando...";
-            Updater.ApplyAndRestart(file);
-
-            // O processo novo ja esta subindo; este tem que sair pra soltar o mutex.
-            Application.Exit();
+            // Nao volta: o Velopack aplica e reabre o app na versao nova.
+            await Updater.DownloadAndApplyAsync(_cfg.UpdateRepo, progress).ConfigureAwait(true);
         }
         catch (Exception ex)
         {
