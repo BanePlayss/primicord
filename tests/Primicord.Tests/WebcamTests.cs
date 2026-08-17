@@ -176,6 +176,31 @@ public sealed class WebcamWallTests
     }
 
     [Fact]
+    public void Imagem_entregue_continua_valida_depois_de_quadros_novos()
+    {
+        // A INVARIANTE QUE O X VERMELHO QUEBROU. A previa local nao passava por
+        // aqui: ela criava uma Image por quadro e DESCARTAVA a anterior. A UI, que
+        // ja tinha a referencia, pintava um objeto morto — e excecao no OnPaint faz
+        // o WinForms desenhar um X vermelho no lugar do controle.
+        //
+        // O sintoma visual nao da pra reproduzir sem message loop de verdade (o
+        // DrawToBitmap engole a excecao). Entao o que se testa aqui e a causa: quem
+        // pegou uma imagem pode continuar usando enquanto quadros novos chegam.
+        using var wall = new WebcamWall();
+        wall.OnFrame(1, JpegDeVerdade(320, 240));
+
+        var img = wall.FrameOf(1);
+        Assert.NotNull(img);
+
+        for (int i = 0; i < 10; i++) wall.OnFrame(1, JpegDeVerdade(320, 240));
+
+        // Se o bitmap tivesse sido trocado e descartado, ler daqui lancaria.
+        _ = img!.Width;
+        _ = img.Height;
+        Assert.Same(img, wall.FrameOf(1));   // e o MESMO bitmap, repintado
+    }
+
+    [Fact]
     public void Remover_solta_a_imagem()
     {
         using var wall = new WebcamWall();

@@ -32,8 +32,20 @@ public sealed class MainForm : Form
     // camera
     private WebcamCapture? _cam;
     private readonly WebcamWall _cams = new();
-    private Image? _myCam;
     private bool _camOn;
+
+    /// <summary>
+    /// Minha propria camera dentro da parede, na mesma convencao que o palco ja usa
+    /// pra "sou eu" (_focusedSharer == 0).
+    /// </summary>
+    /// <remarks>
+    /// A previa local passa pela MESMA parede das dos outros de proposito. Antes ela
+    /// era um Image proprio, trocado e DESCARTADO a cada quadro pela thread da
+    /// camera — e a UI, que ja tinha a referencia, pintava um objeto morto. O
+    /// WinForms responde a excecao no OnPaint desenhando um X vermelho no lugar do
+    /// controle. A parede reusa um bitmap por pessoa e nunca descarta no meio.
+    /// </remarks>
+    private const uint MyCamId = 0;
 
     // tela, clipe e DJ
     private ScreenSender? _screenSender;
@@ -1011,8 +1023,6 @@ public sealed class MainForm : Form
         try { _cam?.Dispose(); } catch { }
         _cam = null;
         _camOn = false;
-        try { _myCam?.Dispose(); } catch { }
-        _myCam = null;
         _cams.Dispose();
 
         try { _screenSender?.Dispose(); } catch { }
@@ -1107,8 +1117,9 @@ public sealed class MainForm : Form
         // lado limpa o tile aqui sem precisar de aviso nenhum pela rede.
         if (_myTile != null && !_myTile.IsDisposed)
         {
-            var mine = _myCam;
-            if (!ReferenceEquals(_myTile.Cam, mine)) { _myTile.Cam = mine; _myTile.Invalidate(); }
+            var mine = _cams.FrameOf(MyCamId);
+            _myTile.Cam = mine;
+            if (mine != null) _myTile.Invalidate();
         }
         foreach (var (sid, tile) in _peerTiles)
         {
@@ -1300,9 +1311,7 @@ public sealed class MainForm : Form
             try { _cam?.Dispose(); } catch { }
             _cam = null;
             _camOn = false;
-            var old = _myCam;
-            _myCam = null;
-            try { old?.Dispose(); } catch { }
+            _cams.Remove(MyCamId);
             if (_myTile != null) { _myTile.Cam = null; _myTile.Invalidate(); }
             SyncRoomButtons();
             Toast("CAMERA DESLIGADA", "");
@@ -1333,16 +1342,7 @@ public sealed class MainForm : Form
     private void OnMyCamFrame(byte[] jpeg, int w, int h)
     {
         _session?.SendWebcamFrame(jpeg, jpeg.Length, w, h);
-
-        // Previa local: decodifica UMA vez aqui em vez de a cada repintura da UI.
-        try
-        {
-            using var ms = new MemoryStream(jpeg, writable: false);
-            var img = Image.FromStream(ms);
-            var old = Interlocked.Exchange(ref _myCam, img);
-            try { old?.Dispose(); } catch { }
-        }
-        catch { /* quadro ruim: o proximo vem em 66ms */ }
+        _cams.OnFrame(MyCamId, jpeg);   // previa local, pelo mesmo caminho dos outros
     }
 
     private void OnPeerCam(uint senderId, byte[] jpeg, int w, int h)

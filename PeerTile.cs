@@ -55,9 +55,8 @@ public sealed class PeerTile : Control
         // que o Discord faz, e faz sentido: a foto parada nao acrescenta nada
         // quando existe a pessoa ao vivo.
         var cam = Cam;
-        if (cam != null)
+        if (cam != null && TryDrawCam(g, cam, r))
         {
-            DrawCam(g, cam, r);
             DrawCaption(g, dark: true);
             return;
         }
@@ -109,6 +108,24 @@ public sealed class PeerTile : Control
     /// alto, entao esticar acharia todo mundo gordo. Cortar as beiradas mantem a
     /// proporcao do rosto, que e o que importa.
     /// </remarks>
+    /// <remarks>
+    /// TUDO dentro de um try: excecao que escapa do OnPaint faz o WinForms desenhar
+    /// um X VERMELHO no lugar do controle, e ai o usuario perde o tile inteiro por
+    /// causa de um quadro ruim. Devolve false pra cair no avatar, que sempre pinta.
+    /// </remarks>
+    private bool TryDrawCam(Graphics g, Image cam, Rectangle r)
+    {
+        try
+        {
+            DrawCam(g, cam, r);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private void DrawCam(Graphics g, Image cam, Rectangle r)
     {
         double alvo = r.Width / (double)r.Height;
@@ -119,8 +136,7 @@ public sealed class PeerTile : Control
 
         var saved = g.InterpolationMode;
         g.InterpolationMode = InterpolationMode.HighQualityBilinear;
-        try { g.DrawImage(cam, r, src, GraphicsUnit.Pixel); }
-        catch { /* quadro trocado no meio do desenho: o proximo conserta */ }
+        g.DrawImage(cam, r, src, GraphicsUnit.Pixel);
         g.InterpolationMode = saved;
 
         // Faixa escura embaixo: sem ela o nick some em cima de camera clara.
