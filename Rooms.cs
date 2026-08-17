@@ -184,6 +184,22 @@ public sealed class Config
     /// </summary>
     public string UpdateRepo = Updater.DefaultRepo;
 
+    /// <summary>Camera preferida (nome do dispositivo). Vazio = a primeira que abrir.</summary>
+    public string CamDevice = "";
+
+    /// <summary>
+    /// Largura pedida a camera. O padrao e 320 (com 240 de altura) porque a conta
+    /// que manda aqui e a da MALHA, nao a da camera: cada espectador recebe uma
+    /// copia, entao a subida multiplica por N-1. Medido na C270 com teto de 15 fps:
+    /// 320x240 da ~200 kbps por espectador, 640x480 da ~570 kbps. Numa sala de 6,
+    /// e a diferenca entre 1,0 e 2,9 Mbps de subida so de camera.
+    /// </summary>
+    public int CamWidth = 320;
+    public int CamHeight = 240;
+
+    /// <summary>Teto de quadros por segundo. A camera pode entregar menos (luz baixa).</summary>
+    public int CamFps = 15;
+
     private static string Path_ => System.IO.Path.Combine(AppEnv.DataDir, "config.txt");
 
     public static Config Load()
@@ -217,6 +233,10 @@ public sealed class Config
                     case "aec": c.EchoCancel = v != "0"; break;
                     case "agc": c.MicAutoGain = v == "1"; break;
                     case "updaterepo": if (v.Length > 0) c.UpdateRepo = v; break;
+                    case "camdevice": c.CamDevice = v; break;
+                    case "camw": if (int.TryParse(v, out var cw)) c.CamWidth = Math.Clamp(cw, 160, 1280); break;
+                    case "camh": if (int.TryParse(v, out var chh)) c.CamHeight = Math.Clamp(chh, 120, 720); break;
+                    case "camfps": if (int.TryParse(v, out var cf)) c.CamFps = Math.Clamp(cf, 5, 30); break;
                 }
             }
         }
@@ -248,6 +268,10 @@ public sealed class Config
                 "aec=" + (EchoCancel ? "1" : "0"),
                 "agc=" + (MicAutoGain ? "1" : "0"),
                 "updaterepo=" + UpdateRepo,
+                "camdevice=" + CamDevice,
+                "camw=" + CamWidth,
+                "camh=" + CamHeight,
+                "camfps=" + CamFps,
             });
         }
         catch (Exception ex) { Log.Write("config nao salvou: " + ex.Message); }

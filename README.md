@@ -94,6 +94,7 @@ binário que se distribui por aí não é opção.
 - [x] Compartilhar tela (captura por GPU, codec de blocos delta)
 - [x] Clipes (buffer rolante + hotkey global)
 - [x] Chat, DMs, modo DJ, sessão cinema
+- [x] Câmera na sala (JPEG nativo da webcam, sem re-encodar)
 - [x] Voz por WebRTC com Opus (`webrtc=1`)
 - [x] Cancelamento de eco
 - [x] Atualização pelo próprio app

@@ -55,6 +55,8 @@
     <!-- Opus. Ja vem como dependencia do SIPSorcery, mas usamos os tipos direto
          (encoder com DTX/FEC configurados), entao a referencia e explicita. -->
     <PackageReference Include="Concentus" Version="2.2.2" />
+    <!-- Camera. P/Invoke puro, sem binario nativo junto — nao engorda o exe. -->
+    <PackageReference Include="FlashCap" Version="1.11.0" />
     <PackageReference Include="LibVLCSharp.WinForms" Version="3.10.0" />
     <PackageReference Include="NAudio" Version="2.3.0" />
     <!-- WebRTC (RTCPeerConnection, ICE, DTLS-SRTP) — ver WebRtcVoice.cs. -->

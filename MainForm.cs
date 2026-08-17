@@ -29,6 +29,12 @@ public sealed class MainForm : Form
     private string _voiceRoomId = "";
     private string _voiceRoomName = "";
 
+    // camera
+    private WebcamCapture? _cam;
+    private readonly WebcamWall _cams = new();
+    private Image? _myCam;
+    private bool _camOn;
+
     // tela, clipe e DJ
     private ScreenSender? _screenSender;
     private readonly ScreenReceiver _screens = new();
@@ -803,7 +809,7 @@ public sealed class MainForm : Form
         return _roomPanel;
     }
 
-    private ActionIcon? _icMic, _icShare, _icRec, _icClip, _icDj, _icCinema, _icQuick, _icLeave;
+    private ActionIcon? _icMic, _icCam, _icShare, _icRec, _icClip, _icDj, _icCinema, _icQuick, _icLeave;
     private Label? _lanBadge;
     private CinemaSession? _cinema;
     private Form? _cinemaWindow;
@@ -827,6 +833,10 @@ public sealed class MainForm : Form
         _icMic = new ActionIcon((g, r, c, w) => Glyphs.Mic(g, r, c, _session?.Muted == true), "MIC")
         { ToolTipText = "Mutar / desmutar o microfone" };
         _icMic.Click += (_, _) => { ToggleMute(); SyncRoomButtons(); };
+
+        _icCam = new ActionIcon((g, r, c, w) => Glyphs.Camera(g, r, c, _camOn), "CAMERA")
+        { ToolTipText = "Ligar/desligar a camera" };
+        _icCam.Click += (_, _) => ToggleWebcam();
 
         _icShare = new ActionIcon((g, r, c, w) => Glyphs.Screen(g, r, c, _iAmSharing), "TELA")
         { ToolTipText = "Compartilhar tela ou janela (com som)" };
@@ -861,10 +871,10 @@ public sealed class MainForm : Form
             Margin = new Padding(14, 22, 0, 0), Visible = false,
         };
 
-        foreach (var ic in new[] { _icMic, _icShare, _icRec, _icClip, _icDj, _icCinema, _icQuick, _icLeave })
+        foreach (var ic in new[] { _icMic, _icCam, _icShare, _icRec, _icClip, _icDj, _icCinema, _icQuick, _icLeave })
             ic!.Margin = new Padding(0, 0, 6, 0);
         bar.Controls.AddRange(new Control[]
-            { _icMic, _icShare, _icRec, _icClip, _icDj, _icCinema, _icQuick, _icLeave, _lanBadge });
+            { _icMic, _icCam, _icShare, _icRec, _icClip, _icDj, _icCinema, _icQuick, _icLeave, _lanBadge });
         return bar;
     }
 
@@ -917,6 +927,7 @@ public sealed class MainForm : Form
         _session.Failed += ShowBanner;
 
         _session.ScreenFrameReceived += OnPeerFrame;
+        _session.WebcamFrameReceived += OnPeerCam;
 
         _voice = new VoiceEngine
             {
@@ -997,6 +1008,13 @@ public sealed class MainForm : Form
         _cinema = null;
         _bufferOffByUser = false;
 
+        try { _cam?.Dispose(); } catch { }
+        _cam = null;
+        _camOn = false;
+        try { _myCam?.Dispose(); } catch { }
+        _myCam = null;
+        _cams.Dispose();
+
         try { _screenSender?.Dispose(); } catch { }
         _screenSender = null;
         _iAmSharing = false;
@@ -1071,6 +1089,7 @@ public sealed class MainForm : Form
             tile.Dispose();
             _voice?.RemovePeer(sid);
             _screens.Remove(sid);
+            _cams.Remove(sid);
             if (_focusedSharer == sid) _focusedSharer = 0;
         }
         UpdateRoomStatus();
@@ -1081,6 +1100,22 @@ public sealed class MainForm : Form
     private void TickVoice()
     {
         if (_voice == null || _session == null) return;
+
+        // Cameras: reaponta cada tile pro quadro mais novo. O FrameOf devolve null
+        // sozinho quando a pessoa para de mandar, entao desligar a camera do outro
+        // lado limpa o tile aqui sem precisar de aviso nenhum pela rede.
+        if (_myTile != null && !_myTile.IsDisposed)
+        {
+            var mine = _myCam;
+            if (!ReferenceEquals(_myTile.Cam, mine)) { _myTile.Cam = mine; _myTile.Invalidate(); }
+        }
+        foreach (var (sid, tile) in _peerTiles)
+        {
+            var frame = _cams.FrameOf(sid);
+            if (ReferenceEquals(tile.Cam, frame) && frame == null) continue;
+            tile.Cam = frame;
+            tile.Invalidate();
+        }
 
         // Palco: mostra a tela de quem esta em foco (a minha ja chega por OnMyFrame).
         if (_stage != null && !_stage.IsDisposed && _focusedSharer != 0)
@@ -1243,6 +1278,65 @@ public sealed class MainForm : Form
     /// tela criava espelho infinito), entao decodificar aqui seria trabalho jogado
     /// fora 30 vezes por segundo.
     /// </summary>
+    // ─── CAMERA ──────────────────────────────────────────────────────────────
+
+    private void ToggleWebcam()
+    {
+        if (_session == null) { ShowBanner("Entra numa sala de voz primeiro."); return; }
+
+        if (_camOn)
+        {
+            try { _cam?.Dispose(); } catch { }
+            _cam = null;
+            _camOn = false;
+            var old = _myCam;
+            _myCam = null;
+            try { old?.Dispose(); } catch { }
+            if (_myTile != null) { _myTile.Cam = null; _myTile.Invalidate(); }
+            SyncRoomButtons();
+            Toast("CAMERA DESLIGADA", "");
+            return;
+        }
+
+        _cam = new WebcamCapture(_cfg.CamFps);
+        _cam.Failed += ShowBanner;
+        _cam.FrameReady += OnMyCamFrame;
+        _camOn = true;
+        SyncRoomButtons();
+
+        // Abrir camera demora (o driver negocia formato): async pra nao travar a UI.
+        _ = Task.Run(async () =>
+        {
+            bool ok = await _cam.StartAsync(_cfg.CamDevice, _cfg.CamWidth, _cfg.CamHeight);
+            if (!IsDisposed) BeginInvoke(() =>
+            {
+                if (!ok) { _camOn = false; try { _cam?.Dispose(); } catch { } _cam = null; }
+                else Toast("CAMERA LIGADA", $"{_cam!.Width}x{_cam.Height}"
+                                          + (_cam.NativeJpeg ? "" : " (convertendo)"));
+                SyncRoomButtons();
+            });
+        });
+    }
+
+    /// <summary>Meu proprio quadro: vai pra rede e pro meu tile (thread da camera).</summary>
+    private void OnMyCamFrame(byte[] jpeg, int w, int h)
+    {
+        _session?.SendWebcamFrame(jpeg, jpeg.Length, w, h);
+
+        // Previa local: decodifica UMA vez aqui em vez de a cada repintura da UI.
+        try
+        {
+            using var ms = new MemoryStream(jpeg, writable: false);
+            var img = Image.FromStream(ms);
+            var old = Interlocked.Exchange(ref _myCam, img);
+            try { old?.Dispose(); } catch { }
+        }
+        catch { /* quadro ruim: o proximo vem em 66ms */ }
+    }
+
+    private void OnPeerCam(uint senderId, byte[] jpeg, int w, int h)
+        => _cams.OnFrame(senderId, jpeg);
+
     private void OnMyFrame(byte[] jpeg, int w, int h)
     {
         AutoStartBuffer();
@@ -1399,6 +1493,10 @@ public sealed class MainForm : Form
         _icMic.Alert = muted;
         _icMic.Caption = muted ? "MUDO" : "MIC";
         _icMic.Invalidate();
+
+        _icCam!.Active = _camOn;
+        _icCam.Caption = _camOn ? "NO AR" : "CAMERA";
+        _icCam.Invalidate();
 
         _icShare!.Active = _iAmSharing;
         _icShare.Caption = _iAmSharing ? "NA TELA" : "TELA";

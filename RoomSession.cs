@@ -64,6 +64,7 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
     public const byte TypeMusic = 5;   // audio do sistema do DJ
     public const byte TypeCinemaCtl = 6;   // controle do cinema (oferta, nack, play)
     public const byte TypeCinemaData = 7;   // pedaco do arquivo de video
+    public const byte TypeWebcam = 8;   // quadro da camera (fragmentado, igual a tela)
 
     // Um quadro de tela nao cabe num datagrama, entao vai picado. Sub-cabecalho de
     // 10 bytes depois do cabecalho comum: frameId, indice, total, largura, altura.
@@ -110,6 +111,9 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
 
     /// <summary>Quadro de tela COMPLETO ja remontado: (quem, jpeg, largura, altura).</summary>
     public event Action<uint, byte[], int, int>? ScreenFrameReceived;
+
+    /// <summary>Quadro de camera COMPLETO ja remontado: (quem, jpeg, largura, altura).</summary>
+    public event Action<uint, byte[], int, int>? WebcamFrameReceived;
 
     /// <summary>Mensagem de controle do cinema (JSON).</summary>
     public event Action<uint, string>? CinemaControl;
@@ -419,6 +423,7 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
 
     private uint _musicSeq;
     private ushort _screenFrameId;
+    private ushort _webcamFrameId;
 
     /// <summary>
     /// Pica um quadro JPEG em datagramas e manda pra todo mundo.
@@ -429,11 +434,22 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
     /// atrasado e pior que faltar um quadro.
     /// </remarks>
     public void SendScreenFrame(byte[] jpeg, int length, int width, int height)
+        => SendFragmented(TypeScreen, ref _screenFrameId, jpeg, length, width, height);
+
+    /// <summary>
+    /// Um quadro da camera. Mesmo empacotamento da tela — e o mesmo problema:
+    /// nao cabe num datagrama, e chegar atrasado e pior que faltar.
+    /// </summary>
+    public void SendWebcamFrame(byte[] jpeg, int length, int width, int height)
+        => SendFragmented(TypeWebcam, ref _webcamFrameId, jpeg, length, width, height);
+
+    private void SendFragmented(byte type, ref ushort frameCounter,
+                                byte[] jpeg, int length, int width, int height)
     {
         var sock = _socket;
         if (sock == null) return;
 
-        ushort frameId = _screenFrameId++;
+        ushort frameId = frameCounter++;
         int chunks = (length + ChunkPayload - 1) / ChunkPayload;
         if (chunks == 0 || chunks > ushort.MaxValue) return;
 
@@ -446,7 +462,7 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
             int len = Math.Min(ChunkPayload, length - off);
             byte[] packet = new byte[HeaderBytes + ScreenSubHeader + len];
 
-            packet[0] = TypeScreen;
+            packet[0] = type;
             WriteUInt32(packet, 1, _mySenderId);
             WriteUInt32(packet, 5, frameId);
             WriteUInt16(packet, 9, frameId);
@@ -546,7 +562,8 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
                     break;
 
                 case TypeScreen:
-                    HandleScreenChunk(peer, buf, len);
+                case TypeWebcam:
+                    HandleFragmentedChunk(peer, type, buf, len);
                     break;
 
                 case TypeCinemaCtl:
@@ -594,9 +611,18 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
         public long StartedTicks;
     }
 
-    private readonly Dictionary<uint, FrameAssembly> _assembling = new();
+    /// <summary>
+    /// Remontagem em curso, por (quem, que tipo de video).
+    /// </summary>
+    /// <remarks>
+    /// O TIPO faz parte da chave de proposito. Indexando so por remetente, a mesma
+    /// pessoa compartilhando tela E camera ao mesmo tempo teria os dois fluxos
+    /// disputando o mesmo estado: cada quadro de um jogaria fora o quadro pela
+    /// metade do outro, e nenhum dos dois fecharia nunca.
+    /// </remarks>
+    private readonly Dictionary<(uint Sender, byte Type), FrameAssembly> _assembling = new();
 
-    private void HandleScreenChunk(RemotePeer peer, byte[] buf, int len)
+    private void HandleFragmentedChunk(RemotePeer peer, byte type, byte[] buf, int len)
     {
         if (len < HeaderBytes + ScreenSubHeader) return;
 
@@ -615,10 +641,11 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
         FrameAssembly asm;
         lock (_assembling)
         {
-            if (!_assembling.TryGetValue(peer.SenderId, out asm!))
+            var key = (peer.SenderId, type);
+            if (!_assembling.TryGetValue(key, out asm!))
             {
                 asm = new FrameAssembly();
-                _assembling[peer.SenderId] = asm;
+                _assembling[key] = asm;
             }
 
             // Quadro novo: joga fora o anterior incompleto. Pedaço atrasado de um
@@ -663,7 +690,8 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
             Buffer.BlockCopy(c!, 0, jpeg, pos, c!.Length);
             pos += c.Length;
         }
-        ScreenFrameReceived?.Invoke(peer.SenderId, jpeg, width, height);
+        if (type == TypeWebcam) WebcamFrameReceived?.Invoke(peer.SenderId, jpeg, width, height);
+        else ScreenFrameReceived?.Invoke(peer.SenderId, jpeg, width, height);
     }
 
     // ─── UTIL ────────────────────────────────────────────────────────────────

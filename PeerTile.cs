@@ -16,6 +16,16 @@ public sealed class PeerTile : Control
     public bool Punching;      // ainda furando o NAT
     public float Level;        // 0..1 nivel de voz agora
 
+    /// <summary>
+    /// Ultimo quadro da camera desta pessoa, ou null se ela esta sem camera.
+    /// </summary>
+    /// <remarks>
+    /// O tile NAO e dono desta imagem e nao a descarta: quem manda no ciclo de vida
+    /// dela e o MainForm, que troca o quadro varias vezes por segundo. Descartar
+    /// aqui derrubaria o quadro que ja esta sendo pintado noutra passada.
+    /// </remarks>
+    public Image? Cam;
+
     private const float SpeakThreshold = 0.045f;
 
     public PeerTile()
@@ -39,6 +49,17 @@ public sealed class PeerTile : Control
 
         Color border = Speaking ? Pv.Green : (Punching ? Pv.OrangeDim : Pv.Char3);
         using (var p = new Pen(border, 2)) g.DrawRectangle(p, r);
+
+        // Com camera ligada, ela toma o tile inteiro e o avatar sai de cena — e o
+        // que o Discord faz, e faz sentido: a foto parada nao acrescenta nada
+        // quando existe a pessoa ao vivo.
+        var cam = Cam;
+        if (cam != null)
+        {
+            DrawCam(g, cam, r);
+            DrawCaption(g, dark: true);
+            return;
+        }
 
         // Avatar: a MESMA foto que o jogador usa no site; sem foto, cai na inicial.
         int av = 52;
@@ -76,7 +97,49 @@ public sealed class PeerTile : Control
             using (var p = new Pen(Pv.Green, 3))
                 g.DrawEllipse(p, Rectangle.Inflate(ac, 4, 4));
 
-        // Nick.
+        DrawCaption(g, dark: false);
+    }
+
+    /// <summary>
+    /// Pinta o quadro da camera cobrindo o tile, recortando o excedente.
+    /// </summary>
+    /// <remarks>
+    /// Recorte central em vez de esticar: a camera e 4:3 e o tile e mais largo que
+    /// alto, entao esticar acharia todo mundo gordo. Cortar as beiradas mantem a
+    /// proporcao do rosto, que e o que importa.
+    /// </remarks>
+    private void DrawCam(Graphics g, Image cam, Rectangle r)
+    {
+        double alvo = r.Width / (double)r.Height;
+        int sw = cam.Width, sh = cam.Height;
+        int cw = sw, ch = (int)(sw / alvo);
+        if (ch > sh) { ch = sh; cw = (int)(sh * alvo); }
+        var src = new Rectangle((sw - cw) / 2, (sh - ch) / 2, cw, ch);
+
+        var saved = g.InterpolationMode;
+        g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+        try { g.DrawImage(cam, r, src, GraphicsUnit.Pixel); }
+        catch { /* quadro trocado no meio do desenho: o proximo conserta */ }
+        g.InterpolationMode = saved;
+
+        // Faixa escura embaixo: sem ela o nick some em cima de camera clara.
+        using var shade = new LinearGradientBrush(
+            new Rectangle(0, Height - 48, Width, 48),
+            Color.FromArgb(0, 0, 0, 0), Color.FromArgb(190, 0, 0, 0), LinearGradientMode.Vertical);
+        g.FillRectangle(shade, 0, Height - 48, Width, 48);
+
+        Color border = Speaking ? Pv.Green : (Punching ? Pv.OrangeDim : Pv.Char3);
+        using var pen = new Pen(border, 2);
+        g.DrawRectangle(pen, r);
+    }
+
+    /// <summary>Nick, estado e barrinha de nivel — iguais com ou sem camera.</summary>
+    private void DrawCaption(Graphics g, bool dark)
+    {
+        // Com camera o texto sobe: ele fica sobre a faixa escura, nao no meio do rosto.
+        float nickY = dark ? Height - 44 : 76;
+        float statusY = dark ? Height - 26 : 95;
+
         string name = (IsMe ? Nick + " (VOCE)" : Nick).ToUpperInvariant();
         using (var b = new SolidBrush(Pv.Bone))
         {
@@ -88,7 +151,7 @@ public sealed class PeerTile : Control
                 name += "...";
                 w = Pv.TrackedWidth(g, name, Pv.Label, 1.2f);
             }
-            Pv.DrawTracked(g, name, Pv.Label, b, (Width - w) / 2f, 76, 1.2f);
+            Pv.DrawTracked(g, name, Pv.Label, b, (Width - w) / 2f, nickY, 1.2f);
         }
 
         // Estado embaixo.
@@ -101,7 +164,7 @@ public sealed class PeerTile : Control
                     : Muted ? Pv.Red : Pv.Orange;
             using var b = new SolidBrush(c);
             float w = Pv.TrackedWidth(g, status, Pv.Label, 1.4f);
-            Pv.DrawTracked(g, status, Pv.Label, b, (Width - w) / 2f, 95, 1.4f);
+            Pv.DrawTracked(g, status, Pv.Label, b, (Width - w) / 2f, statusY, 1.4f);
         }
 
         // Barrinha de nivel (so quando conectado e sem mute).

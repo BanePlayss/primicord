@@ -115,6 +115,22 @@ public static class Glyphs
         if (!on) g.DrawLine(p, x + s * 0.14f, y + s * 0.12f, x + s * 0.86f, y + s * 0.88f);
     }
 
+    /// <summary>Filmadora — camera. Com risco quando desligada, igual ao monitor.</summary>
+    public static void Camera(Graphics g, RectangleF r, Color c, bool on, float w = 1.8f)
+    {
+        using var p = P(c, w);
+        float s = Math.Min(r.Width, r.Height), x = r.X, y = r.Y;
+        // Corpo.
+        g.DrawRectangle(p, x + s * 0.10f, y + s * 0.28f, s * 0.54f, s * 0.44f);
+        // Bico apontando pra direita.
+        g.DrawLines(p, new[]
+        {
+            new PointF(x + s * 0.66f, y + s * 0.44f), new PointF(x + s * 0.88f, y + s * 0.30f),
+            new PointF(x + s * 0.88f, y + s * 0.70f), new PointF(x + s * 0.66f, y + s * 0.56f),
+        });
+        if (!on) g.DrawLine(p, x + s * 0.14f, y + s * 0.12f, x + s * 0.86f, y + s * 0.88f);
+    }
+
     /// <summary>Circulo com ponto — buffer de gravacao.</summary>
     public static void Record(Graphics g, RectangleF r, Color c, float w = 1.8f)
     {
