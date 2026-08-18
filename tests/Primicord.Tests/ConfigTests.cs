@@ -81,6 +81,8 @@ public sealed class ConfigTests : IDisposable
             Nick = "caco", MicDevice = 2, ClipSeconds = 45, ScreenBudgetKb = 900,
             UseWebRtc = true, EchoCancel = false, MicAutoGain = true,
             CamDevice = "Logi C270 HD WebCam", CamWidth = 640, CamHeight = 480, CamFps = 20,
+            CachedPc = 1234, CachedCc = 77, CachedTeamId = "caco",
+            CachedTeamName = "Caco", CachedThemeId = "oceano", CachedIsMod = true,
         };
         original.Save();
 
@@ -96,5 +98,32 @@ public sealed class ConfigTests : IDisposable
         Assert.Equal(640, lido.CamWidth);
         Assert.Equal(480, lido.CamHeight);
         Assert.Equal(20, lido.CamFps);
+        Assert.Equal(1234, lido.CachedPc);
+        Assert.Equal(77, lido.CachedCc);
+        Assert.Equal("caco", lido.CachedTeamId);
+        Assert.Equal("Caco", lido.CachedTeamName);
+        Assert.Equal("oceano", lido.CachedThemeId);
+        Assert.True(lido.CachedIsMod);
+    }
+
+    [Fact]
+    public void Perfil_salvo_so_aceita_mesmo_nick_e_mesma_senha()
+    {
+        string hash = Primitivao.HashPassword("segredo");
+        var cfg = new Config
+        {
+            Nick = "bane", SenhaHash = hash, CachedPc = 331_000,
+            CachedThemeId = "oceano", CachedIsMod = true,
+        };
+
+        var cached = Primitivao.AuthenticateCached(cfg, "@BANE", hash);
+        Assert.NotNull(cached);
+        Assert.Equal("bane", cached.Nick);
+        Assert.Equal(331_000, cached.Pc);
+        Assert.Equal("oceano", cached.ThemeId);
+        Assert.True(cached.IsMod);
+
+        Assert.Null(Primitivao.AuthenticateCached(cfg, "ricle", hash));
+        Assert.Null(Primitivao.AuthenticateCached(cfg, "bane", Primitivao.HashPassword("errada")));
     }
 }

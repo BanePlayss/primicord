@@ -14,12 +14,13 @@ public sealed class RoomInfo
 /// <summary>Lista/cria/apaga salas no Firestore — o "lobby".</summary>
 public sealed class RoomDirectory
 {
-    private const int PeerStaleMs = 15000;
+    private const int PeerStaleMs = 45_000;
     private readonly Firestore _fs;
 
     public RoomDirectory(Firestore fs) => _fs = fs;
 
-    public async Task<List<RoomInfo>> ListAsync(CancellationToken ct = default)
+    public async Task<List<RoomInfo>> ListAsync(bool includeOccupants = true,
+                                                CancellationToken ct = default)
     {
         var rooms = new List<RoomInfo>();
         var docs = await _fs.ListAsync("pc_rooms", ct: ct).ConfigureAwait(false);
@@ -38,10 +39,13 @@ public sealed class RoomDirectory
             // morreu sem despedida — fecharam o app no botao X, caiu a luz, etc.
             try
             {
-                var peers = await _fs.ListAsync($"pc_rooms/{id}/peers", ct: ct).ConfigureAwait(false);
-                foreach (var (_, pf) in peers)
-                    if (now - Firestore.Num(pf, "lastSeen") <= PeerStaleMs)
-                        room.Occupants.Add(Firestore.Str(pf, "nick", "?"));
+                if (includeOccupants)
+                {
+                    var peers = await _fs.ListAsync($"pc_rooms/{id}/peers", ct: ct).ConfigureAwait(false);
+                    foreach (var (_, pf) in peers)
+                        if (now - Firestore.Num(pf, "lastSeen") <= PeerStaleMs)
+                            room.Occupants.Add(Firestore.Str(pf, "nick", "?"));
+                }
             }
             catch (Exception ex) { Log.Write($"peers da sala {id}: " + ex.Message); }
 
@@ -104,6 +108,12 @@ public sealed class Config
     /// hashes pra qualquer um — guardar aqui nao aumenta a exposicao.
     /// </summary>
     public string SenhaHash = "";
+    public long CachedPc;
+    public long CachedCc;
+    public string CachedTeamId = "";
+    public string CachedTeamName = "";
+    public string CachedThemeId = "";
+    public bool CachedIsMod;
     public int MicDevice = 0;
     public string OutputDeviceId = "";
     public bool PushToTalk;
@@ -217,6 +227,12 @@ public sealed class Config
                 {
                     case "nick": c.Nick = v; break;
                     case "hash": c.SenhaHash = v; break;
+                    case "profilepc": if (long.TryParse(v, out var ppc)) c.CachedPc = ppc; break;
+                    case "profilecc": if (long.TryParse(v, out var pcc)) c.CachedCc = pcc; break;
+                    case "profileteamid": c.CachedTeamId = v; break;
+                    case "profileteamname": c.CachedTeamName = v; break;
+                    case "profiletheme": c.CachedThemeId = v; break;
+                    case "profilemod": c.CachedIsMod = v == "1"; break;
                     case "mic": if (int.TryParse(v, out var m)) c.MicDevice = m; break;
                     case "out": c.OutputDeviceId = v; break;
                     case "ptt": c.PushToTalk = v == "1"; break;
@@ -252,6 +268,12 @@ public sealed class Config
             {
                 "nick=" + Nick,
                 "hash=" + SenhaHash,
+                "profilepc=" + CachedPc,
+                "profilecc=" + CachedCc,
+                "profileteamid=" + CachedTeamId,
+                "profileteamname=" + CachedTeamName,
+                "profiletheme=" + CachedThemeId,
+                "profilemod=" + (CachedIsMod ? "1" : "0"),
                 "mic=" + MicDevice,
                 "out=" + OutputDeviceId,
                 "ptt=" + (PushToTalk ? "1" : "0"),
@@ -287,5 +309,15 @@ public sealed class Config
             File.WriteAllLines(Path_, linhas);
         }
         catch (Exception ex) { Log.Write("config nao salvou: " + ex.Message); }
+    }
+
+    public void CacheProfile(PrimitivaoUser user)
+    {
+        CachedPc = user.Pc;
+        CachedCc = user.Cc;
+        CachedTeamId = user.TeamId;
+        CachedTeamName = user.TeamName;
+        CachedThemeId = user.ThemeId;
+        CachedIsMod = user.IsMod;
     }
 }

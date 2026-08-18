@@ -96,8 +96,8 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
 
     private const int PunchIntervalMs = 250;   // enquanto nao conectou
     private const int KeepAliveMs = 1000;  // depois de conectado (mantem o NAT aberto)
-    private const int PresenceSyncMs = 2000;  // poll do Firestore
-    private const int PeerStaleMs = 15000; // sem heartbeat no Firestore = saiu
+    private const int PresenceSyncMs = 10_000;  // descoberta de pares; midia segue P2P
+    private const int PeerStaleMs = 45_000; // tolera tres ciclos perdidos sem expulsar
 
     private readonly Firestore _fs;
     private readonly string _roomId;
@@ -308,12 +308,14 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
 
     private async Task PresenceLoopAsync(CancellationToken ct)
     {
+        int delayMs = PresenceSyncMs;
         while (_running && !ct.IsCancellationRequested)
         {
             try
             {
                 await PublishPresenceAsync(full: false).ConfigureAwait(false);
                 await SyncPeersAsync(ct).ConfigureAwait(false);
+                delayMs = PresenceSyncMs;
             }
             catch (FirestoreException ex)
             {
@@ -324,10 +326,17 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
                                  + "do pc_rooms no Firebase Console.");
                     return;
                 }
+                delayMs = ex.IsQuotaExceeded
+                    ? Math.Min(15 * 60_000, Math.Max(60_000, delayMs * 2))
+                    : Math.Min(5 * 60_000, Math.Max(30_000, delayMs * 2));
             }
-            catch (Exception ex) { Log.Write("presenca falhou: " + ex.Message); }
+            catch (Exception ex)
+            {
+                Log.Write("presenca falhou: " + ex.Message);
+                delayMs = Math.Min(5 * 60_000, Math.Max(30_000, delayMs * 2));
+            }
 
-            try { await Task.Delay(PresenceSyncMs, ct).ConfigureAwait(false); }
+            try { await Task.Delay(delayMs, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
         }
     }

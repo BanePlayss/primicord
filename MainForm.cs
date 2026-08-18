@@ -104,6 +104,9 @@ public sealed class MainForm : Form
     private System.Windows.Forms.Timer? _pollTimer, _voiceTimer;
     private int _pollTick;
     private bool _polling;
+    private DateTimeOffset _pollBackoffUntil;
+    private int _pollBackoffLevel;
+    private bool _serverBanner;
 
     public MainForm()
     {
@@ -153,6 +156,8 @@ public sealed class MainForm : Form
         _banner.Height = 42;
         _banner.Visible = true;
     }
+
+    private bool ServerBackoffActive => DateTimeOffset.UtcNow < _pollBackoffUntil;
 
     private static Label SectionLabel(string text) => new()
     {
@@ -245,7 +250,13 @@ public sealed class MainForm : Form
         if (_loginNick == null || _loginPass == null) return;
         SetLoginBusy(true, "");
         var res = await Primitivao.AuthenticateAsync(_fs, _loginNick.Value, _loginPass.Value);
-        if (!res.Ok) { SetLoginBusy(false, res.Error ?? "Nao consegui entrar"); return; }
+        if (!res.Ok)
+        {
+            string hash = Primitivao.HashPassword(_loginPass.Value);
+            if (res.Transient && TryCachedLogin(_loginNick.Value, hash, res)) return;
+            SetLoginBusy(false, res.Error ?? "Nao consegui entrar");
+            return;
+        }
         OnLoggedIn(res.User!);
     }
 
@@ -255,15 +266,33 @@ public sealed class MainForm : Form
         var res = await Primitivao.AuthenticateWithHashAsync(_fs, _cfg.Nick, _cfg.SenhaHash);
         if (res.Ok) { OnLoggedIn(res.User!); return; }
         Log.Write("auto-login falhou: " + res.Error);
+        if (res.Transient && TryCachedLogin(_cfg.Nick, _cfg.SenhaHash, res)) return;
         SetLoginBusy(false, res.Error ?? "");
     }
 
-    private void OnLoggedIn(PrimitivaoUser user)
+    private bool TryCachedLogin(string nick, string hash, Primitivao.AuthResult failure)
     {
-        if (InvokeRequired) { BeginInvoke(() => OnLoggedIn(user)); return; }
+        var cached = Primitivao.AuthenticateCached(_cfg, nick, hash);
+        if (cached == null) return false;
+
+        int seconds = failure.QuotaExceeded ? 15 * 60 : 30;
+        _pollBackoffLevel = 1;
+        _pollBackoffUntil = DateTimeOffset.UtcNow.AddSeconds(seconds);
+        Log.Write($"login pelo perfil salvo; nova tentativa do servidor em {seconds}s");
+        OnLoggedIn(cached, cacheProfile: false);
+        _serverBanner = true;
+        ShowBanner((failure.Error ?? "Servidor indisponivel") +
+                   $" Perfil salvo ativo; nova tentativa em {(seconds >= 60 ? seconds / 60 + " min" : seconds + " s")}.");
+        return true;
+    }
+
+    private void OnLoggedIn(PrimitivaoUser user, bool cacheProfile = true)
+    {
+        if (InvokeRequired) { BeginInvoke(() => OnLoggedIn(user, cacheProfile)); return; }
         _me = user;
         _cfg.Nick = user.Nick;
         _cfg.SenhaHash = user.SenhaHash;
+        if (cacheProfile) _cfg.CacheProfile(user);
         _cfg.Save();
         _chat = new ChatService(_fs, user.Nick);
 
@@ -410,7 +439,10 @@ public sealed class MainForm : Form
         SelectView("primitivao");
         RebuildRail();
 
-        _pollTimer = new System.Windows.Forms.Timer { Interval = 2000 };
+        // O shell nao precisa reler sala, presenca e chat a cada 2s. A voz tem seu
+        // proprio ciclo enquanto esta numa call; aqui 10s e suficiente e preserva
+        // a cota compartilhada do Firestore.
+        _pollTimer = new System.Windows.Forms.Timer { Interval = 10_000 };
         _pollTimer.Tick += async (_, _) => await PollAsync();
         _pollTimer.Start();
         _ = PollAsync();
@@ -752,7 +784,7 @@ public sealed class MainForm : Form
             _primitivao ??= new PrimitivaoView { Dock = DockStyle.Fill };
             _primitivao.MeuNick = Nick;
             _contentHost.Controls.Add(_primitivao);
-            _ = RefreshCampeonatoAsync();
+            if (!ServerBackoffActive) _ = RefreshCampeonatoAsync();
         }
         else
         {
@@ -768,7 +800,7 @@ public sealed class MainForm : Form
             }
             _chatView.SetMessages(new List<ChatMessage>(), Nick);
             _chatView.FocusComposer();
-            _ = RefreshChatAsync();
+            if (!ServerBackoffActive) _ = RefreshChatAsync();
         }
         _contentHost.ResumeLayout();
         UpdateRightContext();
@@ -808,7 +840,7 @@ public sealed class MainForm : Form
             _roomChatView.SetHeader("CHAT DA SALA", _voiceRoomName);
             _roomChatView.ComposerPlaceholder = "Mensagem para a sala...";
             _roomHeader?.Invalidate();
-            _ = RefreshChatAsync();
+            if (!ServerBackoffActive) _ = RefreshChatAsync();
         }
     }
 
@@ -825,6 +857,11 @@ public sealed class MainForm : Form
 
     private async Task OnRoomClickedAsync(string roomId, string roomName)
     {
+        if (ServerBackoffActive && _voiceRoomId != roomId)
+        {
+            ShowBanner("Servidor em recuo temporario; nao da para entrar em outra sala agora.");
+            return;
+        }
         // Ja estou nessa call? So mostra os tiles. Senao, entra.
         if (_voiceRoomId != roomId) await JoinVoiceAsync(roomId, roomName);
         SelectView("room:" + roomId);
@@ -841,13 +878,18 @@ public sealed class MainForm : Form
     private async Task OnSendMessageAsync(string text)
     {
         if (_chat == null) return;
+        if (ServerBackoffActive)
+        {
+            ShowBanner("Servidor em recuo temporario; a mensagem nao foi enviada.");
+            return;
+        }
         try
         {
             if (_view == "geral") await _chat.SendToChannelAsync(ChatService.GeneralChannel, text);
             else if (_view.StartsWith("dm:")) await _chat.SendDmAsync(_view[3..], text);
             else if (_view.StartsWith("room:"))
                 await _chat.SendToChannelAsync(ChatService.RoomChannel(_view[5..]), text);
-            await RefreshChatAsync();
+            await RefreshChatAsync(propagateFirestore: true);
         }
         catch (FirestoreException ex) when (ex.IsPermissionDenied)
         {
@@ -867,13 +909,18 @@ public sealed class MainForm : Form
     private async Task PollAsync()
     {
         if (_polling || _me == null || _chat == null) return;
+        if (DateTimeOffset.UtcNow < _pollBackoffUntil) return;
         _polling = true;
         try
         {
             _pollTick++;
+            // Ao sair de um recuo, força um ciclo completo. Sem isso uma tela que
+            // nao usa chat poderia "se recuperar" sem fazer nenhuma leitura real.
+            bool first = _pollTick == 1 || _pollBackoffLevel > 0;
 
-            // Heartbeat de presenca a cada ~20s.
-            if (_pollTick % 10 == 1)
+            // Heartbeat global a cada minuto. A presenca P2P da sala tem ciclo
+            // separado; escrever aqui a cada 20s triplicava custo sem melhorar voz.
+            if (first || _pollTick % 6 == 1)
                 try { await _chat.HeartbeatAsync(_voiceRoomId.Length > 0 ? _voiceRoomName : ""); }
                 catch (FirestoreException ex) when (ex.IsPermissionDenied)
                 {
@@ -884,37 +931,98 @@ public sealed class MainForm : Form
 
             if (_members.Count == 0) _members = await Primitivao.ListMembersAsync(_fs);
 
-            // Classificacao: a cada ~60s, nao a cada 2s como o resto. Placar de
+            // Classificacao: a cada ~5min. Placar de
             // futebol nao muda em dois segundos, e o doc, por menor que seja, e
             // uma leitura a mais por ciclo pra todo mundo que estiver com o app
             // aberto. O primeiro tick busca na hora pra tabela nao nascer vazia.
-            // O doc do LoL tem 134KB mesmo com mascara (contra 4KB do FIFA), entao
-            // este e mais espacado ainda: a cada ~2min. Placar de campeonato que
-            // roda uma vez por semana nao precisa de mais que isso.
-            if (_pollTick == 1 || _pollTick % 60 == 0) await RefreshCampeonatoAsync();
+            if (first || _pollTick % 30 == 1)
+                await RefreshCampeonatoAsync(propagateFirestore: true);
 
-            try { _presence = await _chat.ReadPresenceAsync(); } catch { }
+            // Lista global e cara porque cada pessoa e um documento. Dois minutos
+            // equilibram presenca util e a cota compartilhada.
+            if (first || _pollTick % 12 == 1)
+            {
+                _presence = await _chat.ReadPresenceAsync();
+                RefreshMembers();
+            }
 
-            var rooms = await _dir.ListAsync();
-            bool roomsChanged = rooms.Count != _rooms.Count ||
-                rooms.Zip(_rooms).Any(t => t.First.Id != t.Second.Id || t.First.Count != t.Second.Count);
-            _rooms = rooms;
+            // Lobby a cada dois minutos e SEM o antigo N+1 de peers por sala. Os
+            // ocupantes das outras salas saem da presenca global; a sala atual e
+            // atualizada imediatamente pela RoomSession.
+            if (first || _pollTick % 12 == 1)
+            {
+                var rooms = await _dir.ListAsync(includeOccupants: false);
+                foreach (var room in rooms)
+                    foreach (var presence in _presence.Values)
+                        if (presence.Online && string.Equals(presence.Room, room.Name,
+                                                             StringComparison.OrdinalIgnoreCase))
+                            room.Occupants.Add(presence.Nick);
+                bool roomsChanged = rooms.Count != _rooms.Count ||
+                    rooms.Zip(_rooms).Any(t => t.First.Id != t.Second.Id ||
+                                               t.First.Count != t.Second.Count);
+                _rooms = rooms;
+                if (roomsChanged || first) RebuildRail();
+            }
 
-            await RefreshChatAsync();
-            RefreshMembers();
-            if (roomsChanged || _pollTick % 5 == 1) RebuildRail();
+            // O cache incremental do chat busca so mensagens posteriores ao cursor.
+            // Fora de canal/DM/sala, nao consulta conversa ficticia nenhuma.
+            await RefreshChatAsync(propagateFirestore: true);
+            ClearServerBackoff();
         }
         catch (FirestoreException ex) when (ex.IsPermissionDenied)
         {
             ShowBanner("O Firestore recusou a leitura — falta publicar as rules no Firebase Console.");
             _pollTimer?.Stop();
         }
-        catch (Exception ex) { Log.Write("poll falhou: " + ex.Message); }
+        catch (FirestoreException ex)
+        {
+            ApplyServerBackoff(ex.IsQuotaExceeded, ex.Message);
+        }
+        catch (HttpRequestException ex)
+        {
+            ApplyServerBackoff(quota: false, ex.Message);
+        }
+        catch (TaskCanceledException ex)
+        {
+            ApplyServerBackoff(quota: false, ex.Message);
+        }
+        catch (Exception ex)
+        {
+            Log.Write("poll falhou: " + ex.Message);
+            ApplyServerBackoff(quota: false, ex.Message);
+        }
         finally { _polling = false; }
     }
 
+    private void ApplyServerBackoff(bool quota, string reason)
+    {
+        _pollBackoffLevel = Math.Min(5, _pollBackoffLevel + 1);
+        int seconds = quota
+            ? Math.Min(3600, 15 * 60 * (1 << Math.Min(2, _pollBackoffLevel - 1)))
+            : Math.Min(300, 30 * (1 << Math.Min(3, _pollBackoffLevel - 1)));
+        _pollBackoffUntil = DateTimeOffset.UtcNow.AddSeconds(seconds);
+        _serverBanner = true;
+        string wait = seconds >= 60 ? seconds / 60 + " min" : seconds + " s";
+        string text = quota
+            ? $"Limite de leituras do servidor atingido. Modo offline; nova tentativa em {wait}."
+            : $"Servidor temporariamente indisponivel. Nova tentativa em {wait}.";
+        ShowBanner(text);
+        Log.Write($"poll em recuo por {seconds}s: {reason}");
+    }
+
+    private void ClearServerBackoff()
+    {
+        if (_pollBackoffLevel == 0 && !_serverBanner) return;
+        _pollBackoffLevel = 0;
+        _pollBackoffUntil = default;
+        if (!_serverBanner) return;
+        _serverBanner = false;
+        _banner.Visible = false;
+        _banner.Height = 0;
+    }
+
     /// <summary>Le a tabela do Primitivao e joga na coluna da direita.</summary>
-    private async Task RefreshCampeonatoAsync()
+    private async Task RefreshCampeonatoAsync(bool propagateFirestore = false)
     {
         if (_tabela == null || _tabela.IsDisposed) return;
         try
@@ -951,12 +1059,18 @@ public sealed class MainForm : Form
                     _apostasHead.Visible = abertas.Count > 0;
             }
         }
+        catch (FirestoreException ex)
+        {
+            if (propagateFirestore) throw;
+            Log.Write("campeonato: " + ex.Message);
+        }
         catch (Exception ex) { Log.Write("campeonato: " + ex.Message); }
     }
 
-    private async Task RefreshChatAsync()
+    private async Task RefreshChatAsync(bool propagateFirestore = false)
     {
         if (_chat == null || _chatView == null || _chatView.IsDisposed) return;
+        if (!_view.StartsWith("room:") && _view != "geral" && !_view.StartsWith("dm:")) return;
         try
         {
             if (_view.StartsWith("room:"))
@@ -973,7 +1087,11 @@ public sealed class MainForm : Form
                 if (!_chatView.IsDisposed) _chatView.SetMessages(msgs, Nick);
             }
         }
-        catch (FirestoreException ex) when (ex.IsPermissionDenied) { throw; }
+        catch (FirestoreException ex)
+        {
+            if (propagateFirestore) throw;
+            Log.Write("ler chat falhou: " + ex.Message);
+        }
         catch (Exception ex) { Log.Write("ler chat falhou: " + ex.Message); }
     }
 
@@ -1025,6 +1143,11 @@ public sealed class MainForm : Form
 
     private async Task CreateRoomAsync()
     {
+        if (ServerBackoffActive)
+        {
+            ShowBanner("Servidor em recuo temporario; nao da para criar sala agora.");
+            return;
+        }
         string? name = PromptDialog.Ask(this, "NOVA SALA DE VOZ", "Nome da sala",
                                         "ex: RANQUEADA, RESENHA...");
         if (string.IsNullOrWhiteSpace(name)) return;
@@ -1351,6 +1474,9 @@ public sealed class MainForm : Form
         }
         _roomKnownPeers.Clear();
         _roomActivity?.Reset(roomName);
+        var joiningRoom = _rooms.FirstOrDefault(r => r.Id == roomId);
+        if (joiningRoom != null && !joiningRoom.Occupants.Contains(Nick, StringComparer.OrdinalIgnoreCase))
+            joiningRoom.Occupants.Add(Nick);
         _myTile = new PeerTile { Nick = Nick, IsMe = true, Connected = true };
         _arena.SetOwn(_myTile, myPosition);
         _audioMuted = false;
@@ -1422,6 +1548,8 @@ public sealed class MainForm : Form
         _voice = null;
         _webrtc = null;
         _session = null;
+        var leavingRoom = _rooms.FirstOrDefault(r => r.Id == _voiceRoomId);
+        leavingRoom?.Occupants.RemoveAll(n => string.Equals(n, Nick, StringComparison.OrdinalIgnoreCase));
         _voiceRoomId = "";
         _voiceRoomName = "";
         _peerTiles.Clear();
@@ -1447,6 +1575,20 @@ public sealed class MainForm : Form
         foreach (string left in _roomKnownPeers.Except(currentNames, StringComparer.OrdinalIgnoreCase))
             _roomActivity?.Push($"{left} saiu da sala", "agora");
         _roomKnownPeers = currentNames;
+
+        var activeRoom = _rooms.FirstOrDefault(r => r.Id == _voiceRoomId);
+        if (activeRoom != null)
+        {
+            var occupants = currentNames.Append(Nick).Distinct(StringComparer.OrdinalIgnoreCase)
+                                        .OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+            var old = activeRoom.Occupants.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+            if (!occupants.SequenceEqual(old, StringComparer.OrdinalIgnoreCase))
+            {
+                activeRoom.Occupants.Clear();
+                activeRoom.Occupants.AddRange(occupants);
+                RebuildRail();
+            }
+        }
 
         foreach (var p in peers)
         {

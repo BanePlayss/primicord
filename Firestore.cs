@@ -168,20 +168,54 @@ public sealed class Firestore
         string parentPath, string collectionId, string orderField, bool descending, int limit,
         CancellationToken ct = default)
     {
-        var body = new JsonObject
+        var query = new JsonObject
         {
-            ["structuredQuery"] = new JsonObject
+            ["from"] = new JsonArray(new JsonObject { ["collectionId"] = collectionId }),
+            ["orderBy"] = new JsonArray(new JsonObject
             {
-                ["from"] = new JsonArray(new JsonObject { ["collectionId"] = collectionId }),
-                ["orderBy"] = new JsonArray(new JsonObject
+                ["field"] = new JsonObject { ["fieldPath"] = orderField },
+                ["direction"] = descending ? "DESCENDING" : "ASCENDING",
+            }),
+            ["limit"] = limit,
+        };
+        return await RunQueryAsync(parentPath, query, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Busca somente documentos cujo campo numerico e maior ou igual ao cursor.
+    /// Usado pelo chat depois da primeira carga: em vez de reler 60 mensagens a
+    /// cada poll, normalmente recebe zero ou uma.
+    /// </summary>
+    public async Task<List<(string Id, Dictionary<string, object?> Fields)>> QuerySinceAsync(
+        string parentPath, string collectionId, string orderField, long sinceInclusive, int limit,
+        CancellationToken ct = default)
+    {
+        var query = new JsonObject
+        {
+            ["from"] = new JsonArray(new JsonObject { ["collectionId"] = collectionId }),
+            ["where"] = new JsonObject
+            {
+                ["fieldFilter"] = new JsonObject
                 {
                     ["field"] = new JsonObject { ["fieldPath"] = orderField },
-                    ["direction"] = descending ? "DESCENDING" : "ASCENDING",
-                }),
-                ["limit"] = limit,
+                    ["op"] = "GREATER_THAN_OR_EQUAL",
+                    ["value"] = new JsonObject { ["integerValue"] = sinceInclusive.ToString() },
+                },
             },
+            ["orderBy"] = new JsonArray(new JsonObject
+            {
+                ["field"] = new JsonObject { ["fieldPath"] = orderField },
+                ["direction"] = "ASCENDING",
+            }),
+            ["limit"] = limit,
         };
+        return await RunQueryAsync(parentPath, query, ct).ConfigureAwait(false);
+    }
 
+    private async Task<List<(string Id, Dictionary<string, object?> Fields)>> RunQueryAsync(
+        string parentPath, JsonObject structuredQuery, CancellationToken ct)
+    {
+        var body = new JsonObject { ["structuredQuery"] = structuredQuery };
         string url = Base + "/" + parentPath.Trim('/') + ":runQuery?key=" + ApiKey;
         using var content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
         using var resp = await _http.PostAsync(url, content, ct).ConfigureAwait(false);
@@ -290,4 +324,12 @@ public sealed class FirestoreException : Exception
     /// <summary>true quando a rules recusou — sinal de que falta publicar as rules.</summary>
     public bool IsPermissionDenied =>
         Message.Contains("403") || Message.Contains("PERMISSION_DENIED", StringComparison.OrdinalIgnoreCase);
+
+    public bool IsQuotaExceeded =>
+        Message.Contains("429") || Message.Contains("RESOURCE_EXHAUSTED", StringComparison.OrdinalIgnoreCase)
+                                || Message.Contains("Quota exceeded", StringComparison.OrdinalIgnoreCase);
+
+    public bool IsTransient => IsQuotaExceeded || Message.Contains("408") || Message.Contains("425")
+        || Message.Contains("500") || Message.Contains("502") || Message.Contains("503")
+        || Message.Contains("504") || Message.Contains("UNAVAILABLE", StringComparison.OrdinalIgnoreCase);
 }

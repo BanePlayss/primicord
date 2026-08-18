@@ -3,6 +3,15 @@
 O Discord dos primitivos — app nativo de Windows pra sala de voz em grupo,
 compartilhar tela e tirar clipe dos últimos segundos.
 
+## 0.6.8 — login resiliente e economia de cota
+
+- Identifica corretamente `429 / Quota exceeded`, sem chamar de falta de internet.
+- Abre com a identidade salva quando o servidor está temporariamente indisponível.
+- Aplica recuo progressivo e para de repetir requisições durante o bloqueio.
+- Reduz a frequência de salas, presença, campeonato e heartbeat.
+- O chat mantém um cursor e busca somente mensagens novas depois da primeira carga.
+- Não consulta mais uma DM inexistente enquanto a tela do Primitivão está aberta.
+
 ## 0.6.7 — sala social redesenhada
 
 - Arena central maior, sem o antigo “cartão dentro do Discord”.

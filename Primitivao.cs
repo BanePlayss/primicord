@@ -120,7 +120,8 @@ public static class Primitivao
         return sb.ToString();
     }
 
-    public sealed record AuthResult(PrimitivaoUser? User, string? Error)
+    public sealed record AuthResult(PrimitivaoUser? User, string? Error,
+                                    bool Transient = false, bool QuotaExceeded = false)
     {
         public bool Ok => User != null;
     }
@@ -134,6 +135,30 @@ public static class Primitivao
     public static async Task<AuthResult> AuthenticateWithHashAsync(Firestore fs, string nick, string hash,
                                                                     CancellationToken ct = default)
         => await AuthCoreAsync(fs, nick, hash, null, ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// Reabre a identidade validada no último login quando o Firestore está fora.
+    /// Nunca aceita outro nick ou outra senha: ambos precisam bater com o config.
+    /// </summary>
+    public static PrimitivaoUser? AuthenticateCached(Config cfg, string nick, string senhaHash)
+    {
+        nick = (nick ?? "").Trim().ToLowerInvariant().TrimStart('@');
+        if (!string.Equals(nick, cfg.Nick, StringComparison.OrdinalIgnoreCase)) return null;
+        if (senhaHash.Length == 0 || !string.Equals(senhaHash, cfg.SenhaHash, StringComparison.Ordinal))
+            return null;
+
+        return new PrimitivaoUser
+        {
+            Nick = nick,
+            SenhaHash = senhaHash,
+            Pc = cfg.CachedPc,
+            Cc = cfg.CachedCc,
+            TeamId = cfg.CachedTeamId,
+            TeamName = cfg.CachedTeamName,
+            ThemeId = cfg.CachedThemeId,
+            IsMod = cfg.CachedIsMod || ModNicks.Contains(nick, StringComparer.OrdinalIgnoreCase),
+        };
+    }
 
     private static async Task<AuthResult> AuthCoreAsync(Firestore fs, string nick, string senhaHash,
                                                          string? senhaPlain, CancellationToken ct)
@@ -153,10 +178,25 @@ public static class Primitivao
 
         Dictionary<string, object?>? doc;
         try { doc = await fs.GetAsync("primitivao/apostas", ct).ConfigureAwait(false); }
-        catch (Exception ex)
+        catch (FirestoreException ex)
         {
             Log.Write("login: nao li o doc de apostas: " + ex.Message);
-            return new AuthResult(null, "Nao consegui falar com o Primitivao. Sem internet?");
+            string error = ex.IsQuotaExceeded
+                ? "O servidor atingiu o limite de leituras. Entrando com o perfil salvo."
+                : ex.IsTransient
+                    ? "O servidor do Primitivao esta temporariamente indisponivel."
+                    : "O Firestore recusou o login: " + ex.Message;
+            return new AuthResult(null, error, ex.IsTransient, ex.IsQuotaExceeded);
+        }
+        catch (HttpRequestException ex)
+        {
+            Log.Write("login: rede indisponivel: " + ex.Message);
+            return new AuthResult(null, "Sem conexao com o servidor. Entrando com o perfil salvo.", true);
+        }
+        catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            Log.Write("login: servidor demorou demais: " + ex.Message);
+            return new AuthResult(null, "O servidor demorou demais para responder.", true);
         }
         if (doc == null) return new AuthResult(null, "O doc do Primitivao nao existe");
 
@@ -242,7 +282,7 @@ public static class Primitivao
     public static async Task<List<string>> ListMembersAsync(Firestore fs, CancellationToken ct = default,
                                                              bool force = false)
     {
-        if (_members != null && !force) return _members;
+        if (_members is { Count: > 0 } && !force) return _members;
         var list = new List<string>();
         try
         {
@@ -252,8 +292,9 @@ public static class Primitivao
                 foreach (var (nick, _) in users) list.Add(nick);
             list.Sort(StringComparer.OrdinalIgnoreCase);
         }
+        catch (FirestoreException) { throw; }
         catch (Exception ex) { Log.Write("listar membros falhou: " + ex.Message); }
-        _members = list;
+        if (list.Count > 0) _members = list;
         return list;
     }
 
