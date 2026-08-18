@@ -75,6 +75,7 @@ public sealed class MainForm : Form
     private ApostasView? _apostas;
     private Label? _apostasHead;
     private ChatView? _chatView;
+    private PrimitivaoView? _primitivao;
     private Panel? _roomPanel;
     private FlowLayoutPanel? _tiles;
     private readonly Dictionary<uint, PeerTile> _peerTiles = new();
@@ -82,7 +83,10 @@ public sealed class MainForm : Form
     private Label? _roomStatus;
 
     // estado da navegacao: "geral" | "dm:<nick>" | "room:<id>"
-    private string _view = "geral";
+    // O centro nasce no Primitivao, e nao mais no chat. Quem esta junto aqui esta
+    // FALANDO — o canal de texto ocupando a tela inteira era espaco caro gasto com
+    // o que menos se usa. Ele continua a um clique no rail.
+    private string _view = "primitivao";
     private List<RoomInfo> _rooms = new();
     private List<string> _members = new();
     private Dictionary<string, MemberPresence> _presence = new(StringComparer.OrdinalIgnoreCase);
@@ -383,7 +387,7 @@ public sealed class MainForm : Form
         _chatView = new ChatView { Dock = DockStyle.Fill };
         _chatView.Send += OnSendMessageAsync;
 
-        SelectView("geral");
+        SelectView("primitivao");
         RebuildRail();
 
         _pollTimer = new System.Windows.Forms.Timer { Interval = 2000 };
@@ -529,6 +533,12 @@ public sealed class MainForm : Form
         // Dock=Top empilha ao contrario: montamos a lista e adicionamos invertida.
         var items = new List<Control>();
 
+        items.Add(RailHeader("PRIMITIVAO"));
+        var prim = new RailItem("Campeonato", RailItem.Kind.Action)
+        { Dock = DockStyle.Top, Active = _view == "primitivao" };
+        prim.Click += (_, _) => SelectView("primitivao");
+        items.Add(prim);
+
         items.Add(RailHeader("CANAIS"));
         var geral = new RailItem("geral", RailItem.Kind.TextChannel)
         { Dock = DockStyle.Top, Active = _view == "geral" };
@@ -603,6 +613,13 @@ public sealed class MainForm : Form
         if (view.StartsWith("room:"))
         {
             _contentHost.Controls.Add(EnsureRoomPanel());
+        }
+        else if (view == "primitivao")
+        {
+            _primitivao ??= new PrimitivaoView { Dock = DockStyle.Fill };
+            _primitivao.MeuNick = Nick;
+            _contentHost.Controls.Add(_primitivao);
+            _ = RefreshCampeonatoAsync();
         }
         else
         {
@@ -718,8 +735,14 @@ public sealed class MainForm : Form
         if (_tabela == null || _tabela.IsDisposed) return;
         try
         {
-            var painel = await CampeonatoLol.LerAsync(_fs);
+            var painel = await CampeonatoLol.LerAsync(_fs, Nick);
             if (_tabela.IsDisposed) return;
+
+            if (_primitivao != null && !_primitivao.IsDisposed)
+            {
+                _primitivao.MeuNick = Nick;
+                _primitivao.Definir(painel);
+            }
 
             _tabela.MeuNick = Nick;
             _tabela.MaxLinhas = 4;   // o TOP 4, como no rascunho

@@ -33,7 +33,9 @@ public sealed class PeerTile : Control
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
                  ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-        Size = new Size(186, 124);
+        // Quadrado e maior: no rascunho os participantes sao CIRCULOS soltos, e
+        // um cartao largo e baixo nao comporta circulo grande sem sobrar tarja.
+        Size = new Size(150, 150);
         BackColor = Pv.Char2;
     }
 
@@ -48,8 +50,14 @@ public sealed class PeerTile : Control
         var r = new Rectangle(0, 0, Width - 1, Height - 1);
         using (var b = new SolidBrush(Pv.Char2)) g.FillRectangle(b, r);
 
-        Color border = Speaking ? Pv.Green : (Punching ? Pv.OrangeDim : Pv.Char3);
-        using (var p = new Pen(border, 2)) g.DrawRectangle(p, r);
+        // A moldura so aparece quando tem o que dizer. Desenhada sempre, ela
+        // transformava a fila de participantes numa grade de caixas — o oposto
+        // dos circulos soltos do rascunho.
+        if (Speaking || Punching)
+        {
+            using var p = new Pen(Speaking ? Pv.Green : Pv.OrangeDim, 2);
+            g.DrawRectangle(p, r);
+        }
 
         // Com camera ligada, ela toma o tile inteiro e o avatar sai de cena — e o
         // que o Discord faz, e faz sentido: a foto parada nao acrescenta nada
@@ -62,8 +70,8 @@ public sealed class PeerTile : Control
         }
 
         // Avatar: a MESMA foto que o jogador usa no site; sem foto, cai na inicial.
-        int av = 52;
-        var ac = new Rectangle((Width - av) / 2, 16, av, av);
+        int av = 80;
+        var ac = new Rectangle((Width - av) / 2, 20, av, av);
         var photo = Primitivao.AvatarFor(Nick);
 
         if (photo != null)
@@ -87,7 +95,7 @@ public sealed class PeerTile : Control
         {
             using (var b = new SolidBrush(Muted || !Connected ? Pv.Char3 : Pv.Orange)) g.FillEllipse(b, ac);
             string initial = string.IsNullOrEmpty(Nick) ? "?" : Nick[..1].ToUpperInvariant();
-            using var f = new Font("Bahnschrift", 22f, FontStyle.Bold);
+            using var f = new Font("Bahnschrift", 34f, FontStyle.Bold);
             using var tb = new SolidBrush(Muted || !Connected ? Pv.BoneDim : Pv.Charcoal);
             var sz = g.MeasureString(initial, f);
             g.DrawString(initial, f, tb, ac.X + (av - sz.Width) / 2, ac.Y + (av - sz.Height) / 2);
@@ -154,8 +162,8 @@ public sealed class PeerTile : Control
     private void DrawCaption(Graphics g, bool dark)
     {
         // Com camera o texto sobe: ele fica sobre a faixa escura, nao no meio do rosto.
-        float nickY = dark ? Height - 44 : 76;
-        float statusY = dark ? Height - 26 : 95;
+        float nickY = dark ? Height - 44 : 112;
+        float statusY = dark ? Height - 26 : 130;
 
         string name = (IsMe ? Nick + " (VOCE)" : Nick).ToUpperInvariant();
         using (var b = new SolidBrush(Pv.Bone))

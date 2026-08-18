@@ -26,11 +26,25 @@ public static class CampeonatoLol
 {
     private const string DocPath = "primitivao/apostas";
 
-    /// <summary>O que a coluna da direita precisa, de uma leitura so.</summary>
-    public sealed class PainelLol
+    /// <summary>Uma noticia do Primitivao, so o cabecalho.</summary>
+    public sealed class Noticia
+    {
+        public string Tag = "";
+        public string Titulo = "";
+        public string Resumo = "";
+    }
+
+    /// <summary>
+    /// Tudo que o Primicord mostra do Primitivao, de uma leitura so.
+    /// </summary>
+    public sealed class PainelPrimitivao
     {
         public Classificacao? Tabela;
         public List<ApostaLol> Apostas = new();
+        public Noticia? Ultima;
+
+        /// <summary>Saldo de PC de quem esta logado.</summary>
+        public long MeuPc;
     }
 
     /// <summary>
@@ -40,10 +54,14 @@ public static class CampeonatoLol
     /// Separado seriam dois GET de 134KB pra montar o mesmo painel, com os dois
     /// lados podendo discordar se o placar mudasse entre um e outro.
     /// </remarks>
-    public static async Task<PainelLol?> LerAsync(Firestore fs, CancellationToken ct = default)
+    public static async Task<PainelPrimitivao?> LerAsync(Firestore fs, string meuNick = "",
+                                                        CancellationToken ct = default)
     {
         JsonNode? raw;
-        try { raw = await fs.GetRawAsync(DocPath, new[] { "json", "interests" }, ct).ConfigureAwait(false); }
+        // news custa 34KB a mais (134 -> 168). Num poll de 2 minutos, e barato
+        // pelo que entrega: a manchete e o unico conteudo do Primitivao aqui que
+        // muda por si so, sem depender de alguem lancar placar.
+        try { raw = await fs.GetRawAsync(DocPath, new[] { "json", "interests", "news" }, ct).ConfigureAwait(false); }
         catch (Exception ex) { Log.Write("lol: nao li o doc: " + ex.Message); return null; }
         if (raw == null) return null;
 
@@ -57,20 +75,66 @@ public static class CampeonatoLol
                             .ToList();
 
         JsonNode? placares = null, travas = null;
+        long meuPc = 0;
         try
         {
             string json = campos?["json"]?["stringValue"]?.GetValue<string>() ?? "{}";
-            var lol = JsonNode.Parse(json)?["lol"];
+            var raiz = JsonNode.Parse(json);
+            var lol = raiz?["lol"];
             placares = lol?["scores"];
             travas = lol?["locks"];
+
+            if (meuNick.Length > 0)
+            {
+                var eu = raiz?["users"]?[meuNick.ToLowerInvariant()];
+                try { meuPc = eu?["pc"]?.GetValue<long>() ?? 0; } catch { }
+            }
         }
         catch (Exception ex) { Log.Write("lol: placares ilegiveis: " + ex.Message); }
 
-        return new PainelLol
+        return new PainelPrimitivao
         {
             Tabela = Calcular(jogadores, placares),
             Apostas = ApostasLol.Abertas(jogadores, placares, travas),
+            Ultima = UltimaNoticia(campos?["news"]),
+            MeuPc = meuPc,
         };
+    }
+
+    /// <summary>
+    /// A noticia mais recente. Le so cabecalho — o corpo tem varios KB de
+    /// markdown por item e nao cabe (nem faz sentido) na lateral de um app de voz.
+    /// </summary>
+    private static Noticia? UltimaNoticia(JsonNode? news)
+    {
+        try
+        {
+            var itens = news?["arrayValue"]?["values"] as JsonArray;
+            if (itens == null || itens.Count == 0) return null;
+
+            // O array vem do mais novo pro mais velho no doc; ainda assim
+            // desempata por `at` quando ele existe, que e o campo confiavel.
+            JsonNode? melhor = null;
+            long melhorAt = long.MinValue;
+            foreach (var it in itens)
+            {
+                var f = it?["mapValue"]?["fields"];
+                if (f == null) continue;
+                long at = 0;
+                try { at = long.Parse(f["at"]?["integerValue"]?.GetValue<string>() ?? "0"); } catch { }
+                if (melhor == null || at > melhorAt) { melhor = f; melhorAt = at; }
+            }
+            if (melhor == null) return null;
+
+            string Str(string k)
+            {
+                try { return melhor[k]?["stringValue"]?.GetValue<string>() ?? ""; }
+                catch { return ""; }
+            }
+            var n = new Noticia { Tag = Str("tag"), Titulo = Str("title"), Resumo = Str("subtitle") };
+            return n.Titulo.Length > 0 || n.Resumo.Length > 0 ? n : null;
+        }
+        catch (Exception ex) { Log.Write("noticias ilegiveis: " + ex.Message); return null; }
     }
 
     /// <summary>A conta, separada do IO — e aqui que mora tudo que pode errar.</summary>
