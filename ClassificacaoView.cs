@@ -19,6 +19,35 @@ public sealed class ClassificacaoView : Control
     /// <summary>Nick de quem esta logado, pra destacar a propria linha.</summary>
     public string MeuNick = "";
 
+    /// <summary>Quantas posicoes mostrar. 0 = todas.</summary>
+    public int MaxLinhas;
+
+    /// <summary>
+    /// As linhas que realmente vao pra tela: o topo, mais a MINHA linha quando ela
+    /// fica de fora do corte.
+    /// </summary>
+    /// <remarks>
+    /// Mostrar so o top 4 e util pra quem esta nele. Pra quem esta em setimo, um
+    /// painel que nunca te menciona nao serve pra nada — entao a propria posicao
+    /// entra sempre, destacada e fora de ordem, com o numero real do lado.
+    /// </remarks>
+    private List<(int Pos, TimeNaTabela Time)> Linhas()
+    {
+        var saida = new List<(int, TimeNaTabela)>();
+        var t = _tabela;
+        if (t == null) return saida;
+
+        int corte = MaxLinhas > 0 ? Math.Min(MaxLinhas, t.Times.Count) : t.Times.Count;
+        for (int i = 0; i < corte; i++) saida.Add((i + 1, t.Times[i]));
+
+        if (MeuNick.Length > 0 && !saida.Any(x => x.Item2.Nick.Equals(MeuNick, StringComparison.OrdinalIgnoreCase)))
+        {
+            int meu = t.Times.FindIndex(x => x.Nick.Equals(MeuNick, StringComparison.OrdinalIgnoreCase));
+            if (meu >= 0) saida.Add((meu + 1, t.Times[meu]));
+        }
+        return saida;
+    }
+
     public ClassificacaoView()
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
@@ -30,7 +59,7 @@ public sealed class ClassificacaoView : Control
     public void Definir(Classificacao? tabela)
     {
         _tabela = tabela;
-        Height = ((tabela?.Times.Count ?? 0) * AlturaLinha) + AlturaCabecalho + 8;
+        Height = (Linhas().Count * AlturaLinha) + AlturaCabecalho + 8;
         Invalidate();
     }
 
@@ -66,9 +95,11 @@ public sealed class ClassificacaoView : Control
         }
         y += AlturaCabecalho;
 
-        for (int i = 0; i < t.Times.Count; i++)
+        var linhas = Linhas();
+        for (int li = 0; li < linhas.Count; li++)
         {
-            var time = t.Times[i];
+            var (pos, time) = linhas[li];
+            int i = pos - 1;
             bool souEu = time.Nick.Equals(MeuNick, StringComparison.OrdinalIgnoreCase);
 
             if (souEu)
@@ -80,7 +111,7 @@ public sealed class ClassificacaoView : Control
             using var b = new SolidBrush(cor);
             using var bNum = new SolidBrush(i == 0 ? Pv.Orange : Pv.Bone);
 
-            Pv.DrawTracked(g, (i + 1).ToString(), Pv.Label, b, xPos, y, 1.0f);
+            Pv.DrawTracked(g, pos.ToString(), Pv.Label, b, xPos, y, 1.0f);
 
             string nick = time.Nick.ToUpperInvariant();
             float largura = Pv.TrackedWidth(g, nick, Pv.Label, 1.0f);

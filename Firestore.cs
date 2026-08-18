@@ -103,6 +103,31 @@ public sealed class Firestore
         return ParseFields(node?["fields"]);
     }
 
+    /// <summary>
+    /// O documento CRU, pra quem precisa andar em estrutura aninhada.
+    /// </summary>
+    /// <remarks>
+    /// O <see cref="GetAsync"/> devolve so os campos rasos (string, numero, bool):
+    /// mapa dentro de mapa ele nao sabe representar. Quem precisa disso — o campo
+    /// `interests`, por exemplo — le daqui e caminha no JSON.
+    ///
+    /// <paramref name="fields"/> vira mask.fieldPaths e IMPORTA: o doc de apostas
+    /// tem 665KB, e pedindo so `json` e `interests` vem 134KB. Sao os mesmos
+    /// bytes que o app deixa de baixar a cada leitura.
+    /// </remarks>
+    public async Task<JsonNode?> GetRawAsync(string docPath, string[]? fields = null,
+                                             CancellationToken ct = default)
+    {
+        string? q = null;
+        if (fields is { Length: > 0 })
+            q = string.Join("&", fields.Select(f => "mask.fieldPaths=" + Uri.EscapeDataString(f)));
+
+        using var resp = await _http.GetAsync(Url(docPath, q), ct).ConfigureAwait(false);
+        if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
+        if (!resp.IsSuccessStatusCode) throw new FirestoreException(await Describe(resp).ConfigureAwait(false));
+        return JsonNode.Parse(await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
+    }
+
     // ─── ESCRITA ─────────────────────────────────────────────────────────────
 
     /// <summary>

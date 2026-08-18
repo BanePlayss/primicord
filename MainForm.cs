@@ -342,7 +342,7 @@ public sealed class MainForm : Form
         _tabelaHead = new Label
         {
             Dock = DockStyle.Top, Height = 34, BackColor = Pv.Char2, ForeColor = Pv.BoneDim,
-            Font = Pv.Label, Padding = new Padding(18, 12, 8, 0), Text = "CAMPEONATO",
+            Font = Pv.Label, Padding = new Padding(18, 12, 8, 0), Text = "LOL",
         };
         _tabela = new ClassificacaoView { Dock = DockStyle.Top };
         campeonato.Controls.Add(_tabela);
@@ -673,7 +673,10 @@ public sealed class MainForm : Form
             // futebol nao muda em dois segundos, e o doc, por menor que seja, e
             // uma leitura a mais por ciclo pra todo mundo que estiver com o app
             // aberto. O primeiro tick busca na hora pra tabela nao nascer vazia.
-            if (_pollTick == 1 || _pollTick % 30 == 0) await RefreshCampeonatoAsync();
+            // O doc do LoL tem 134KB mesmo com mascara (contra 4KB do FIFA), entao
+            // este e mais espacado ainda: a cada ~2min. Placar de campeonato que
+            // roda uma vez por semana nao precisa de mais que isso.
+            if (_pollTick == 1 || _pollTick % 60 == 0) await RefreshCampeonatoAsync();
 
             try { _presence = await _chat.ReadPresenceAsync(); } catch { }
 
@@ -701,14 +704,15 @@ public sealed class MainForm : Form
         if (_tabela == null || _tabela.IsDisposed) return;
         try
         {
-            var tabela = await Campeonato.LerAsync(_fs);
+            var tabela = await CampeonatoLol.LerAsync(_fs);
             if (_tabela.IsDisposed) return;
             _tabela.MeuNick = Nick;
+            _tabela.MaxLinhas = 4;   // o TOP 4, como no rascunho
             _tabela.Definir(tabela);
             if (_tabelaHead != null && !_tabelaHead.IsDisposed)
             {
                 string resumo = _tabela.Resumo;
-                _tabelaHead.Text = resumo.Length > 0 ? "CAMPEONATO  ·  " + resumo : "CAMPEONATO";
+                _tabelaHead.Text = resumo.Length > 0 ? "LOL  ·  " + resumo : "LOL";
             }
         }
         catch (Exception ex) { Log.Write("campeonato: " + ex.Message); }
