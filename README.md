@@ -105,5 +105,5 @@ Ver [docs/PLANO-DE-MIGRACAO.md](docs/PLANO-DE-MIGRACAO.md) pro que vem depois.
 
 **Passo manual pendente:** publicar as rules do `pc_rooms` no Firebase Console,
 cobrindo `peers/**` e — se for usar `webrtc=1` — também `signal/**`. Sem isso o
-app não lista nem cria sala. A versão 0.6.6 também usa `social/**` para conservar
-a posição/tamanho da bolinha depois que o jogador sai.
+app não lista nem cria sala. A posição social reutiliza `peers/**`, então não
+exige uma regra nova na versão 0.6.6.

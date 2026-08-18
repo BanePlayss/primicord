@@ -31,6 +31,9 @@ public sealed class RoomSocialTests
                      RoomSocialService.DocumentIdFor("bane"));
         Assert.NotEqual(RoomSocialService.DocumentIdFor("bane"),
                         RoomSocialService.DocumentIdFor("ricle"));
+        Assert.Equal("pc_rooms/sala-03/peers/saved-social-" +
+                     RoomSocialService.DocumentIdFor("bane"),
+                     RoomSocialService.DocumentPathFor("sala-03", "bane"));
     }
 
     [Fact]

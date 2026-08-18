@@ -53,7 +53,7 @@ public sealed class RoomSocialService
     public async Task<SocialPosition?> LoadAsync(string roomId, string nick,
                                                   CancellationToken ct = default)
     {
-        var fields = await _fs.GetAsync(PathFor(roomId, nick), ct).ConfigureAwait(false);
+        var fields = await _fs.GetAsync(DocumentPathFor(roomId, nick), ct).ConfigureAwait(false);
         if (fields == null) return null;
 
         return new SocialPosition(
@@ -66,13 +66,16 @@ public sealed class RoomSocialService
                           CancellationToken ct = default)
     {
         position = position.Normalized();
-        return _fs.SetAsync(PathFor(roomId, nick), new Dictionary<string, object?>
+        return _fs.SetAsync(DocumentPathFor(roomId, nick), new Dictionary<string, object?>
         {
             ["nick"] = nick,
             ["x"] = position.X,
             ["y"] = position.Y,
             ["scale"] = position.Scale,
             ["updatedAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            // Documento reservado dentro da colecao que as rules atuais ja aceitam.
+            // Zero garante que RoomDirectory/RoomSession nunca contem isto como gente.
+            ["lastSeen"] = 0L,
         }, mergeFields: true, ct);
     }
 
@@ -82,6 +85,6 @@ public sealed class RoomSocialService
         return Convert.ToHexString(hash.AsSpan(0, 12)).ToLowerInvariant();
     }
 
-    private static string PathFor(string roomId, string nick)
-        => $"pc_rooms/{roomId}/social/{DocumentIdFor(nick)}";
+    public static string DocumentPathFor(string roomId, string nick)
+        => $"pc_rooms/{roomId}/peers/saved-social-{DocumentIdFor(nick)}";
 }
