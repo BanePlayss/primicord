@@ -89,6 +89,25 @@ public sealed class ProtocolTests
     }
 
     [Fact]
+    public async Task Movimento_social_chega_normalizado_em_tempo_real()
+    {
+        var (a, b) = await PairAsync();
+        using (a) using (b)
+        {
+            SocialPosition? got = null;
+            b.SocialMoved += (_, position) => got = position;
+
+            a.UpdateSocial(new SocialPosition(0.23, 0.81, 116), final: true);
+
+            Assert.True(await Wait.UntilAsync(() => got != null, 5_000),
+                        "a posicao social nao chegou");
+            Assert.Equal(0.23, got!.Value.X, 3);
+            Assert.Equal(0.81, got.Value.Y, 3);
+            Assert.Equal(116, got.Value.Scale);
+        }
+    }
+
+    [Fact]
     public async Task Quadro_de_tela_fragmentado_remonta_byte_a_byte()
     {
         var (a, b) = await PairAsync();

@@ -95,7 +95,8 @@ public sealed class RailItem : Control
         {
             var font = Active ? Pv.BodyBold : Pv.Body;
             string t = Text;
-            float avail = r.Right - textX - (Suffix.Length > 0 ? 34 : 10);
+            float suffixWidth = Suffix.Length > 0 ? g.MeasureString(Suffix, Pv.Label).Width + 18 : 10;
+            float avail = r.Right - textX - suffixWidth;
             while (t.Length > 3 && g.MeasureString(t, font).Width > avail) t = t[..^1];
             if (t != Text) t = t[..Math.Max(1, t.Length - 1)] + "…";
             g.DrawString(t, font, b, textX, r.Y + (r.Height - font.Height) / 2f);

@@ -53,6 +53,12 @@ public sealed class ChatService
 
     private static string ChannelMsgs(string channel) => $"pc_chat/{channel}/msgs";
 
+    /// <summary>Canal textual isolado da sala, dentro do sistema de chat existente.</summary>
+    public static string RoomChannel(string roomId)
+        => "sala-" + Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(roomId))
+        ).AsSpan(0, 10).ToString().ToLowerInvariant();
+
     /// <summary>
     /// Caminho da DM. A chave e o par de nicks em ordem alfabetica, pros dois lados
     /// caírem sempre na mesma conversa (bane+juca e juca+bane = "bane__juca").

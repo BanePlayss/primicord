@@ -75,6 +75,14 @@ public sealed class RoomDirectory
         }
         catch (Exception ex) { Log.Write("limpar peers falhou: " + ex.Message); }
 
+        try
+        {
+            var social = await _fs.ListAsync($"pc_rooms/{roomId}/social", ct: ct).ConfigureAwait(false);
+            foreach (var (sid, _) in social)
+                await _fs.DeleteAsync($"pc_rooms/{roomId}/social/{sid}", ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) { Log.Write("limpar posicoes sociais falhou: " + ex.Message); }
+
         await _fs.DeleteAsync($"pc_rooms/{roomId}", ct).ConfigureAwait(false);
         Log.Write($"sala apagada: {roomId}");
     }

@@ -1,10 +1,11 @@
+using System.ComponentModel;
 using System.Drawing.Drawing2D;
 
 namespace Primicord;
 
 /// <summary>
-/// O cartao de um participante: inicial, nick, se esta mudo e se ja conectou.
-/// A borda acende em verde quando a pessoa esta falando.
+/// A bolinha social de um participante. Foto/camera ficam no centro, o halo mostra
+/// presenca e voz, e nome/microfone acompanham o jogador pela arena.
 /// </summary>
 public sealed class PeerTile : Control
 {
@@ -13,33 +14,45 @@ public sealed class PeerTile : Control
     public bool Muted;
     public bool Sharing;
     public bool Connected = true;
-    public bool Punching;      // ainda furando o NAT
-    public int SilentSeconds;  // ha quanto tempo tenta furar sem resposta
-    public float Level;        // 0..1 nivel de voz agora
+    public bool Punching;
+    public int SilentSeconds;
+    public float Level;
 
-    /// <summary>
-    /// Ultimo quadro da camera desta pessoa, ou null se ela esta sem camera.
-    /// </summary>
-    /// <remarks>
-    /// O tile NAO e dono desta imagem e nao a descarta: quem manda no ciclo de vida
-    /// dela e o MainForm, que troca o quadro varias vezes por segundo. Descartar
-    /// aqui derrubaria o quadro que ja esta sendo pintado noutra passada.
-    /// </remarks>
+    /// <summary>Ultimo quadro da camera; o tile nao e dono da imagem.</summary>
     public Image? Cam;
 
     private const float SpeakThreshold = 0.045f;
+    private int _avatarDiameter = SocialPosition.DefaultScale;
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public int AvatarDiameter
+    {
+        get => _avatarDiameter;
+        set
+        {
+            int next = Math.Clamp(value, SocialPosition.MinScale, SocialPosition.MaxScale);
+            if (next == _avatarDiameter && Width > 0) return;
+            _avatarDiameter = next;
+            Size = new Size(Math.Max(116, next + 30), next + 56);
+            Invalidate();
+        }
+    }
+
+    /// <summary>Centro geometrico usado pela arena para posicionar a bolinha.</summary>
+    public PointF AvatarCenter => new(Width / 2f, 10 + AvatarDiameter / 2f);
+
+    public bool Speaking => Level > SpeakThreshold && !Muted && Connected;
 
     public PeerTile()
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
-                 ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-        // Quadrado e maior: no rascunho os participantes sao CIRCULOS soltos, e
-        // um cartao largo e baixo nao comporta circulo grande sem sobrar tarja.
-        Size = new Size(150, 150);
-        BackColor = Pv.Char2;
+                 ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw |
+                 ControlStyles.SupportsTransparentBackColor | ControlStyles.Selectable, true);
+        BackColor = Color.Transparent;
+        Cursor = Cursors.Hand;
+        TabStop = true;
+        AvatarDiameter = SocialPosition.DefaultScale;
     }
-
-    public bool Speaking => Level > SpeakThreshold && !Muted && Connected;
 
     protected override void OnPaint(PaintEventArgs e)
     {
@@ -47,162 +60,123 @@ public sealed class PeerTile : Control
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
-        var r = new Rectangle(0, 0, Width - 1, Height - 1);
-        using (var b = new SolidBrush(Pv.Char2)) g.FillRectangle(b, r);
+        int haloSize = AvatarDiameter;
+        var halo = new Rectangle((Width - haloSize) / 2, 8, haloSize, haloSize);
+        Color accent = AccentFor(Nick);
+        if (!Connected) accent = Pv.BoneDim;
+        else if (Muted) accent = Color.FromArgb(145, 112, 160);
 
-        // A moldura so aparece quando tem o que dizer. Desenhada sempre, ela
-        // transformava a fila de participantes numa grade de caixas — o oposto
-        // dos circulos soltos do rascunho.
-        if (Speaking || Punching)
-        {
-            using var p = new Pen(Speaking ? Pv.Green : Pv.OrangeDim, 2);
-            g.DrawRectangle(p, r);
-        }
-
-        // Com camera ligada, ela toma o tile inteiro e o avatar sai de cena — e o
-        // que o Discord faz, e faz sentido: a foto parada nao acrescenta nada
-        // quando existe a pessoa ao vivo.
-        var cam = Cam;
-        if (cam != null && TryDrawCam(g, cam, r))
-        {
-            DrawCaption(g, dark: true);
-            return;
-        }
-
-        // Avatar: a MESMA foto que o jogador usa no site; sem foto, cai na inicial.
-        int av = 80;
-        var ac = new Rectangle((Width - av) / 2, 20, av, av);
-        var photo = Primitivao.AvatarFor(Nick);
-
-        if (photo != null)
-        {
-            using var clip = new GraphicsPath();
-            clip.AddEllipse(ac);
-            var saved = g.Save();
-            g.SetClip(clip);
-            // Recorte quadrado central da foto, pra nao distorcer retrato/paisagem.
-            int side = Math.Min(photo.Width, photo.Height);
-            var src = new Rectangle((photo.Width - side) / 2, (photo.Height - side) / 2, side, side);
-            g.DrawImage(photo, ac, src, GraphicsUnit.Pixel);
-            g.Restore(saved);
-            // Sem sinal / mutado: escurece a foto pra ficar claro que esta inativo.
-            if (Muted || !Connected)
-                using (var veil = new SolidBrush(Color.FromArgb(140, Pv.Charcoal)))
-                    g.FillEllipse(veil, ac);
-            using (var p = new Pen(Pv.Charcoal, 2)) g.DrawEllipse(p, ac);
-        }
-        else
-        {
-            using (var b = new SolidBrush(Muted || !Connected ? Pv.Char3 : Pv.Orange)) g.FillEllipse(b, ac);
-            string initial = string.IsNullOrEmpty(Nick) ? "?" : Nick[..1].ToUpperInvariant();
-            using var f = new Font("Bahnschrift", 34f, FontStyle.Bold);
-            using var tb = new SolidBrush(Muted || !Connected ? Pv.BoneDim : Pv.Charcoal);
-            var sz = g.MeasureString(initial, f);
-            g.DrawString(initial, f, tb, ac.X + (av - sz.Width) / 2, ac.Y + (av - sz.Height) / 2);
-        }
-
+        int alpha = Speaking ? 58 : 27;
+        using (var glow = new SolidBrush(Color.FromArgb(alpha, accent))) g.FillEllipse(glow, halo);
+        using (var glow2 = new Pen(Color.FromArgb(Speaking ? 155 : 95, accent), Speaking ? 3f : 1.6f))
+            g.DrawEllipse(glow2, Rectangle.Inflate(halo, -2, -2));
         if (Speaking)
-            using (var p = new Pen(Pv.Green, 3))
-                g.DrawEllipse(p, Rectangle.Inflate(ac, 4, 4));
+            using (var ring = new Pen(Color.FromArgb(75, accent), 6f))
+                g.DrawEllipse(ring, Rectangle.Inflate(halo, 2, 2));
 
-        DrawCaption(g, dark: false);
-    }
+        int photoSize = Math.Max(30, (int)Math.Round(haloSize * 0.58));
+        var photoBox = new Rectangle(
+            halo.X + (halo.Width - photoSize) / 2,
+            halo.Y + Math.Max(8, (halo.Height - photoSize) / 2 - 8),
+            photoSize, photoSize);
 
-    /// <summary>
-    /// Pinta o quadro da camera cobrindo o tile, recortando o excedente.
-    /// </summary>
-    /// <remarks>
-    /// Recorte central em vez de esticar: a camera e 4:3 e o tile e mais largo que
-    /// alto, entao esticar acharia todo mundo gordo. Cortar as beiradas mantem a
-    /// proporcao do rosto, que e o que importa.
-    /// </remarks>
-    /// <remarks>
-    /// TUDO dentro de um try: excecao que escapa do OnPaint faz o WinForms desenhar
-    /// um X VERMELHO no lugar do controle, e ai o usuario perde o tile inteiro por
-    /// causa de um quadro ruim. Devolve false pra cair no avatar, que sempre pinta.
-    /// </remarks>
-    private bool TryDrawCam(Graphics g, Image cam, Rectangle r)
-    {
-        try
+        var cam = Cam;
+        bool drewCam = cam != null && TryDrawImageCircle(g, cam, photoBox);
+        if (!drewCam)
         {
-            DrawCam(g, cam, r);
-            return true;
+            var photo = Primitivao.AvatarFor(Nick);
+            if (photo != null) DrawImageCircle(g, photo, photoBox);
+            else DrawInitial(g, photoBox, accent, Nick);
         }
-        catch
-        {
-            return false;
-        }
+
+        if (Muted || !Connected)
+            using (var veil = new SolidBrush(Color.FromArgb(125, Pv.Charcoal)))
+                g.FillEllipse(veil, photoBox);
+        using (var border = new Pen(Pv.Charcoal, 2)) g.DrawEllipse(border, photoBox);
+
+        DrawCaption(g, halo, accent);
     }
 
-    private void DrawCam(Graphics g, Image cam, Rectangle r)
+    private void DrawCaption(Graphics g, Rectangle halo, Color accent)
     {
-        double alvo = r.Width / (double)r.Height;
-        int sw = cam.Width, sh = cam.Height;
-        int cw = sw, ch = (int)(sw / alvo);
-        if (ch > sh) { ch = sh; cw = (int)(sh * alvo); }
-        var src = new Rectangle((sw - cw) / 2, (sh - ch) / 2, cw, ch);
+        string original = (IsMe ? Nick + " (VOCE)" : Nick).ToUpperInvariant();
+        string name = original;
+        while (name.Length > 4 && Pv.TrackedWidth(g, name, Pv.DisplaySm, 0.8f) > Width - 8)
+            name = name[..^1];
+        if (name != original) name = name[..Math.Max(1, name.Length - 1)] + "…";
 
-        var saved = g.InterpolationMode;
-        g.InterpolationMode = InterpolationMode.HighQualityBilinear;
-        g.DrawImage(cam, r, src, GraphicsUnit.Pixel);
-        g.InterpolationMode = saved;
-
-        // Faixa escura embaixo: sem ela o nick some em cima de camera clara.
-        using var shade = new LinearGradientBrush(
-            new Rectangle(0, Height - 48, Width, 48),
-            Color.FromArgb(0, 0, 0, 0), Color.FromArgb(190, 0, 0, 0), LinearGradientMode.Vertical);
-        g.FillRectangle(shade, 0, Height - 48, Width, 48);
-
-        Color border = Speaking ? Pv.Green : (Punching ? Pv.OrangeDim : Pv.Char3);
-        using var pen = new Pen(border, 2);
-        g.DrawRectangle(pen, r);
-    }
-
-    /// <summary>Nick, estado e barrinha de nivel — iguais com ou sem camera.</summary>
-    private void DrawCaption(Graphics g, bool dark)
-    {
-        // Com camera o texto sobe: ele fica sobre a faixa escura, nao no meio do rosto.
-        float nickY = dark ? Height - 44 : 112;
-        float statusY = dark ? Height - 26 : 130;
-
-        string name = (IsMe ? Nick + " (VOCE)" : Nick).ToUpperInvariant();
         using (var b = new SolidBrush(Pv.Bone))
         {
-            float w = Pv.TrackedWidth(g, name, Pv.Label, 1.2f);
-            if (w > Width - 12)   // corta nick gigante
-            {
-                while (name.Length > 3 && Pv.TrackedWidth(g, name + "...", Pv.Label, 1.2f) > Width - 12)
-                    name = name[..^1];
-                name += "...";
-                w = Pv.TrackedWidth(g, name, Pv.Label, 1.2f);
-            }
-            Pv.DrawTracked(g, name, Pv.Label, b, (Width - w) / 2f, nickY, 1.2f);
+            float w = Pv.TrackedWidth(g, name, Pv.DisplaySm, 0.8f);
+            Pv.DrawTracked(g, name, Pv.DisplaySm, b, (Width - w) / 2f, halo.Bottom + 1, 0.8f);
         }
 
-        // Estado embaixo.
-        // Depois de ~25s o furo nao vai mais fechar. Dizer "CONECTANDO" pra sempre
-        // e mentir: quem le fica esperando algo que nao vem.
-        const int DesisteSegundos = 25;
+        const int GiveUpSeconds = 25;
         string status = !Connected
-                      ? (Punching ? (SilentSeconds >= DesisteSegundos ? "SEM ROTA" : "CONECTANDO") : "SEM SINAL")
-                      : Muted ? "MUDO"
-                      : Sharing ? "NA TELA" : "";
-        if (status.Length > 0)
+            ? (Punching ? (SilentSeconds >= GiveUpSeconds ? "SEM ROTA" : "CONECTANDO") : "SEM SINAL")
+            : Muted ? "MIC MUTADO"
+            : Speaking ? "MIC · FALANDO"
+            : Sharing ? "NA TELA" : "MIC ATIVO";
+        Color statusColor = !Connected
+            ? (Punching && SilentSeconds < GiveUpSeconds ? Pv.OrangeDim : Pv.Red)
+            : Muted ? Color.FromArgb(176, 150, 190)
+            : Speaking ? Pv.Green : accent;
+        using (var b = new SolidBrush(statusColor))
         {
-            Color c = !Connected
-                    ? (Punching && SilentSeconds < DesisteSegundos ? Pv.OrangeDim : Pv.Red)
-                    : Muted ? Pv.Red : Pv.Orange;
-            using var b = new SolidBrush(c);
-            float w = Pv.TrackedWidth(g, status, Pv.Label, 1.4f);
-            Pv.DrawTracked(g, status, Pv.Label, b, (Width - w) / 2f, statusY, 1.4f);
+            float w = Pv.TrackedWidth(g, status, Pv.Label, 1.0f);
+            Pv.DrawTracked(g, status, Pv.Label, b, (Width - w) / 2f, halo.Bottom + 25, 1.0f);
         }
 
-        // Barrinha de nivel (so quando conectado e sem mute).
         if (Connected && !Muted && Level > 0.01f)
         {
-            int bw = (int)(Math.Min(1f, Level * 3f) * (Width - 40));
+            int bw = (int)(Math.Min(1f, Level * 3f) * Math.Max(22, halo.Width - 28));
             using var b = new SolidBrush(Pv.Green);
-            g.FillRectangle(b, 20, Height - 12, bw, 3);
+            g.FillRectangle(b, (Width - bw) / 2, Height - 5, bw, 2);
         }
+    }
+
+    private static bool TryDrawImageCircle(Graphics g, Image image, Rectangle box)
+    {
+        try { DrawImageCircle(g, image, box); return true; }
+        catch { return false; }
+    }
+
+    private static void DrawImageCircle(Graphics g, Image image, Rectangle box)
+    {
+        using var clip = new GraphicsPath();
+        clip.AddEllipse(box);
+        var saved = g.Save();
+        g.SetClip(clip);
+        int side = Math.Min(image.Width, image.Height);
+        var src = new Rectangle((image.Width - side) / 2, (image.Height - side) / 2, side, side);
+        g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+        g.DrawImage(image, box, src, GraphicsUnit.Pixel);
+        g.Restore(saved);
+    }
+
+    private static void DrawInitial(Graphics g, Rectangle box, Color accent, string nick)
+    {
+        using (var b = new SolidBrush(accent)) g.FillEllipse(b, box);
+        string initial = string.IsNullOrWhiteSpace(nick) ? "?" : nick[..1].ToUpperInvariant();
+        using var f = new Font("Bahnschrift", Math.Max(12, box.Height * 0.40f), FontStyle.Bold);
+        using var tb = new SolidBrush(Pv.Charcoal);
+        var size = g.MeasureString(initial, f);
+        g.DrawString(initial, f, tb, box.X + (box.Width - size.Width) / 2,
+                     box.Y + (box.Height - size.Height) / 2);
+    }
+
+    /// <summary>Cor social estavel por nick, sem persistir tema paralelo.</summary>
+    private static Color AccentFor(string nick)
+    {
+        Color[] palette =
+        {
+            Color.FromArgb(65, 164, 232),
+            Color.FromArgb(211, 61, 62),
+            Color.FromArgb(210, 165, 33),
+            Color.FromArgb(151, 82, 188),
+            Color.FromArgb(100, 162, 70),
+            Pv.Orange,
+        };
+        return palette[(int)(RoomSession.HashId(nick) % (uint)palette.Length)];
     }
 }

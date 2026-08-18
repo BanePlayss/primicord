@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Buffers.Binary;
 
 namespace Primicord;
 
@@ -11,6 +12,13 @@ public sealed class RemotePeer
     public string Nick = "";
     public bool Muted;
     public bool Sharing;
+    private readonly object _socialLock = new();
+    private SocialPosition _social;
+    public SocialPosition Social
+    {
+        get { lock (_socialLock) return _social; }
+        set { lock (_socialLock) _social = value; }
+    }
 
     /// <summary>Enderecos onde ele PODE estar (publico + todos os locais).</summary>
     public readonly List<IPEndPoint> Candidates = new();
@@ -79,6 +87,7 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
     public const byte TypeCinemaCtl = 6;   // controle do cinema (oferta, nack, play)
     public const byte TypeCinemaData = 7;   // pedaco do arquivo de video
     public const byte TypeWebcam = 8;   // quadro da camera (fragmentado, igual a tela)
+    public const byte TypeSocial = 9;   // x/y/tamanho da bolinha (3 floats, 12 bytes)
 
     // Um quadro de tela nao cabe num datagrama, entao vai picado. Sub-cabecalho de
     // 10 bytes depois do cabecalho comum: frameId, indice, total, largura, altura.
@@ -109,9 +118,17 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
     private readonly List<IPEndPoint> _localEps = new();
     private uint _mySenderId;
     private uint _voiceSeq;
+    private readonly object _socialLock = new();
+    private SocialPosition _social;
+    private long _lastSocialSendMs;
 
     public bool Muted { get; set; }
     public bool Sharing { get; set; }
+
+    public SocialPosition Social
+    {
+        get { lock (_socialLock) return _social; }
+    }
 
     public string RoomId => _roomId;
     public string PeerId => _peerId;
@@ -135,6 +152,9 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
     /// <summary>Pedaco do arquivo de video: (quem, indice, buffer, offset, tamanho).</summary>
     public event Action<uint, int, byte[], int, int>? CinemaChunk;
 
+    /// <summary>Movimento social recebido pela malha (thread de rede).</summary>
+    public event Action<uint, SocialPosition>? SocialMoved;
+
     /// <summary>A lista de participantes mudou (entrou, saiu, mutou, conectou).</summary>
     public event Action? PeersChanged;
 
@@ -148,6 +168,7 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
         _peerId = peerId;
         _nick = nick;
         _mySenderId = HashId(peerId);
+        _social = SocialPosition.DefaultFor(_mySenderId);
     }
 
     public List<RemotePeer> Peers
@@ -167,7 +188,11 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
         {
             if (!_peers.TryGetValue(sid, out var p))
             {
-                p = new RemotePeer { PeerId = peerId, SenderId = sid };
+                p = new RemotePeer
+                {
+                    PeerId = peerId, SenderId = sid,
+                    Social = SocialPosition.DefaultFor(sid),
+                };
                 _peers[sid] = p;
             }
             p.Nick = nick;
@@ -203,6 +228,27 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
 
     /// <summary>Porta UDP local (o harness precisa pra montar o endpoint de loopback).</summary>
     public int LocalPort => _socket?.LocalEndPoint is IPEndPoint ep ? ep.Port : 0;
+
+    /// <summary>
+    /// Atualiza a bolinha local e envia no maximo 20 vezes/s. final ignora o limite,
+    /// garantindo que todos recebam exatamente o ponto em que o jogador soltou.
+    /// </summary>
+    public void UpdateSocial(SocialPosition position, bool final = false)
+    {
+        position = position.Normalized();
+        lock (_socialLock) _social = position;
+
+        long now = Environment.TickCount64;
+        long previous = Interlocked.Read(ref _lastSocialSendMs);
+        if (!final && now - previous < 50) return;
+        Interlocked.Exchange(ref _lastSocialSendMs, now);
+
+        var payload = new byte[12];
+        BinaryPrimitives.WriteSingleLittleEndian(payload.AsSpan(0, 4), (float)position.X);
+        BinaryPrimitives.WriteSingleLittleEndian(payload.AsSpan(4, 4), (float)position.Y);
+        BinaryPrimitives.WriteSingleLittleEndian(payload.AsSpan(8, 4), position.Scale);
+        SendToAll(TypeSocial, payload, 0, payload.Length);
+    }
 
     // ─── CICLO DE VIDA ───────────────────────────────────────────────────────
 
@@ -288,11 +334,15 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
 
     private async Task PublishPresenceAsync(bool full)
     {
+        SocialPosition social = Social;
         var fields = new Dictionary<string, object?>
         {
             ["lastSeen"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             ["muted"] = Muted,
             ["sharing"] = Sharing,
+            ["socialX"] = social.X,
+            ["socialY"] = social.Y,
+            ["socialScale"] = social.Scale,
         };
         if (full)
         {
@@ -325,7 +375,11 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
             {
                 if (!_peers.TryGetValue(sid, out var p))
                 {
-                    p = new RemotePeer { PeerId = id, SenderId = sid };
+                    p = new RemotePeer
+                    {
+                        PeerId = id, SenderId = sid,
+                        Social = SocialPosition.DefaultFor(sid),
+                    };
                     _peers[sid] = p;
                     changed = true;
                     Log.Write($"entrou: {Firestore.Str(f, "nick")} ({id})");
@@ -337,6 +391,16 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
                 if (p.Nick != nick || p.Muted != muted || p.Sharing != sharing) changed = true;
                 p.Nick = nick; p.Muted = muted; p.Sharing = sharing;
                 p.LastSeenMs = lastSeen;
+
+                var social = new SocialPosition(
+                    Firestore.Real(f, "socialX", p.Social.X),
+                    Firestore.Real(f, "socialY", p.Social.Y),
+                    (int)Firestore.Num(f, "socialScale", p.Social.Scale)).Normalized();
+                if (social != p.Social)
+                {
+                    p.Social = social;
+                    SocialMoved?.Invoke(sid, social);
+                }
 
                 RefreshCandidates(p, f);
             }
@@ -605,6 +669,17 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
                     // O indice do pedaco viaja no campo de sequencia do cabecalho.
                     CinemaChunk?.Invoke(senderId, (int)ReadUInt32(buf, 5),
                                         buf, HeaderBytes, len - HeaderBytes);
+                    break;
+
+                case TypeSocial:
+                    if (len != HeaderBytes + 12) break;
+                    var social = new SocialPosition(
+                        BinaryPrimitives.ReadSingleLittleEndian(buf.AsSpan(HeaderBytes, 4)),
+                        BinaryPrimitives.ReadSingleLittleEndian(buf.AsSpan(HeaderBytes + 4, 4)),
+                        (int)Math.Round(BinaryPrimitives.ReadSingleLittleEndian(
+                            buf.AsSpan(HeaderBytes + 8, 4)))).Normalized();
+                    peer.Social = social;
+                    SocialMoved?.Invoke(senderId, social);
                     break;
 
                 case TypePunch:

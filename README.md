@@ -11,7 +11,8 @@ LAN). O Primicord é feito pra **N pessoas pela internet**.
 - **Voz**: malha UDP ponto-a-ponto — cada um manda direto pra cada outro. Não tem
   servidor no meio, ninguém paga hospedagem e nenhum áudio passa por terceiros.
 - **Encontro**: o Firestore do projeto `primitivao` (coleção `pc_rooms`) guarda só
-  a lista de salas, quem está em cada uma e o IP:porta público de cada um.
+  a lista de salas, quem está em cada uma, a posição social e o IP:porta público
+  de cada um.
 - **NAT**: cada cliente descobre seu endereço público por STUN e os dois lados furam
   o NAT mandando pacotes ao mesmo tempo (hole punching).
 - **Áudio**: 48kHz mono, frames de 10ms, jitter buffer por pessoa, mixados com
@@ -98,9 +99,11 @@ binário que se distribui por aí não é opção.
 - [x] Voz por WebRTC com Opus (`webrtc=1`)
 - [x] Cancelamento de eco
 - [x] Atualização pelo próprio app
+- [x] Espaço social por sala (avatares livres, tamanho, proximidade e chat próprio)
 
 Ver [docs/PLANO-DE-MIGRACAO.md](docs/PLANO-DE-MIGRACAO.md) pro que vem depois.
 
 **Passo manual pendente:** publicar as rules do `pc_rooms` no Firebase Console,
 cobrindo `peers/**` e — se for usar `webrtc=1` — também `signal/**`. Sem isso o
-app não lista nem cria sala.
+app não lista nem cria sala. A versão 0.6.6 também usa `social/**` para conservar
+a posição/tamanho da bolinha depois que o jogador sai.

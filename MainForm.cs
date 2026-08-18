@@ -15,6 +15,7 @@ public sealed class MainForm : Form
 {
     private readonly Firestore _fs = new();
     private readonly RoomDirectory _dir;
+    private readonly RoomSocialService _social;
     private readonly Config _cfg;
 
     private PrimitivaoUser? _me;
@@ -70,17 +71,21 @@ public sealed class MainForm : Form
     };
 
     private Panel? _railList, _voiceStrip, _userPanel, _membersList, _contentHost;
+    private Panel? _rightPanel, _membersHead, _championshipPanel;
     private ClassificacaoView? _tabela;
     private Label? _tabelaHead;
     private ApostasView? _apostas;
     private Label? _apostasHead;
     private ChatView? _chatView;
+    private ChatView? _roomChatView;
     private PrimitivaoView? _primitivao;
     private Panel? _roomPanel;
-    private FlowLayoutPanel? _tiles;
+    private SocialArena? _arena;
     private readonly Dictionary<uint, PeerTile> _peerTiles = new();
     private PeerTile? _myTile;
     private Label? _roomStatus;
+    private bool _roomChatVisible = true;
+    private bool _chatAutoCollapsed;
 
     // estado da navegacao: "geral" | "dm:<nick>" | "room:<id>"
     // O centro nasce no Primitivao, e nao mais no chat. Quem esta junto aqui esta
@@ -99,6 +104,7 @@ public sealed class MainForm : Form
     public MainForm()
     {
         _dir = new RoomDirectory(_fs);
+        _social = new RoomSocialService(_fs);
         _cfg = Config.Load();
 
         Text = "PRIMICORD";
@@ -324,14 +330,14 @@ public sealed class MainForm : Form
         rail.Controls.Add(brand);
 
         // ── MEMBROS (direita) ──
-        var members = new Panel { Dock = DockStyle.Right, Width = 212, BackColor = Pv.Char2 };
-        members.Paint += (_, e) =>
+        _rightPanel = new Panel { Dock = DockStyle.Right, Width = 212, BackColor = Pv.Char2 };
+        _rightPanel.Paint += (_, e) =>
         {
             using var p = new Pen(Pv.Char3, 2);
-            e.Graphics.DrawLine(p, 0, 0, 0, members.Height);
+            e.Graphics.DrawLine(p, 0, 0, 0, _rightPanel.Height);
         };
-        var mHead = new Panel { Dock = DockStyle.Top, Height = 56, BackColor = Pv.Char2 };
-        mHead.Paint += (_, e) =>
+        _membersHead = new Panel { Dock = DockStyle.Top, Height = 56, BackColor = Pv.Char2 };
+        _membersHead.Paint += (_, e) =>
         {
             var g = e.Graphics;
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
@@ -344,7 +350,7 @@ public sealed class MainForm : Form
             Padding = new Padding(0, 4, 0, 8),
         };
         // ── CLASSIFICACAO (embaixo, na mesma coluna) ──
-        var campeonato = new Panel { Dock = DockStyle.Bottom, AutoSize = true, BackColor = Pv.Char2 };
+        _championshipPanel = new Panel { Dock = DockStyle.Bottom, AutoSize = true, BackColor = Pv.Char2 };
         _tabelaHead = new Label
         {
             Dock = DockStyle.Top, Height = 34, BackColor = Pv.Char2, ForeColor = Pv.BoneDim,
@@ -361,26 +367,30 @@ public sealed class MainForm : Form
         _apostas = new ApostasView { Dock = DockStyle.Top, Visible = false };
 
         // Ordem inversa: o ultimo adicionado fica no topo da pilha do Dock.
-        campeonato.Controls.Add(_apostas);
-        campeonato.Controls.Add(_apostasHead);
-        campeonato.Controls.Add(_tabela);
-        campeonato.Controls.Add(_tabelaHead);
-        campeonato.Paint += (_, e) =>
+        _championshipPanel.Controls.Add(_apostas);
+        _championshipPanel.Controls.Add(_apostasHead);
+        _championshipPanel.Controls.Add(_tabela);
+        _championshipPanel.Controls.Add(_tabelaHead);
+        _championshipPanel.Paint += (_, e) =>
         {
             using var p = new Pen(Pv.Char3, 2);
-            e.Graphics.DrawLine(p, 12, 0, campeonato.Width - 12, 0);
+            e.Graphics.DrawLine(p, 12, 0, _championshipPanel.Width - 12, 0);
         };
 
+        _roomChatView = new ChatView { Dock = DockStyle.Fill, Visible = false };
+        _roomChatView.Send += OnSendMessageAsync;
+
         // Fill primeiro, depois as bordas: o WinForms encaixa na ordem inversa.
-        members.Controls.Add(_membersList);
-        members.Controls.Add(campeonato);
-        members.Controls.Add(mHead);
+        _rightPanel.Controls.Add(_membersList);
+        _rightPanel.Controls.Add(_roomChatView);
+        _rightPanel.Controls.Add(_championshipPanel);
+        _rightPanel.Controls.Add(_membersHead);
 
         // ── CONTEUDO ──
         _contentHost = new Panel { Dock = DockStyle.Fill, BackColor = Pv.Charcoal };
 
         host.Controls.Add(_contentHost);   // Fill primeiro
-        host.Controls.Add(members);
+        host.Controls.Add(_rightPanel);
         host.Controls.Add(rail);
         SetBody(host);
 
@@ -502,6 +512,7 @@ public sealed class MainForm : Form
                     PreprocessMic = _cfg.EchoCancel,
                     MicAutoGain = _cfg.MicAutoGain,
                 };
+                _voice.OutputMuted = _audioMuted;
                 _voice.Failed += ShowBanner;
                 // Reata no transporte que ja estava valendo — trocar de microfone
                 // nao pode renegociar as conexoes WebRTC.
@@ -552,11 +563,29 @@ public sealed class MainForm : Form
             {
                 Dock = DockStyle.Top,
                 Active = _view == "room:" + room.Id,
-                Suffix = room.Count > 0 ? room.Count.ToString() : "",
+                Suffix = $"{room.Count}/8",
             };
             string id = room.Id, name = room.Name;
             it.Click += async (_, _) => await OnRoomClickedAsync(id, name);
             items.Add(it);
+
+            // A sala aberta mostra quem esta dentro, como o painel da referencia.
+            // Os dados ja vieram no mesmo poll da RoomDirectory; zero leitura extra.
+            if (_view == "room:" + room.Id)
+            {
+                foreach (string occupant in room.Occupants)
+                {
+                    bool me = string.Equals(occupant, Nick, StringComparison.OrdinalIgnoreCase);
+                    var person = new RailItem(occupant, RailItem.Kind.Dm)
+                    {
+                        Dock = DockStyle.Top, Height = 30, AvatarNick = occupant,
+                        Online = true, Suffix = me ? "VOCE" : "",
+                    };
+                    string target = occupant;
+                    if (!me) person.Click += (_, _) => OpenDm(target);
+                    items.Add(person);
+                }
+            }
         }
         var novaSala = new RailItem("Nova sala", RailItem.Kind.Action) { Dock = DockStyle.Top };
         novaSala.Click += async (_, _) => await CreateRoomAsync();
@@ -638,7 +667,43 @@ public sealed class MainForm : Form
             _ = RefreshChatAsync();
         }
         _contentHost.ResumeLayout();
+        UpdateRightContext();
         RebuildRail();
+    }
+
+    /// <summary>
+    /// Na sala, a coluna direita vira CHAT DA SALA e o ranking continua compacto
+    /// embaixo. Fora dela, volta a lista global de membros.
+    /// </summary>
+    private void UpdateRightContext()
+    {
+        if (_rightPanel == null || _membersList == null || _membersHead == null ||
+            _roomChatView == null) return;
+
+        bool inRoom = _view.StartsWith("room:");
+        _membersList.Visible = !inRoom;
+        _membersHead.Visible = !inRoom;
+        _roomChatView.Visible = inRoom && _roomChatVisible;
+        _rightPanel.Width = inRoom ? 300 : 212;
+        _rightPanel.Visible = !inRoom || _roomChatVisible;
+
+        if (inRoom)
+        {
+            _roomChatView.SetHeader("CHAT DA SALA", _voiceRoomName);
+            _roomChatView.ComposerPlaceholder = "Mensagem para a sala...";
+            _ = RefreshChatAsync();
+        }
+    }
+
+    private void ToggleRoomChat()
+    {
+        _roomChatVisible = !_roomChatVisible;
+        UpdateRightContext();
+        if (_icChat != null)
+        {
+            _icChat.Active = _roomChatVisible;
+            _icChat.Invalidate();
+        }
     }
 
     private async Task OnRoomClickedAsync(string roomId, string roomName)
@@ -663,6 +728,8 @@ public sealed class MainForm : Form
         {
             if (_view == "geral") await _chat.SendToChannelAsync(ChatService.GeneralChannel, text);
             else if (_view.StartsWith("dm:")) await _chat.SendDmAsync(_view[3..], text);
+            else if (_view.StartsWith("room:"))
+                await _chat.SendToChannelAsync(ChatService.RoomChannel(_view[5..]), text);
             await RefreshChatAsync();
         }
         catch (FirestoreException ex) when (ex.IsPermissionDenied)
@@ -767,13 +834,21 @@ public sealed class MainForm : Form
     private async Task RefreshChatAsync()
     {
         if (_chat == null || _chatView == null || _chatView.IsDisposed) return;
-        if (_view.StartsWith("room:")) return;
         try
         {
-            var msgs = _view == "geral"
-                ? await _chat.ReadChannelAsync(ChatService.GeneralChannel)
-                : await _chat.ReadDmAsync(_view[3..]);
-            if (!_chatView.IsDisposed) _chatView.SetMessages(msgs, Nick);
+            if (_view.StartsWith("room:"))
+            {
+                if (_roomChatView == null || _roomChatView.IsDisposed) return;
+                var roomMsgs = await _chat.ReadChannelAsync(ChatService.RoomChannel(_view[5..]));
+                if (!_roomChatView.IsDisposed) _roomChatView.SetMessages(roomMsgs, Nick);
+            }
+            else
+            {
+                var msgs = _view == "geral"
+                    ? await _chat.ReadChannelAsync(ChatService.GeneralChannel)
+                    : await _chat.ReadDmAsync(_view[3..]);
+                if (!_chatView.IsDisposed) _chatView.SetMessages(msgs, Nick);
+            }
         }
         catch (FirestoreException ex) when (ex.IsPermissionDenied) { throw; }
         catch (Exception ex) { Log.Write("ler chat falhou: " + ex.Message); }
@@ -884,39 +959,25 @@ public sealed class MainForm : Form
             Padding = new Padding(22, 2, 0, 0), Text = "", Visible = false,
         };
 
-        // Barra de acoes da sala: tela, clipe, gravar, DJ.
+        // Barra inferior: controles essenciais embaixo, ferramentas de midia acima.
         var actions = BuildRoomActions();
 
-        // Tiles embaixo; palco ocupa o resto. Altura = tile (124) + margem (12) +
-        // padding (16) + folga da barra de rolagem horizontal.
-        _tiles = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Bottom, Height = 168, AutoScroll = true, WrapContents = false,
-            BackColor = Pv.Charcoal, Padding = new Padding(16, 8, 16, 8),
-        };
+        _arena = new SocialArena { Dock = DockStyle.Fill, RoomName = _voiceRoomName };
+        _arena.OwnPositionChanged += OnOwnSocialPositionChanged;
+        _stage = new StageView { Visible = false };
+        _arena.AttachStage(_stage);
 
-        _stage = new StageView { Dock = DockStyle.Fill };
-
-        // A barra de icones fica encostada nos participantes (Dock=Top dentro de um
-        // container que tambem segura os tiles), pra ficar claro que agem sobre a call.
-        var rodape = new Panel { Dock = DockStyle.Bottom, BackColor = Pv.Charcoal, AutoSize = true };
-        rodape.Paint += (_, e) =>
-        {
-            using var p = new Pen(Pv.Char3, 2);
-            e.Graphics.DrawLine(p, 16, 0, rodape.Width - 16, 0);
-        };
-        rodape.Controls.Add(_tiles);
-        rodape.Controls.Add(actions);
-
-        _roomPanel.Controls.Add(_stage);      // Fill primeiro
-        _roomPanel.Controls.Add(rodape);
+        _roomPanel.Controls.Add(_arena);      // Fill primeiro
+        _roomPanel.Controls.Add(actions);
         _roomPanel.Controls.Add(_djLabel);
         _roomPanel.Controls.Add(_roomStatus);
         _roomPanel.Controls.Add(head);
         return _roomPanel;
     }
 
-    private ActionIcon? _icMic, _icCam, _icShare, _icRec, _icClip, _icDj, _icCinema, _icQuick, _icLeave;
+    private ActionIcon? _icMic, _icAudio, _icInvite, _icCam, _icShare, _icRec,
+        _icClip, _icDj, _icCinema, _icQuick, _icChat, _icLeave;
+    private bool _audioMuted;
     private Label? _lanBadge;
     private CinemaSession? _cinema;
     private Form? _cinemaWindow;
@@ -927,19 +988,38 @@ public sealed class MainForm : Form
     /// </summary>
     private Panel BuildRoomActions()
     {
-        var bar = new FlowLayoutPanel
+        var host = new Panel
         {
-            Dock = DockStyle.Top,
-            BackColor = Pv.Charcoal,
-            WrapContents = false,
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Padding = new Padding(18, 8, 18, 4),
+            Dock = DockStyle.Bottom, Height = 124, BackColor = Pv.Charcoal,
+        };
+        host.Paint += (_, e) =>
+        {
+            using var p = new Pen(Pv.Char3, 2);
+            e.Graphics.DrawLine(p, 16, 0, host.Width - 16, 0);
+        };
+
+        var extras = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top, Height = 60, BackColor = Pv.Charcoal,
+            WrapContents = false, AutoScroll = true, Padding = new Padding(14, 2, 14, 0),
+        };
+        var primary = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Bottom, Height = 62, BackColor = Pv.Char2,
+            WrapContents = false, AutoScroll = true, Padding = new Padding(18, 2, 18, 0),
         };
 
         _icMic = new ActionIcon((g, r, c, w) => Glyphs.Mic(g, r, c, _session?.Muted == true), "MIC")
         { ToolTipText = "Mutar / desmutar o microfone" };
         _icMic.Click += (_, _) => { ToggleMute(); SyncRoomButtons(); };
+
+        _icAudio = new ActionIcon(Glyphs.Speaker, "AUDIO")
+        { ToolTipText = "Silenciar / restaurar o audio da sala" };
+        _icAudio.Click += (_, _) => ToggleRoomAudio();
+
+        _icInvite = new ActionIcon(Glyphs.Plus, "CONVIDAR")
+        { ToolTipText = "Copiar convite desta sala" };
+        _icInvite.Click += (_, _) => CopyRoomInvite();
 
         _icCam = new ActionIcon((g, r, c, w) => Glyphs.Camera(g, r, c, _camOn), "CAMERA")
         { ToolTipText = "Ligar/desligar a camera" };
@@ -969,6 +1049,10 @@ public sealed class MainForm : Form
         { ToolTipText = "Microfone, saida e qualidade (sem sair da call)" };
         _icQuick.Click += (_, _) => OpenQuickSettings();
 
+        _icChat = new ActionIcon(Glyphs.Hash, "CHAT")
+        { ToolTipText = "Mostrar / esconder o chat da sala", Active = true };
+        _icChat.Click += (_, _) => ToggleRoomChat();
+
         _icLeave = new ActionIcon(Glyphs.Exit, "SAIR") { ToolTipText = "Sair da sala de voz" };
         _icLeave.Click += (_, _) => LeaveVoice();
 
@@ -978,11 +1062,41 @@ public sealed class MainForm : Form
             Margin = new Padding(14, 22, 0, 0), Visible = false,
         };
 
-        foreach (var ic in new[] { _icMic, _icCam, _icShare, _icRec, _icClip, _icDj, _icCinema, _icQuick, _icLeave })
+        foreach (var ic in new[] { _icMic, _icAudio, _icInvite, _icCam, _icShare, _icRec,
+                                   _icClip, _icDj, _icCinema, _icQuick, _icChat, _icLeave })
             ic!.Margin = new Padding(0, 0, 6, 0);
-        bar.Controls.AddRange(new Control[]
-            { _icMic, _icCam, _icShare, _icRec, _icClip, _icDj, _icCinema, _icQuick, _icLeave, _lanBadge });
-        return bar;
+        extras.Controls.AddRange(new Control[]
+            { _icCam, _icShare, _icRec, _icClip, _icDj, _icCinema, _icQuick, _icChat, _lanBadge });
+        primary.Controls.AddRange(new Control[] { _icMic, _icAudio, _icInvite, _icLeave });
+        void CenterPrimary()
+        {
+            int used = 4 * 72;
+            primary.Padding = new Padding(Math.Max(18, (host.ClientSize.Width - used) / 2), 2, 18, 0);
+        }
+        host.Resize += (_, _) => CenterPrimary();
+        CenterPrimary();
+        host.Controls.Add(extras);
+        host.Controls.Add(primary);
+        return host;
+    }
+
+    private void ToggleRoomAudio()
+    {
+        _audioMuted = !_audioMuted;
+        if (_voice != null) _voice.OutputMuted = _audioMuted;
+        SyncRoomButtons();
+    }
+
+    private void CopyRoomInvite()
+    {
+        if (_voiceRoomId.Length == 0) return;
+        string invite = $"PRIMICORD · {_voiceRoomName}\r\nSala: {_voiceRoomId}";
+        try
+        {
+            Clipboard.SetText(invite);
+            ShowBanner("Convite da sala copiado.");
+        }
+        catch (Exception ex) { Log.Write("copiar convite: " + ex.Message); }
     }
 
     private void OpenQuickSettings()
@@ -1008,6 +1122,7 @@ public sealed class MainForm : Form
                 PreprocessMic = _cfg.EchoCancel,
                 MicAutoGain = _cfg.MicAutoGain,
             };
+                    _voice.OutputMuted = _audioMuted;
                     _voice.Failed += ShowBanner;
                     _voice.AttachTransport((IVoiceTransport?)_webrtc ?? _session, _session);
                     _voice.HeardPcm += (b, o, c) => _clips?.PushHeard(b, o, c);
@@ -1028,9 +1143,19 @@ public sealed class MainForm : Form
         _voiceRoomId = roomId;
         _voiceRoomName = roomName;
 
+        SocialPosition myPosition = SocialPosition.DefaultFor(
+            RoomSession.HashId(Nick.ToLowerInvariant()));
+        try
+        {
+            myPosition = await _social.LoadAsync(roomId, Nick) ?? myPosition;
+        }
+        catch (Exception ex) { Log.Write("posicao social nao carregou: " + ex.Message); }
+
         string peerId = Sanitize(Nick) + "-" + Random.Shared.Next(0x10000, 0xFFFFF).ToString("x5");
         _session = new RoomSession(_fs, roomId, peerId, Nick);
+        _session.UpdateSocial(myPosition);
         _session.PeersChanged += OnPeersChanged;
+        _session.SocialMoved += OnPeerSocialMoved;
         _session.Failed += ShowBanner;
 
         _session.ScreenFrameReceived += OnPeerFrame;
@@ -1066,14 +1191,18 @@ public sealed class MainForm : Form
         _voice.HeardPcm += (b, o, c) => _clips?.PushHeard(b, o, c);
         _voice.MicPcm += (b, o, c) => _clips?.PushMic(b, o, c);
 
-        // Recria os tiles do zero pra esta sala.
+        // Recria as bolinhas do zero pra esta sala.
         _peerTiles.Clear();
         EnsureRoomPanel();
-        _tiles!.Controls.Clear();
-        _myTile = new PeerTile { Nick = Nick, IsMe = true, Connected = true, Margin = new Padding(6) };
-        _tiles.Controls.Add(_myTile);
+        _arena!.RoomName = roomName;
+        _arena.ClearParticipants();
+        _myTile = new PeerTile { Nick = Nick, IsMe = true, Connected = true };
+        _arena.SetOwn(_myTile, myPosition);
+        _audioMuted = false;
+        _roomChatVisible = ClientSize.Width >= 1000;
 
         UpdateVoiceStrip();
+        UpdateRightContext();
 
         try
         {
@@ -1141,6 +1270,7 @@ public sealed class MainForm : Form
         _voiceRoomId = "";
         _voiceRoomName = "";
         _peerTiles.Clear();
+        _arena?.ClearParticipants();
         _myTile = null;
 
         UpdateVoiceStrip();
@@ -1150,7 +1280,7 @@ public sealed class MainForm : Form
     private void OnPeersChanged()
     {
         if (InvokeRequired) { BeginInvoke(OnPeersChanged); return; }
-        if (_session == null || _tiles == null || _tiles.IsDisposed) return;
+        if (_session == null || _arena == null || _arena.IsDisposed) return;
 
         var peers = _session.Peers;
         var alive = peers.Select(p => p.SenderId).ToHashSet();
@@ -1161,7 +1291,7 @@ public sealed class MainForm : Form
             {
                 tile = new PeerTile { Margin = new Padding(6) };
                 _peerTiles[p.SenderId] = tile;
-                _tiles.Controls.Add(tile);
+                _arena.SetParticipant(p.SenderId, tile, p.Social);
             }
             tile.Nick = p.Nick;
             tile.Muted = p.Muted;
@@ -1169,6 +1299,7 @@ public sealed class MainForm : Form
             tile.Connected = p.Connected;
             tile.Punching = p.Locked == null;
             tile.SilentSeconds = p.SilentSeconds;
+            _arena.SetPosition(p.SenderId, p.Social);
             // Clicar no tile de quem compartilha joga a tela dele no palco.
             if (p.Sharing && (string?)tile.Tag != "clickable")
             {
@@ -1191,8 +1322,7 @@ public sealed class MainForm : Form
         {
             var tile = _peerTiles[sid];
             _peerTiles.Remove(sid);
-            _tiles.Controls.Remove(tile);
-            tile.Dispose();
+            _arena.RemoveParticipant(sid);
             _voice?.RemovePeer(sid);
             _screens.Remove(sid);
             _cams.Remove(sid);
@@ -1201,11 +1331,48 @@ public sealed class MainForm : Form
         UpdateRoomStatus();
     }
 
+    private void OnPeerSocialMoved(uint senderId, SocialPosition position)
+    {
+        if (InvokeRequired)
+        {
+            try { BeginInvoke(() => OnPeerSocialMoved(senderId, position)); } catch { }
+            return;
+        }
+        _arena?.SetPosition(senderId, position);
+    }
+
+    private void OnOwnSocialPositionChanged(SocialPosition position, bool final)
+    {
+        var session = _session;
+        if (session == null) return;
+        session.UpdateSocial(position, final);
+        if (!final) return;
+
+        string roomId = _voiceRoomId;
+        string nick = Nick;
+        _ = _social.SaveAsync(roomId, nick, position).ContinueWith(t =>
+        {
+            if (t.IsFaulted) Log.Write("posicao social nao salvou: " + t.Exception?.GetBaseException().Message);
+        }, TaskScheduler.Default);
+    }
+
     private int _stageTick;
 
     private void TickVoice()
     {
         if (_voice == null || _session == null) return;
+
+        // Sem compartilhamento, a arena ocupa todo o centro. Com tela, o palco
+        // aparece atras das bolinhas — a presenca social nao some durante o jogo.
+        if (_stage != null && !_stage.IsDisposed)
+        {
+            bool showStage = _iAmSharing || _session.Peers.Any(p => p.Sharing);
+            if (_stage.Visible != showStage)
+            {
+                _stage.Visible = showStage;
+                _arena?.Invalidate();
+            }
+        }
 
         // Cameras: reaponta cada tile pro quadro mais novo. O FrameOf devolve null
         // sozinho quando a pessoa para de mandar, entao desligar a camera do outro
@@ -1600,6 +1767,19 @@ public sealed class MainForm : Form
         _icMic.Caption = muted ? "MUDO" : "MIC";
         _icMic.Invalidate();
 
+        if (_icAudio != null)
+        {
+            _icAudio.Alert = _audioMuted;
+            _icAudio.Caption = _audioMuted ? "SEM AUDIO" : "AUDIO";
+            _icAudio.Invalidate();
+        }
+
+        if (_icChat != null)
+        {
+            _icChat.Active = _roomChatVisible;
+            _icChat.Invalidate();
+        }
+
         _icCam!.Active = _camOn;
         _icCam.Caption = _camOn ? "NO AR" : "CAMERA";
         _icCam.Invalidate();
@@ -1644,6 +1824,27 @@ public sealed class MainForm : Form
         _pollTimer = null;
         try { _voiceTimer?.Stop(); _voiceTimer?.Dispose(); } catch { }
         _voiceTimer = null;
+    }
+
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        if (!_view.StartsWith("room:") || WindowState == FormWindowState.Minimized) return;
+
+        if (ClientSize.Width < 1000 && _roomChatVisible)
+        {
+            _roomChatVisible = false;
+            _chatAutoCollapsed = true;
+            UpdateRightContext();
+            SyncRoomButtons();
+        }
+        else if (ClientSize.Width >= 1080 && _chatAutoCollapsed)
+        {
+            _roomChatVisible = true;
+            _chatAutoCollapsed = false;
+            UpdateRightContext();
+            SyncRoomButtons();
+        }
     }
 
     // ─── ATALHO GLOBAL DO CLIPE ──────────────────────────────────────────────

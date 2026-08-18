@@ -270,6 +270,15 @@ public sealed class Firestore
     public static long Num(Dictionary<string, object?> f, string key, long fallback = 0)
         => f.TryGetValue(key, out var v) && v is long l ? l : fallback;
 
+    /// <summary>Numero real aceitando tanto doubleValue quanto integerValue.</summary>
+    public static double Real(Dictionary<string, object?> f, string key, double fallback = 0)
+        => f.TryGetValue(key, out var v) ? v switch
+        {
+            double d => d,
+            long l => l,
+            _ => fallback,
+        } : fallback;
+
     public static bool Flag(Dictionary<string, object?> f, string key, bool fallback = false)
         => f.TryGetValue(key, out var v) && v is bool b ? b : fallback;
 }
