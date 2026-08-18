@@ -70,6 +70,8 @@ public sealed class MainForm : Form
     };
 
     private Panel? _railList, _voiceStrip, _userPanel, _membersList, _contentHost;
+    private ClassificacaoView? _tabela;
+    private Label? _tabelaHead;
     private ChatView? _chatView;
     private Panel? _roomPanel;
     private FlowLayoutPanel? _tiles;
@@ -335,7 +337,25 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill, AutoScroll = true, BackColor = Pv.Char2,
             Padding = new Padding(0, 4, 0, 8),
         };
+        // ── CLASSIFICACAO (embaixo, na mesma coluna) ──
+        var campeonato = new Panel { Dock = DockStyle.Bottom, AutoSize = true, BackColor = Pv.Char2 };
+        _tabelaHead = new Label
+        {
+            Dock = DockStyle.Top, Height = 34, BackColor = Pv.Char2, ForeColor = Pv.BoneDim,
+            Font = Pv.Label, Padding = new Padding(18, 12, 8, 0), Text = "CAMPEONATO",
+        };
+        _tabela = new ClassificacaoView { Dock = DockStyle.Top };
+        campeonato.Controls.Add(_tabela);
+        campeonato.Controls.Add(_tabelaHead);
+        campeonato.Paint += (_, e) =>
+        {
+            using var p = new Pen(Pv.Char3, 2);
+            e.Graphics.DrawLine(p, 12, 0, campeonato.Width - 12, 0);
+        };
+
+        // Fill primeiro, depois as bordas: o WinForms encaixa na ordem inversa.
         members.Controls.Add(_membersList);
+        members.Controls.Add(campeonato);
         members.Controls.Add(mHead);
 
         // ── CONTEUDO ──
@@ -649,6 +669,12 @@ public sealed class MainForm : Form
 
             if (_members.Count == 0) _members = await Primitivao.ListMembersAsync(_fs);
 
+            // Classificacao: a cada ~60s, nao a cada 2s como o resto. Placar de
+            // futebol nao muda em dois segundos, e o doc, por menor que seja, e
+            // uma leitura a mais por ciclo pra todo mundo que estiver com o app
+            // aberto. O primeiro tick busca na hora pra tabela nao nascer vazia.
+            if (_pollTick == 1 || _pollTick % 30 == 0) await RefreshCampeonatoAsync();
+
             try { _presence = await _chat.ReadPresenceAsync(); } catch { }
 
             var rooms = await _dir.ListAsync();
@@ -667,6 +693,25 @@ public sealed class MainForm : Form
         }
         catch (Exception ex) { Log.Write("poll falhou: " + ex.Message); }
         finally { _polling = false; }
+    }
+
+    /// <summary>Le a tabela do Primitivao e joga na coluna da direita.</summary>
+    private async Task RefreshCampeonatoAsync()
+    {
+        if (_tabela == null || _tabela.IsDisposed) return;
+        try
+        {
+            var tabela = await Campeonato.LerAsync(_fs);
+            if (_tabela.IsDisposed) return;
+            _tabela.MeuNick = Nick;
+            _tabela.Definir(tabela);
+            if (_tabelaHead != null && !_tabelaHead.IsDisposed)
+            {
+                string resumo = _tabela.Resumo;
+                _tabelaHead.Text = resumo.Length > 0 ? "CAMPEONATO  ·  " + resumo : "CAMPEONATO";
+            }
+        }
+        catch (Exception ex) { Log.Write("campeonato: " + ex.Message); }
     }
 
     private async Task RefreshChatAsync()
