@@ -135,6 +135,17 @@ public sealed class SocialArena : Panel
         base.OnMouseDown(e);
     }
 
+    protected override void OnMouseDoubleClick(MouseEventArgs e)
+    {
+        if (e.Button == MouseButtons.Left && _participants.TryGetValue(OwnId, out var own))
+        {
+            own.Position = own.Position with { X = .5, Y = .5 };
+            LayoutParticipants();
+            OwnPositionChanged?.Invoke(own.Position, true);
+        }
+        base.OnMouseDoubleClick(e);
+    }
+
     private void BeginOwnDrag(Participant p, MouseEventArgs e)
     {
         if (e.Button != MouseButtons.Left || p.Id != OwnId) return;
@@ -216,7 +227,7 @@ public sealed class SocialArena : Panel
         {
             int radius = p.Position.Scale / 2;
             float cx = Math.Clamp(p.Center.X, radius + 8, Math.Max(radius + 8, Width - radius - 8));
-            float cy = Math.Clamp(p.Center.Y, radius + 8, Math.Max(radius + 8, Height - radius - 42));
+            float cy = Math.Clamp(p.Center.Y, radius + 8, Math.Max(radius + 8, Height - radius - 102));
             p.Center = new PointF(cx, cy);
             p.Tile.Location = new Point(
                 (int)Math.Round(cx - p.Tile.AvatarCenter.X),
@@ -235,42 +246,65 @@ public sealed class SocialArena : Panel
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-        g.Clear(Pv.Charcoal);
+        g.Clear(Color.FromArgb(7, 7, 7));
 
-        // Fundo preto/marrom com poeira vermelha, como a referencia, sem copiar
-        // a composicao: a identidade continua vindo da paleta Pv e do tema do site.
-        var field = Rectangle.Inflate(ClientRectangle, -8, -8);
-        using (var fill = new LinearGradientBrush(field, Pv.Char2, Color.FromArgb(12, 8, 6),
+        // A arena agora vai de ponta a ponta. Antes ela era um cartao arredondado
+        // dentro do centro, o que a fazia parecer uma feature encaixada no Discord.
+        var field = ClientRectangle;
+        using (var fill = new LinearGradientBrush(field, Color.FromArgb(17, 12, 10),
+                                                   Color.FromArgb(5, 6, 6),
                                                    LinearGradientMode.ForwardDiagonal))
-        using (var path = Pv.RoundRect(field, 12)) g.FillPath(fill, path);
-        using (var border = new Pen(Pv.Char3, 1))
-        using (var path = Pv.RoundRect(field, 12)) g.DrawPath(border, path);
+            g.FillRectangle(fill, field);
+
+        // Luz vermelha muito discreta no miolo, como o palco da referencia.
+        var glowRect = new Rectangle(field.Width / 2 - Math.Max(180, field.Width / 2),
+                                     field.Height / 2 - Math.Max(130, field.Height / 2),
+                                     Math.Max(360, field.Width), Math.Max(260, field.Height));
+        using (var glowPath = new GraphicsPath())
+        {
+            glowPath.AddEllipse(glowRect);
+            using var glow = new PathGradientBrush(glowPath)
+            {
+                CenterColor = Color.FromArgb(34, Pv.Red),
+                SurroundColors = new[] { Color.FromArgb(0, Pv.Red) },
+            };
+            g.FillEllipse(glow, glowRect);
+        }
 
         using (var dust = new SolidBrush(Color.FromArgb(55, Pv.Red)))
         {
             for (int i = 0; i < 95; i++)
             {
                 int x = field.Left + 12 + (i * 97 + i * i * 17) % Math.Max(1, field.Width - 24);
-                int y = field.Top + 28 + (i * 53 + i * i * 11) % Math.Max(1, field.Height - 64);
+                int y = field.Top + 12 + (i * 53 + i * i * 11) % Math.Max(1, field.Height - 76);
                 int d = i % 9 == 0 ? 2 : 1;
                 g.FillEllipse(dust, x, y, d, d);
             }
         }
 
-        using (var b = new SolidBrush(Color.FromArgb(150, Pv.BoneDim)))
-            Pv.DrawTracked(g, "ESPACO SOCIAL · " + RoomName.ToUpperInvariant(), Pv.Label, b,
-                           field.Left + 16, field.Top + 12, 1.6f);
-
-        const string help = "ARRASTE PARA MOVER   ·   ROLINHO PARA AUMENTAR / DIMINUIR";
-        float helpW = Pv.TrackedWidth(g, help, Pv.Label, 1.0f);
-        var helpBox = new Rectangle((int)((Width - helpW) / 2 - 14), field.Bottom - 35,
-                                    (int)helpW + 28, 26);
+        int helpW = Math.Min(430, Math.Max(300, Width - 100));
+        var helpBox = new Rectangle((Width - helpW) / 2, field.Bottom - 53, helpW, 43);
         using (var fillHelp = new SolidBrush(Color.FromArgb(210, Pv.Char2)))
-        using (var path = Pv.RoundRect(helpBox, 8)) g.FillPath(fillHelp, path);
+        using (var path = Pv.RoundRect(helpBox, 10)) g.FillPath(fillHelp, path);
         using (var borderHelp = new Pen(Pv.Char3, 1))
-        using (var path = Pv.RoundRect(helpBox, 8)) g.DrawPath(borderHelp, path);
-        using (var b = new SolidBrush(Pv.BoneDim))
-            Pv.DrawTracked(g, help, Pv.Label, b, helpBox.Left + 14, helpBox.Top + 7, 1.0f);
+        using (var path = Pv.RoundRect(helpBox, 10)) g.DrawPath(borderHelp, path);
+
+        string[] heads = { "ARRASTE", "ROLINHO", "DUPLO CLIQUE" };
+        string[] subs = { "para mover", "para ajustar", "para centralizar" };
+        int col = helpBox.Width / 3;
+        for (int i = 0; i < 3; i++)
+        {
+            if (i > 0)
+                using (var split = new Pen(Color.FromArgb(110, Pv.Char3)))
+                    g.DrawLine(split, helpBox.Left + col * i, helpBox.Top + 8,
+                               helpBox.Left + col * i, helpBox.Bottom - 8);
+            using (var title = new SolidBrush(Pv.Bone))
+                Pv.DrawTracked(g, heads[i], Pv.Label, title, helpBox.Left + col * i + 12,
+                               helpBox.Top + 8, .55f);
+            using (var sub = new SolidBrush(Pv.BoneDim))
+                g.DrawString(subs[i], Pv.Label, sub, helpBox.Left + col * i + 12,
+                             helpBox.Top + 23);
+        }
 
         DrawSizeControls(g);
     }

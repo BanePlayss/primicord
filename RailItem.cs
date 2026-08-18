@@ -28,6 +28,14 @@ public sealed class RailItem : Control
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public string Suffix { get; set; } = "";
 
+    /// <summary>Segunda linha usada pela lista compacta de salas.</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public string Detail { get; set; } = "";
+
+    /// <summary>Selo à direita: AO VIVO, ESPERANDO, LOTADA.</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public string Badge { get; set; } = "";
+
     /// <summary>Bolinha verde de online (DMs).</summary>
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public bool Online { get; set; }
@@ -91,18 +99,40 @@ public sealed class RailItem : Control
         }
 
         float textX = ic.X + iconBox + 10;
+        float badgeWidth = Badge.Length > 0 ? Pv.TrackedWidth(g, Badge, Pv.Label, .45f) + 12 : 0;
         using (var b = new SolidBrush(fg))
         {
             var font = Active ? Pv.BodyBold : Pv.Body;
             string t = Text;
-            float suffixWidth = Suffix.Length > 0 ? g.MeasureString(Suffix, Pv.Label).Width + 18 : 10;
+            float suffixWidth = badgeWidth > 0 ? badgeWidth + 12
+                : Suffix.Length > 0 ? g.MeasureString(Suffix, Pv.Label).Width + 18 : 10;
             float avail = r.Right - textX - suffixWidth;
             while (t.Length > 3 && g.MeasureString(t, font).Width > avail) t = t[..^1];
             if (t != Text) t = t[..Math.Max(1, t.Length - 1)] + "…";
-            g.DrawString(t, font, b, textX, r.Y + (r.Height - font.Height) / 2f);
+            g.DrawString(t, font, b, textX,
+                         Detail.Length > 0 ? r.Y + 4 : r.Y + (r.Height - font.Height) / 2f);
         }
 
-        if (Suffix.Length > 0)
+        if (Detail.Length > 0)
+        {
+            using var detail = new SolidBrush(Active ? Pv.BoneDim : Color.FromArgb(102, Pv.BoneDim));
+            g.DrawString(Detail, Pv.Label, detail, textX, r.Y + 23);
+        }
+
+        if (Badge.Length > 0)
+        {
+            Color badgeColor = Badge == "AO VIVO" ? Pv.Red
+                : Badge == "LOTADA" ? Pv.Orange : Pv.Green;
+            var box = new RectangleF(r.Right - badgeWidth - 6, r.Y + (r.Height - 19) / 2f,
+                                     badgeWidth, 19);
+            using (var path = Pv.RoundRect(Rectangle.Round(box), 3))
+            using (var bg = new SolidBrush(Color.FromArgb(28, badgeColor))) g.FillPath(bg, path);
+            using (var border = new Pen(Color.FromArgb(180, badgeColor), 1))
+            using (var path = Pv.RoundRect(Rectangle.Round(box), 3)) g.DrawPath(border, path);
+            using (var label = new SolidBrush(badgeColor))
+                Pv.DrawTracked(g, Badge, Pv.Label, label, box.X + 6, box.Y + 4, .45f);
+        }
+        else if (Suffix.Length > 0)
         {
             using var b = new SolidBrush(Pv.BoneDim);
             float w = g.MeasureString(Suffix, Pv.Label).Width;

@@ -10,7 +10,7 @@ namespace Primicord;
 public readonly record struct SocialPosition(double X, double Y, int Scale)
 {
     public const int MinScale = 48;
-    public const int DefaultScale = 72;
+    public const int DefaultScale = 92;
     public const int MaxScale = 140;
 
     public SocialPosition Normalized() => new(

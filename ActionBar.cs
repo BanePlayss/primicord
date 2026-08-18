@@ -29,6 +29,18 @@ public sealed class ActionIcon : Control
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public string Caption { get; set; } = "";
 
+    /// <summary>Segunda linha usada nos quatro controles principais da sala.</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public string Subtitle { get; set; } = "";
+
+    /// <summary>Formato horizontal da barra inferior (ícone + título + estado).</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool Wide { get; set; }
+
+    /// <summary>Formato sem legenda, próprio para as ferramentas do cabeçalho.</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool Compact { get; set; }
+
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public string ToolTipText
     {
@@ -45,7 +57,8 @@ public sealed class ActionIcon : Control
         _paint = painter;
         Caption = caption;
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
-                 ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+                 ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw |
+                 ControlStyles.SupportsTransparentBackColor, true);
         Size = new Size(66, 58);
         Cursor = Cursors.Hand;
         BackColor = Pv.Charcoal;
@@ -64,8 +77,10 @@ public sealed class ActionIcon : Control
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
-        int d = 38;
-        var circle = new Rectangle((Width - d) / 2, 2, d, d);
+        int d = Compact ? 32 : 38;
+        var circle = Wide
+            ? new Rectangle(12, (Height - d) / 2, d, d)
+            : new Rectangle((Width - d) / 2, Compact ? (Height - d) / 2 : 2, d, d);
 
         Color bg = Alert ? Pv.Red : Active ? Pv.Orange : Pv.Char2;
         Color fg = Alert || Active ? Pv.Charcoal : Enabled ? Pv.Bone : Pv.BoneDim;
@@ -89,11 +104,29 @@ public sealed class ActionIcon : Control
             g.DrawString(Badge, Pv.Label, b, r.Right - w + 4, r.Y - 2);
         }
 
-        if (Caption.Length > 0)
+        if (Wide)
+        {
+            float tx = circle.Right + 11;
+            using (var title = new SolidBrush(Enabled ? Pv.Bone : Pv.BoneDim))
+                Pv.DrawTracked(g, Caption, Pv.Label, title, tx, Height / 2f - 16, .8f);
+            if (Subtitle.Length > 0)
+            {
+                Color subColor = Alert ? Pv.Red : Active ? Pv.Green : Pv.BoneDim;
+                using var sub = new SolidBrush(subColor);
+                g.DrawString(Subtitle, Pv.Label, sub, tx, Height / 2f + 3);
+            }
+        }
+        else if (!Compact && Caption.Length > 0)
         {
             using var b = new SolidBrush(Enabled ? (Active || Alert ? Pv.Bone : Pv.BoneDim) : Pv.Char3);
             float w = Pv.TrackedWidth(g, Caption, Pv.Label, 0.8f);
             Pv.DrawTracked(g, Caption, Pv.Label, b, (Width - w) / 2f, circle.Bottom + 3, 0.8f);
+        }
+
+        if (Wide)
+        {
+            using var split = new Pen(Color.FromArgb(110, Pv.Char3), 1);
+            g.DrawLine(split, Width - 1, 10, Width - 1, Height - 10);
         }
     }
 

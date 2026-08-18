@@ -3,6 +3,15 @@
 O Discord dos primitivos — app nativo de Windows pra sala de voz em grupo,
 compartilhar tela e tirar clipe dos últimos segundos.
 
+## 0.6.7 — sala social redesenhada
+
+- Arena central maior, sem o antigo “cartão dentro do Discord”.
+- Lista de salas e ranking compacto na coluna esquerda.
+- Chat da sala e atividade real dos participantes na coluna direita.
+- Ferramentas de câmera, tela, buffer, clipe, DJ e cinema no cabeçalho.
+- Barra inferior dedicada a microfone, áudio, convite e saída.
+- Avatares com halo de voz mais forte e limite para não invadir as instruções.
+
 Irmão do [CherrySpy](https://github.com/BanePlayss/duovoz) (que é 1-pra-1 e só na
 LAN). O Primicord é feito pra **N pessoas pela internet**.
 
@@ -106,4 +115,4 @@ Ver [docs/PLANO-DE-MIGRACAO.md](docs/PLANO-DE-MIGRACAO.md) pro que vem depois.
 **Passo manual pendente:** publicar as rules do `pc_rooms` no Firebase Console,
 cobrindo `peers/**` e — se for usar `webrtc=1` — também `signal/**`. Sem isso o
 app não lista nem cria sala. A posição social reutiliza `peers/**`, então não
-exige uma regra nova na versão 0.6.6.
+exige regra adicional na série 0.6.x.

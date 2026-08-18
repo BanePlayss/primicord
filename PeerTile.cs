@@ -66,9 +66,20 @@ public sealed class PeerTile : Control
         if (!Connected) accent = Pv.BoneDim;
         else if (Muted) accent = Color.FromArgb(145, 112, 160);
 
-        int alpha = Speaking ? 58 : 27;
-        using (var glow = new SolidBrush(Color.FromArgb(alpha, accent))) g.FillEllipse(glow, halo);
-        using (var glow2 = new Pen(Color.FromArgb(Speaking ? 155 : 95, accent), Speaking ? 3f : 1.6f))
+        var aura = Rectangle.Inflate(halo, Speaking ? 12 : 7, Speaking ? 12 : 7);
+        using (var path = new GraphicsPath())
+        {
+            path.AddEllipse(aura);
+            using var glow = new PathGradientBrush(path)
+            {
+                CenterColor = Color.FromArgb(Speaking ? 72 : 40, accent),
+                SurroundColors = new[] { Color.FromArgb(0, accent) },
+            };
+            g.FillEllipse(glow, aura);
+        }
+        using (var core = new SolidBrush(Color.FromArgb(Speaking ? 36 : 21, accent)))
+            g.FillEllipse(core, halo);
+        using (var glow2 = new Pen(Color.FromArgb(Speaking ? 210 : 145, accent), Speaking ? 2.6f : 1.5f))
             g.DrawEllipse(glow2, Rectangle.Inflate(halo, -2, -2));
         if (Speaking)
             using (var ring = new Pen(Color.FromArgb(75, accent), 6f))
@@ -99,7 +110,7 @@ public sealed class PeerTile : Control
 
     private void DrawCaption(Graphics g, Rectangle halo, Color accent)
     {
-        string original = (IsMe ? Nick + " (VOCE)" : Nick).ToUpperInvariant();
+        string original = Nick.ToLowerInvariant();
         string name = original;
         while (name.Length > 4 && Pv.TrackedWidth(g, name, Pv.DisplaySm, 0.8f) > Width - 8)
             name = name[..^1];
@@ -114,8 +125,8 @@ public sealed class PeerTile : Control
         const int GiveUpSeconds = 25;
         string status = !Connected
             ? (Punching ? (SilentSeconds >= GiveUpSeconds ? "SEM ROTA" : "CONECTANDO") : "SEM SINAL")
-            : Muted ? "MIC MUTADO"
-            : Speaking ? "MIC · FALANDO"
+            : Muted ? "⌁  MUTADO"
+            : Speaking ? "●  FALANDO"
             : Sharing ? "NA TELA" : "MIC ATIVO";
         Color statusColor = !Connected
             ? (Punching && SilentSeconds < GiveUpSeconds ? Pv.OrangeDim : Pv.Red)

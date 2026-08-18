@@ -73,7 +73,7 @@ public sealed class ClassificacaoView : Control
     {
         var g = e.Graphics;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-        using (var fundo = new SolidBrush(Pv.Char2)) g.FillRectangle(fundo, ClientRectangle);
+        using (var fundo = new SolidBrush(BackColor)) g.FillRectangle(fundo, ClientRectangle);
 
         var t = _tabela;
         if (t == null || t.Vazia)

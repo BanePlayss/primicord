@@ -70,9 +70,10 @@ public sealed class MainForm : Form
         TextAlign = ContentAlignment.MiddleCenter, Font = Pv.Body, Visible = false,
     };
 
-    private Panel? _railList, _voiceStrip, _userPanel, _membersList, _contentHost;
-    private Panel? _rightPanel, _membersHead, _championshipPanel;
+    private Panel? _rail, _brand, _railList, _voiceStrip, _userPanel, _membersList, _contentHost;
+    private Panel? _rightPanel, _membersHead, _championshipPanel, _roomRankingPanel;
     private ClassificacaoView? _tabela;
+    private ClassificacaoView? _roomTabela;
     private Label? _tabelaHead;
     private ApostasView? _apostas;
     private Label? _apostasHead;
@@ -81,11 +82,14 @@ public sealed class MainForm : Form
     private PrimitivaoView? _primitivao;
     private Panel? _roomPanel;
     private SocialArena? _arena;
+    private RoomHeader? _roomHeader;
+    private RoomActivityView? _roomActivity;
     private readonly Dictionary<uint, PeerTile> _peerTiles = new();
     private PeerTile? _myTile;
     private Label? _roomStatus;
     private bool _roomChatVisible = true;
     private bool _chatAutoCollapsed;
+    private HashSet<string> _roomKnownPeers = new(StringComparer.OrdinalIgnoreCase);
 
     // estado da navegacao: "geral" | "dm:<nick>" | "room:<id>"
     // O centro nasce no Primitivao, e nao mais no chat. Quem esta junto aqui esta
@@ -299,21 +303,21 @@ public sealed class MainForm : Form
         var host = new Panel { BackColor = Pv.Charcoal };
 
         // ── RAIL ESQUERDO ──
-        var rail = new Panel { Dock = DockStyle.Left, Width = 236, BackColor = Pv.Char2 };
-        rail.Paint += (_, e) =>
+        _rail = new Panel { Dock = DockStyle.Left, Width = 236, BackColor = Pv.Char2 };
+        _rail.Paint += (_, e) =>
         {
             using var p = new Pen(Pv.Char3, 2);
-            e.Graphics.DrawLine(p, rail.Width - 1, 0, rail.Width - 1, rail.Height);
+            e.Graphics.DrawLine(p, _rail.Width - 1, 0, _rail.Width - 1, _rail.Height);
         };
 
-        var brand = new Panel { Dock = DockStyle.Top, Height = 58, BackColor = Pv.Char2 };
-        brand.Paint += (_, e) =>
+        _brand = new Panel { Dock = DockStyle.Top, Height = 58, BackColor = Pv.Char2 };
+        _brand.Paint += (_, e) =>
         {
             var g = e.Graphics;
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
             using (var b = new SolidBrush(Pv.Orange))
                 Pv.DrawTracked(g, "PRIMICORD", Pv.DisplaySm, b, 16, 18, 2.2f);
-            using (var p = new Pen(Pv.Char3, 2)) g.DrawLine(p, 0, brand.Height - 1, brand.Width, brand.Height - 1);
+            using (var p = new Pen(Pv.Char3, 2)) g.DrawLine(p, 0, _brand.Height - 1, _brand.Width, _brand.Height - 1);
         };
 
         _userPanel = BuildUserPanel();
@@ -324,10 +328,14 @@ public sealed class MainForm : Form
             Padding = new Padding(0, 8, 0, 8),
         };
 
-        rail.Controls.Add(_railList);   // Fill primeiro
-        rail.Controls.Add(_voiceStrip);
-        rail.Controls.Add(_userPanel);
-        rail.Controls.Add(brand);
+        _roomRankingPanel = BuildRoomRankingPanel();
+        _roomRankingPanel.Visible = false;
+
+        _rail.Controls.Add(_railList);   // Fill primeiro
+        _rail.Controls.Add(_roomRankingPanel);
+        _rail.Controls.Add(_voiceStrip);
+        _rail.Controls.Add(_userPanel);
+        _rail.Controls.Add(_brand);
 
         // ── MEMBROS (direita) ──
         _rightPanel = new Panel { Dock = DockStyle.Right, Width = 212, BackColor = Pv.Char2 };
@@ -377,12 +385,14 @@ public sealed class MainForm : Form
             e.Graphics.DrawLine(p, 12, 0, _championshipPanel.Width - 12, 0);
         };
 
-        _roomChatView = new ChatView { Dock = DockStyle.Fill, Visible = false };
+        _roomChatView = new ChatView(compact: true) { Dock = DockStyle.Fill, Visible = false };
         _roomChatView.Send += OnSendMessageAsync;
+        _roomActivity = new RoomActivityView { Visible = false };
 
         // Fill primeiro, depois as bordas: o WinForms encaixa na ordem inversa.
         _rightPanel.Controls.Add(_membersList);
         _rightPanel.Controls.Add(_roomChatView);
+        _rightPanel.Controls.Add(_roomActivity);
         _rightPanel.Controls.Add(_championshipPanel);
         _rightPanel.Controls.Add(_membersHead);
 
@@ -391,7 +401,7 @@ public sealed class MainForm : Form
 
         host.Controls.Add(_contentHost);   // Fill primeiro
         host.Controls.Add(_rightPanel);
-        host.Controls.Add(rail);
+        host.Controls.Add(_rail);
         SetBody(host);
 
         _chatView = new ChatView { Dock = DockStyle.Fill };
@@ -462,10 +472,45 @@ public sealed class MainForm : Form
         return p;
     }
 
+    private Panel BuildRoomRankingPanel()
+    {
+        var panel = new Panel
+        {
+            Dock = DockStyle.Bottom, Height = 194, BackColor = Color.FromArgb(31, 26, 22),
+            Padding = new Padding(8, 0, 8, 8),
+        };
+        panel.Paint += (_, e) =>
+        {
+            using var line = new Pen(Pv.Char3, 1);
+            e.Graphics.DrawLine(line, 10, 0, panel.Width - 10, 0);
+        };
+
+        var head = new Label
+        {
+            Dock = DockStyle.Top, Height = 34, Text = "RANKING GERAL",
+            Font = Pv.Label, ForeColor = Pv.Red, BackColor = panel.BackColor,
+            Padding = new Padding(8, 12, 0, 0),
+        };
+        _roomTabela = new ClassificacaoView
+        {
+            Dock = DockStyle.Top, MaxLinhas = 5, BackColor = panel.BackColor,
+        };
+        var complete = new PrimButton("VER RANKING COMPLETO", PrimButton.Style.Ghost)
+        {
+            Dock = DockStyle.Bottom, Height = 31,
+        };
+        complete.Click += (_, _) => SelectView("primitivao");
+
+        panel.Controls.Add(_roomTabela);
+        panel.Controls.Add(complete);
+        panel.Controls.Add(head);
+        return panel;
+    }
+
     private void UpdateVoiceStrip()
     {
         if (_voiceStrip == null) return;
-        bool on = _session != null;
+        bool on = _session != null && !_view.StartsWith("room:");
         _voiceStrip.Visible = on;
         _voiceStrip.Height = on ? 92 : 0;
         _voiceStrip.Controls.Clear();
@@ -544,6 +589,47 @@ public sealed class MainForm : Form
         // Dock=Top empilha ao contrario: montamos a lista e adicionamos invertida.
         var items = new List<Control>();
 
+        if (_view.StartsWith("room:"))
+        {
+            string activeId = _view[5..];
+            items.Add(RoomRailHeader());
+            foreach (var room in _rooms.OrderByDescending(r => r.Id == activeId)
+                                       .ThenByDescending(r => r.Count)
+                                       .ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                bool active = room.Id == activeId;
+                string badge = room.Count >= 8 ? "LOTADA"
+                    : active || room.Count > 0 ? "AO VIVO" : "ESPERANDO";
+                var it = new RailItem(room.Name, RailItem.Kind.Voice)
+                {
+                    Dock = DockStyle.Top, Height = 48, Active = active,
+                    Detail = $"{room.Count}/8", Badge = badge,
+                };
+                string id = room.Id, name = room.Name;
+                it.Click += async (_, _) => await OnRoomClickedAsync(id, name);
+                items.Add(it);
+
+                if (!active) continue;
+                foreach (string occupant in room.Occupants)
+                {
+                    bool me = string.Equals(occupant, Nick, StringComparison.OrdinalIgnoreCase);
+                    var person = new RailItem(occupant, RailItem.Kind.Dm)
+                    {
+                        Dock = DockStyle.Top, Height = 31, AvatarNick = occupant,
+                        Online = true, Suffix = me ? "VOCE" : "",
+                    };
+                    string target = occupant;
+                    if (!me) person.Click += (_, _) => OpenDm(target);
+                    items.Add(person);
+                }
+            }
+
+            items.Reverse();
+            foreach (var c in items) _railList.Controls.Add(c);
+            _railList.ResumeLayout();
+            return;
+        }
+
         items.Add(RailHeader("PRIMITIVAO"));
         var prim = new RailItem("Campeonato", RailItem.Kind.Action)
         { Dock = DockStyle.Top, Active = _view == "primitivao" };
@@ -614,6 +700,24 @@ public sealed class MainForm : Form
         _railList.ResumeLayout();
     }
 
+    private Panel RoomRailHeader()
+    {
+        var panel = new Panel { Dock = DockStyle.Top, Height = 43, BackColor = Pv.Char2 };
+        var title = new Label
+        {
+            Text = "SALAS", Font = Pv.Label, ForeColor = Pv.Red, AutoSize = true,
+            Location = new Point(10, 17),
+        };
+        var create = new PrimButton("+ CRIAR SALA", PrimButton.Style.Ghost)
+        {
+            Size = new Size(84, 26), Location = new Point(94, 8),
+        };
+        create.Click += async (_, _) => await CreateRoomAsync();
+        panel.Resize += (_, _) => create.Left = panel.ClientSize.Width - create.Width - 8;
+        panel.Controls.AddRange(new Control[] { title, create });
+        return panel;
+    }
+
     private static Panel RailHeader(string text)
     {
         var p = new Panel { Dock = DockStyle.Top, Height = 28, BackColor = Pv.Char2 };
@@ -681,16 +785,29 @@ public sealed class MainForm : Form
             _roomChatView == null) return;
 
         bool inRoom = _view.StartsWith("room:");
+        if (_rail != null) _rail.Width = inRoom ? 188 : 236;
+        if (_brand != null) _brand.Visible = !inRoom;
+        if (_userPanel != null) _userPanel.Visible = !inRoom;
+        if (_voiceStrip != null)
+        {
+            _voiceStrip.Visible = !inRoom && _session != null;
+            _voiceStrip.Height = _voiceStrip.Visible ? 92 : 0;
+        }
+        if (_roomRankingPanel != null) _roomRankingPanel.Visible = inRoom;
+
         _membersList.Visible = !inRoom;
         _membersHead.Visible = !inRoom;
         _roomChatView.Visible = inRoom && _roomChatVisible;
-        _rightPanel.Width = inRoom ? 300 : 212;
+        if (_roomActivity != null) _roomActivity.Visible = inRoom && _roomChatVisible;
+        if (_championshipPanel != null) _championshipPanel.Visible = !inRoom;
+        _rightPanel.Width = inRoom ? 258 : 212;
         _rightPanel.Visible = !inRoom || _roomChatVisible;
 
         if (inRoom)
         {
             _roomChatView.SetHeader("CHAT DA SALA", _voiceRoomName);
             _roomChatView.ComposerPlaceholder = "Mensagem para a sala...";
+            _roomHeader?.Invalidate();
             _ = RefreshChatAsync();
         }
     }
@@ -814,6 +931,12 @@ public sealed class MainForm : Form
             _tabela.MeuNick = Nick;
             _tabela.MaxLinhas = 4;   // o TOP 4, como no rascunho
             _tabela.Definir(painel?.Tabela);
+            if (_roomTabela != null && !_roomTabela.IsDisposed)
+            {
+                _roomTabela.MeuNick = Nick;
+                _roomTabela.MaxLinhas = 5;
+                _roomTabela.Definir(painel?.Tabela);
+            }
             if (_tabelaHead != null && !_tabelaHead.IsDisposed)
             {
                 string resumo = _tabela.Resumo;
@@ -934,22 +1057,15 @@ public sealed class MainForm : Form
 
         _roomPanel = new Panel { Dock = DockStyle.Fill, BackColor = Pv.Charcoal };
 
-        var head = new Panel { Dock = DockStyle.Top, Height = 56, BackColor = Pv.Charcoal };
-        head.Paint += (_, e) =>
+        _roomHeader = new RoomHeader
         {
-            var g = e.Graphics;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-            using (var p = new Pen(Pv.Char3, 2)) g.DrawLine(p, 0, head.Height - 1, head.Width, head.Height - 1);
-            var ic = new RectangleF(20, 18, 18, 18);
-            Glyphs.Speaker(g, ic, Pv.Bone);
-            using var b = new SolidBrush(Pv.Bone);
-            g.DrawString(_voiceRoomName, Pv.DisplaySm, b, 46, 12);
+            RoomName = _voiceRoomName,
+            Participants = Math.Max(1, (_session?.Peers.Count ?? 0) + 1),
         };
 
         _roomStatus = new Label
         {
-            Dock = DockStyle.Top, Height = 26, Font = Pv.Body, ForeColor = Pv.BoneDim,
-            Padding = new Padding(22, 4, 0, 0), Text = "conectando...",
+            Height = 0, Visible = false, Text = "conectando...",
         };
         // "tocando agora" vive na linha de status, que tem a largura toda — na barra
         // de botoes ele era cortado pelo painel de membros.
@@ -959,8 +1075,10 @@ public sealed class MainForm : Form
             Padding = new Padding(22, 2, 0, 0), Text = "", Visible = false,
         };
 
-        // Barra inferior: controles essenciais embaixo, ferramentas de midia acima.
-        var actions = BuildRoomActions();
+        // Ferramentas ficam no cabeçalho; embaixo sobram apenas as quatro ações
+        // essenciais da call. Isso devolve quase 70px de altura para a arena.
+        var actions = BuildRoomActions(out var tools);
+        _roomHeader.Controls.Add(tools);
 
         _arena = new SocialArena { Dock = DockStyle.Fill, RoomName = _voiceRoomName };
         _arena.OwnPositionChanged += OnOwnSocialPositionChanged;
@@ -971,7 +1089,7 @@ public sealed class MainForm : Form
         _roomPanel.Controls.Add(actions);
         _roomPanel.Controls.Add(_djLabel);
         _roomPanel.Controls.Add(_roomStatus);
-        _roomPanel.Controls.Add(head);
+        _roomPanel.Controls.Add(_roomHeader);
         return _roomPanel;
     }
 
@@ -986,27 +1104,38 @@ public sealed class MainForm : Form
     /// Barra de icones acima dos participantes. Antes eram botoes de texto largos:
     /// cinco rotulos por extenso somavam ~800px e o ultimo saia da tela.
     /// </summary>
-    private Panel BuildRoomActions()
+    private Panel BuildRoomActions(out FlowLayoutPanel tools)
     {
         var host = new Panel
         {
-            Dock = DockStyle.Bottom, Height = 124, BackColor = Pv.Charcoal,
-        };
-        host.Paint += (_, e) =>
-        {
-            using var p = new Pen(Pv.Char3, 2);
-            e.Graphics.DrawLine(p, 16, 0, host.Width - 16, 0);
+            Dock = DockStyle.Bottom, Height = 76, BackColor = Color.FromArgb(8, 8, 8),
         };
 
-        var extras = new FlowLayoutPanel
+        tools = new FlowLayoutPanel
         {
-            Dock = DockStyle.Top, Height = 60, BackColor = Pv.Charcoal,
-            WrapContents = false, AutoScroll = true, Padding = new Padding(14, 2, 14, 0),
+            Dock = DockStyle.Right, Width = 320, Height = 55,
+            BackColor = Color.FromArgb(19, 15, 13), WrapContents = false,
+            AutoScroll = false, Padding = new Padding(3, 7, 3, 0),
         };
+
+        var card = new Panel { BackColor = Pv.Char2, Height = 62, Padding = new Padding(1) };
         var primary = new FlowLayoutPanel
         {
-            Dock = DockStyle.Bottom, Height = 62, BackColor = Pv.Char2,
-            WrapContents = false, AutoScroll = true, Padding = new Padding(18, 2, 18, 0),
+            Dock = DockStyle.Fill, BackColor = Pv.Char2, WrapContents = false,
+            AutoScroll = false, Padding = Padding.Empty, Margin = Padding.Empty,
+        };
+        card.Controls.Add(primary);
+        card.Paint += (_, e) =>
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using var border = new Pen(Pv.Char3, 1);
+            using var path = Pv.RoundRect(new Rectangle(0, 0, card.Width - 1, card.Height - 1), 26);
+            e.Graphics.DrawPath(border, path);
+            for (int i = 1; i < 4; i++)
+            {
+                int x = card.Width * i / 4;
+                e.Graphics.DrawLine(border, x, 10, x, card.Height - 10);
+            }
         };
 
         _icMic = new ActionIcon((g, r, c, w) => Glyphs.Mic(g, r, c, _session?.Muted == true), "MIC")
@@ -1059,24 +1188,43 @@ public sealed class MainForm : Form
         _lanBadge = new Label
         {
             Font = Pv.Label, ForeColor = Pv.Green, AutoSize = true, Text = "",
-            Margin = new Padding(14, 22, 0, 0), Visible = false,
+            Location = new Point(8, 3), Visible = false,
         };
 
-        foreach (var ic in new[] { _icMic, _icAudio, _icInvite, _icCam, _icShare, _icRec,
-                                   _icClip, _icDj, _icCinema, _icQuick, _icChat, _icLeave })
-            ic!.Margin = new Padding(0, 0, 6, 0);
-        extras.Controls.AddRange(new Control[]
-            { _icCam, _icShare, _icRec, _icClip, _icDj, _icCinema, _icQuick, _icChat, _lanBadge });
-        primary.Controls.AddRange(new Control[] { _icMic, _icAudio, _icInvite, _icLeave });
-        void CenterPrimary()
+        foreach (var ic in new[] { _icCam, _icShare, _icRec, _icClip, _icDj, _icCinema, _icQuick, _icChat })
         {
-            int used = 4 * 72;
-            primary.Padding = new Padding(Math.Max(18, (host.ClientSize.Width - used) / 2), 2, 18, 0);
+            ic!.Compact = true;
+            ic.Caption = "";
+            ic.Size = new Size(39, 42);
+            ic.Margin = Padding.Empty;
+            ic.BackColor = tools.BackColor;
         }
-        host.Resize += (_, _) => CenterPrimary();
-        CenterPrimary();
-        host.Controls.Add(extras);
-        host.Controls.Add(primary);
+        foreach (var ic in new[] { _icMic, _icAudio, _icInvite, _icLeave })
+        {
+            ic!.Wide = true;
+            ic.Height = 62;
+            ic.Margin = Padding.Empty;
+            ic.BackColor = Color.Transparent;
+        }
+        _icMic.Subtitle = "Ativo";
+        _icAudio.Subtitle = "Alto";
+        _icInvite.Subtitle = "amigos";
+        _icLeave.Subtitle = "voltar ao lobby";
+
+        tools.Controls.AddRange(new Control[]
+            { _icCam, _icShare, _icRec, _icClip, _icDj, _icCinema, _icQuick, _icChat });
+        primary.Controls.AddRange(new Control[] { _icMic, _icAudio, _icInvite, _icLeave });
+        void LayoutPrimary()
+        {
+            int width = Math.Min(560, Math.Max(360, host.ClientSize.Width - 34));
+            card.SetBounds((host.ClientSize.Width - width) / 2, 7, width, 62);
+            int each = Math.Max(88, width / 4);
+            foreach (var ic in new[] { _icMic, _icAudio, _icInvite, _icLeave }) ic!.Width = each;
+        }
+        host.Resize += (_, _) => LayoutPrimary();
+        LayoutPrimary();
+        host.Controls.Add(card);
+        host.Controls.Add(_lanBadge);
         return host;
     }
 
@@ -1196,10 +1344,17 @@ public sealed class MainForm : Form
         EnsureRoomPanel();
         _arena!.RoomName = roomName;
         _arena.ClearParticipants();
+        if (_roomHeader != null)
+        {
+            _roomHeader.RoomName = roomName;
+            _roomHeader.Participants = 1;
+        }
+        _roomKnownPeers.Clear();
+        _roomActivity?.Reset(roomName);
         _myTile = new PeerTile { Nick = Nick, IsMe = true, Connected = true };
         _arena.SetOwn(_myTile, myPosition);
         _audioMuted = false;
-        _roomChatVisible = ClientSize.Width >= 1000;
+        _roomChatVisible = ClientSize.Width >= 900;
 
         UpdateVoiceStrip();
         UpdateRightContext();
@@ -1270,6 +1425,7 @@ public sealed class MainForm : Form
         _voiceRoomId = "";
         _voiceRoomName = "";
         _peerTiles.Clear();
+        _roomKnownPeers.Clear();
         _arena?.ClearParticipants();
         _myTile = null;
 
@@ -1284,6 +1440,13 @@ public sealed class MainForm : Form
 
         var peers = _session.Peers;
         var alive = peers.Select(p => p.SenderId).ToHashSet();
+        var currentNames = peers.Select(p => p.Nick).Where(n => n.Length > 0)
+                                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (string entered in currentNames.Except(_roomKnownPeers, StringComparer.OrdinalIgnoreCase))
+            _roomActivity?.Push($"{entered} entrou na sala", "agora");
+        foreach (string left in _roomKnownPeers.Except(currentNames, StringComparer.OrdinalIgnoreCase))
+            _roomActivity?.Push($"{left} saiu da sala", "agora");
+        _roomKnownPeers = currentNames;
 
         foreach (var p in peers)
         {
@@ -1493,6 +1656,18 @@ public sealed class MainForm : Form
         }
 
         _roomStatus.Text = s;
+        if (_roomHeader != null)
+        {
+            _roomHeader.RoomName = _voiceRoomName;
+            _roomHeader.Participants = peers.Count + 1;
+        }
+        if (_roomActivity != null)
+        {
+            string connection = semRota > 0 ? $"{semRota} conexao sem rota"
+                : punching > 0 ? $"{punching} conexao conectando"
+                : _webrtc != null ? "Voz WebRTC · Opus" : "Voz direta · P2P";
+            _roomActivity.UpdateSnapshot(peers.Count + 1, connection);
+        }
     }
 
     private void ToggleMute()
@@ -1764,14 +1939,31 @@ public sealed class MainForm : Form
 
         bool muted = _session?.Muted == true || _voice == null;
         _icMic.Alert = muted;
-        _icMic.Caption = muted ? "MUDO" : "MIC";
+        _icMic.Active = !muted;
+        _icMic.Caption = "MICROFONE";
+        _icMic.Subtitle = muted ? "Mutado" : "Ativo";
         _icMic.Invalidate();
 
         if (_icAudio != null)
         {
             _icAudio.Alert = _audioMuted;
-            _icAudio.Caption = _audioMuted ? "SEM AUDIO" : "AUDIO";
+            _icAudio.Active = !_audioMuted;
+            _icAudio.Caption = "AUDIO";
+            _icAudio.Subtitle = _audioMuted ? "Silenciado" : "Alto";
             _icAudio.Invalidate();
+        }
+
+        if (_icInvite != null)
+        {
+            _icInvite.Caption = "CONVIDAR";
+            _icInvite.Subtitle = "amigos";
+            _icInvite.Invalidate();
+        }
+        if (_icLeave != null)
+        {
+            _icLeave.Caption = "SAIR DA SALA";
+            _icLeave.Subtitle = "voltar ao lobby";
+            _icLeave.Invalidate();
         }
 
         if (_icChat != null)
@@ -1831,14 +2023,14 @@ public sealed class MainForm : Form
         base.OnResize(e);
         if (!_view.StartsWith("room:") || WindowState == FormWindowState.Minimized) return;
 
-        if (ClientSize.Width < 1000 && _roomChatVisible)
+        if (ClientSize.Width < 900 && _roomChatVisible)
         {
             _roomChatVisible = false;
             _chatAutoCollapsed = true;
             UpdateRightContext();
             SyncRoomButtons();
         }
-        else if (ClientSize.Width >= 1080 && _chatAutoCollapsed)
+        else if (ClientSize.Width >= 960 && _chatAutoCollapsed)
         {
             _roomChatVisible = true;
             _chatAutoCollapsed = false;
