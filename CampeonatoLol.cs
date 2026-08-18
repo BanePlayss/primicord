@@ -26,7 +26,21 @@ public static class CampeonatoLol
 {
     private const string DocPath = "primitivao/apostas";
 
-    public static async Task<Classificacao?> LerAsync(Firestore fs, CancellationToken ct = default)
+    /// <summary>O que a coluna da direita precisa, de uma leitura so.</summary>
+    public sealed class PainelLol
+    {
+        public Classificacao? Tabela;
+        public List<ApostaLol> Apostas = new();
+    }
+
+    /// <summary>
+    /// Le o doc UMA vez e devolve tabela e apostas juntas.
+    /// </summary>
+    /// <remarks>
+    /// Separado seriam dois GET de 134KB pra montar o mesmo painel, com os dois
+    /// lados podendo discordar se o placar mudasse entre um e outro.
+    /// </remarks>
+    public static async Task<PainelLol?> LerAsync(Firestore fs, CancellationToken ct = default)
     {
         JsonNode? raw;
         try { raw = await fs.GetRawAsync(DocPath, new[] { "json", "interests" }, ct).ConfigureAwait(false); }
@@ -42,15 +56,21 @@ public static class CampeonatoLol
                             .OrderBy(n => n, StringComparer.Ordinal)
                             .ToList();
 
-        JsonNode? placares = null;
+        JsonNode? placares = null, travas = null;
         try
         {
             string json = campos?["json"]?["stringValue"]?.GetValue<string>() ?? "{}";
-            placares = JsonNode.Parse(json)?["lol"]?["scores"];
+            var lol = JsonNode.Parse(json)?["lol"];
+            placares = lol?["scores"];
+            travas = lol?["locks"];
         }
         catch (Exception ex) { Log.Write("lol: placares ilegiveis: " + ex.Message); }
 
-        return Calcular(jogadores, placares);
+        return new PainelLol
+        {
+            Tabela = Calcular(jogadores, placares),
+            Apostas = ApostasLol.Abertas(jogadores, placares, travas),
+        };
     }
 
     /// <summary>A conta, separada do IO — e aqui que mora tudo que pode errar.</summary>

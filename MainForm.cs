@@ -72,6 +72,8 @@ public sealed class MainForm : Form
     private Panel? _railList, _voiceStrip, _userPanel, _membersList, _contentHost;
     private ClassificacaoView? _tabela;
     private Label? _tabelaHead;
+    private ApostasView? _apostas;
+    private Label? _apostasHead;
     private ChatView? _chatView;
     private Panel? _roomPanel;
     private FlowLayoutPanel? _tiles;
@@ -345,6 +347,18 @@ public sealed class MainForm : Form
             Font = Pv.Label, Padding = new Padding(18, 12, 8, 0), Text = "LOL",
         };
         _tabela = new ClassificacaoView { Dock = DockStyle.Top };
+
+        _apostasHead = new Label
+        {
+            Dock = DockStyle.Top, Height = 30, BackColor = Pv.Char2, ForeColor = Pv.BoneDim,
+            Font = Pv.Label, Padding = new Padding(18, 10, 8, 0), Text = "APOSTAS DISPONIVEIS",
+            Visible = false,
+        };
+        _apostas = new ApostasView { Dock = DockStyle.Top, Visible = false };
+
+        // Ordem inversa: o ultimo adicionado fica no topo da pilha do Dock.
+        campeonato.Controls.Add(_apostas);
+        campeonato.Controls.Add(_apostasHead);
         campeonato.Controls.Add(_tabela);
         campeonato.Controls.Add(_tabelaHead);
         campeonato.Paint += (_, e) =>
@@ -704,15 +718,24 @@ public sealed class MainForm : Form
         if (_tabela == null || _tabela.IsDisposed) return;
         try
         {
-            var tabela = await CampeonatoLol.LerAsync(_fs);
+            var painel = await CampeonatoLol.LerAsync(_fs);
             if (_tabela.IsDisposed) return;
+
             _tabela.MeuNick = Nick;
             _tabela.MaxLinhas = 4;   // o TOP 4, como no rascunho
-            _tabela.Definir(tabela);
+            _tabela.Definir(painel?.Tabela);
             if (_tabelaHead != null && !_tabelaHead.IsDisposed)
             {
                 string resumo = _tabela.Resumo;
                 _tabelaHead.Text = resumo.Length > 0 ? "LOL  ·  " + resumo : "LOL";
+            }
+
+            if (_apostas != null && !_apostas.IsDisposed)
+            {
+                var abertas = painel?.Apostas ?? new List<ApostaLol>();
+                _apostas.Definir(abertas);
+                if (_apostasHead != null && !_apostasHead.IsDisposed)
+                    _apostasHead.Visible = abertas.Count > 0;
             }
         }
         catch (Exception ex) { Log.Write("campeonato: " + ex.Message); }
