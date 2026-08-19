@@ -3,6 +3,12 @@
 O Discord dos primitivos — app nativo de Windows pra sala de voz em grupo,
 compartilhar tela e tirar clipe dos últimos segundos.
 
+## 0.6.10 — servidor configurado automaticamente
+
+- Ao marcar este PC como host, o Primicord detecta o IP conectado do Tailscale.
+- O endereço completo `http://100.x.y.z:8765` aparece pronto para compartilhar.
+- Endereços digitados sem protocolo ou porta são normalizados ao salvar.
+
 ## 0.6.9 — rede privada e mini servidor
 
 - O instalador do Primicord instala o Tailscale quando ele ainda não existe.

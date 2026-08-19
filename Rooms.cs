@@ -152,6 +152,28 @@ public sealed class Config
     /// <summary>Bipe quando alguem entra ou sai da sala de voz.</summary>
     public bool JoinLeaveSound = true;
 
+    public static string NormalizeCoordServerUrl(string? value)
+    {
+        string candidate = (value ?? "").Trim();
+        if (candidate.Length == 0) candidate = "primicord-server";
+        if (!candidate.Contains("://", StringComparison.Ordinal))
+            candidate = "http://" + candidate;
+
+        if (!Uri.TryCreate(candidate, UriKind.Absolute, out var uri)
+            || string.IsNullOrWhiteSpace(uri.Host))
+            return "http://primicord-server:8765";
+
+        var normalized = new UriBuilder(uri)
+        {
+            Scheme = "http",
+            Port = uri.IsDefaultPort ? 8765 : uri.Port,
+            Path = "",
+            Query = "",
+            Fragment = "",
+        };
+        return normalized.Uri.GetLeftPart(UriPartial.Authority);
+    }
+
     /// <summary>
     /// Mandar o som do sistema junto com a tela. Sem isso o pessoal ve o jogo/video
     /// mudo — so a voz passa.
@@ -261,6 +283,7 @@ public sealed class Config
             }
         }
         catch (Exception ex) { Log.Write("config nao carregou: " + ex.Message); }
+        c.CoordServerUrl = NormalizeCoordServerUrl(c.CoordServerUrl);
         return c;
     }
 

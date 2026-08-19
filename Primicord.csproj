@@ -14,7 +14,7 @@
     <!-- E ESTE numero que o botao de atualizar compara com a tag da release do
          GitHub. Subir aqui e publicar a release sao o mesmo ato: se o exe sair com
          a versao antiga, todo mundo vai baixar de novo o que ja tem. -->
-    <Version>0.6.9</Version>
+    <Version>0.6.10</Version>
     <ApplicationIcon>Primicord.ico</ApplicationIcon>
     <!-- Trimming quebra reflection do WinForms/NAudio — deixar desligado. -->
     <PublishTrimmed>false</PublishTrimmed>

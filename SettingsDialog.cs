@@ -230,6 +230,10 @@ public sealed class SettingsDialog : Form
         _hostServer.Location = new Point(24, 1030);
         _hostServer.Size = new Size(412, 26);
         _hostServer.Checked = cfg.HostMiniServer;
+        _hostServer.Click += async (_, _) =>
+        {
+            if (_hostServer.Checked) await RefreshTailscaleStatusAsync(fillHostAddress: true);
+        };
         var serverHint = new Label
         {
             Text = "No PC servidor, marque acima. Nos outros, use o IP 100.x do\n"
@@ -250,7 +254,7 @@ public sealed class SettingsDialog : Form
         {
             using var dialog = new TailscaleSetupDialog();
             dialog.ShowDialog(this);
-            _ = RefreshTailscaleStatusAsync();
+            _ = RefreshTailscaleStatusAsync(fillHostAddress: _hostServer.Checked);
         };
 
         // ── ATUALIZAR ──
@@ -294,7 +298,11 @@ public sealed class SettingsDialog : Form
               titleUpd, lblVersion, _updateBtn, _updateStatus,
               save, cancel });
 
-        Shown += (_, _) => { RestartMonitor(); _ = RefreshTailscaleStatusAsync(); };
+        Shown += (_, _) =>
+        {
+            RestartMonitor();
+            _ = RefreshTailscaleStatusAsync(fillHostAddress: _hostServer.Checked);
+        };
         FormClosed += (_, _) => { _monitor?.Dispose(); _monitor = null; };
     }
 
@@ -401,9 +409,7 @@ public sealed class SettingsDialog : Form
         _cfg.MusicVolume = _music.Value;
         _cfg.TrayOnClose = _tray.Checked;
         _cfg.JoinLeaveSound = _joinSound.Checked;
-        _cfg.CoordServerUrl = string.IsNullOrWhiteSpace(_server.Text)
-            ? "http://primicord-server:8765"
-            : _server.Text.Trim();
+        _cfg.CoordServerUrl = Config.NormalizeCoordServerUrl(_server.Text);
         _cfg.HostMiniServer = _hostServer.Checked;
         _cfg.Save();
         MiniServerProcess.Configure(_cfg.HostMiniServer);
@@ -411,11 +417,15 @@ public sealed class SettingsDialog : Form
         Close();
     }
 
-    private async Task RefreshTailscaleStatusAsync()
+    private async Task RefreshTailscaleStatusAsync(bool fillHostAddress = false)
     {
         var status = await TailscaleIntegration.GetStatusAsync();
         if (!IsDisposed)
+        {
             _tailscaleStatus.Text = "Tailscale: " + status.Description;
+            if (fillHostAddress && status.Connected && status.Address.Length > 0)
+                _server.Text = Config.NormalizeCoordServerUrl(status.Address);
+        }
     }
 
     /// <summary>

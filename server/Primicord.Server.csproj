@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Primicord.Server</AssemblyName>
     <RootNamespace>Primicord.Server</RootNamespace>
-    <Version>0.6.9</Version>
+    <Version>0.6.10</Version>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

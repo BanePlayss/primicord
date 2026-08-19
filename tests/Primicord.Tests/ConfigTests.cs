@@ -34,6 +34,22 @@ public sealed class ConfigTests : IDisposable
 
     private string Arquivo => Path.Combine(_dir, "config.txt");
 
+    [Theory]
+    [InlineData("100.64.2.73", "http://100.64.2.73:8765")]
+    [InlineData("http://100.64.2.73", "http://100.64.2.73:8765")]
+    [InlineData("pc-bane.tailnet.ts.net:9000", "http://pc-bane.tailnet.ts.net:9000")]
+    [InlineData("http://primicord-server:8765/", "http://primicord-server:8765")]
+    public void Normaliza_endereco_do_mini_servidor(string input, string expected)
+        => Assert.Equal(expected, Config.NormalizeCoordServerUrl(input));
+
+    [Fact]
+    public void Config_antigo_sem_porta_e_migrado_ao_carregar()
+    {
+        File.WriteAllText(Arquivo, "coordserver=100.64.2.73");
+
+        Assert.Equal("http://100.64.2.73:8765", Config.Load().CoordServerUrl);
+    }
+
     [Fact]
     public void Repo_de_update_padrao_nao_e_gravado()
     {
