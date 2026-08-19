@@ -9,7 +9,9 @@ namespace Primicord;
 /// </summary>
 public sealed class StageView : Control
 {
-    private Bitmap? _frame;
+    private ScreenReceiver? _frames;
+    private uint _senderId;
+    private bool _paintErrorLogged;
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public string SharerNick { get; set; } = "";
@@ -41,10 +43,11 @@ public sealed class StageView : Control
         BackColor = Color.Black;
     }
 
-    /// <summary>Troca o quadro exibido. O bitmap pertence ao ScreenReceiver — nao dispomos.</summary>
-    public void SetFrame(Bitmap? frame)
+    /// <summary>Aponta o palco para a tela remontada de uma pessoa.</summary>
+    public void SetFrame(ScreenReceiver? frames, uint senderId = 0)
     {
-        _frame = frame;
+        _frames = frames;
+        _senderId = senderId;
         Invalidate();
     }
 
@@ -55,8 +58,22 @@ public sealed class StageView : Control
 
         if (SelfPreview) { DrawSelfCard(g); return; }
 
-        var f = _frame;
-        if (f == null)
+        bool drewFrame = false;
+        try
+        {
+            drewFrame = _frames?.UseFrame(_senderId, f => DrawFrame(g, f)) == true;
+            _paintErrorLogged = false;
+        }
+        catch (Exception ex)
+        {
+            if (!_paintErrorLogged)
+            {
+                Log.Write("palco: quadro nao desenhou: " + ex.Message);
+                _paintErrorLogged = true;
+            }
+        }
+
+        if (!drewFrame)
         {
             using var b = new SolidBrush(Pv.BoneDim);
             const string msg = "Ninguem compartilhando tela";
@@ -65,20 +82,24 @@ public sealed class StageView : Control
             return;
         }
 
-        // Encaixa mantendo proporcao (letterbox).
-        double scale = Math.Min(Width / (double)f.Width, Height / (double)f.Height);
-        int w = (int)(f.Width * scale), h = (int)(f.Height * scale);
-        var dest = new Rectangle((Width - w) / 2, (Height - h) / 2, w, h);
-
-        g.InterpolationMode = InterpolationMode.HighQualityBilinear;
-        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-        try { g.DrawImage(f, dest); } catch { /* bitmap trocado no meio do paint */ }
-
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
         if (SharerNick.Length > 0) DrawTag(g, "TELA DE " + SharerNick.ToUpperInvariant(), true);
         if (StatusRight.Length > 0) DrawTag(g, StatusRight, false);
+    }
+
+    private void DrawFrame(Graphics g, Bitmap frame)
+    {
+        // Encaixa mantendo proporcao (letterbox). O ScreenReceiver segura o mesmo
+        // lock usado para escrever os blocos durante toda esta chamada.
+        double scale = Math.Min(Width / (double)frame.Width, Height / (double)frame.Height);
+        int w = (int)(frame.Width * scale), h = (int)(frame.Height * scale);
+        var dest = new Rectangle((Width - w) / 2, (Height - h) / 2, w, h);
+
+        g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+        g.DrawImage(frame, dest);
     }
 
     /// <summary>Cartao de "voce esta transmitindo" — sem video, sem espelho.</summary>

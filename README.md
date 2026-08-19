@@ -3,6 +3,12 @@
 O Discord dos primitivos — app nativo de Windows pra sala de voz em grupo,
 compartilhar tela e tirar clipe dos últimos segundos.
 
+## 0.6.11 — compartilhamento sem X vermelho
+
+- Sincroniza a pintura do palco com os blocos recebidos da tela compartilhada.
+- Impede o GDI+ de ler o bitmap enquanto a rede ainda está escrevendo nele.
+- Mantém o quadro estável sem cópias grandes a cada atualização.
+
 ## 0.6.10 — servidor configurado automaticamente
 
 - Ao marcar este PC como host, o Primicord detecta o IP conectado do Tailscale.

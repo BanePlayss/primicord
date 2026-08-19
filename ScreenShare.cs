@@ -544,14 +544,19 @@ public sealed class ScreenReceiver : IDisposable
         return true;
     }
 
-    /// <summary>Tela de alguem, ou null se parou de mandar ha mais de 4s.</summary>
-    public Bitmap? FrameOf(uint senderId)
+    /// <summary>
+    /// Usa a tela de alguem sob o mesmo bloqueio que aplica os blocos recebidos.
+    /// O GDI+ nao permite desenhar um Bitmap enquanto outro Graphics o altera;
+    /// manter a pintura dentro deste callback evita o X vermelho do WinForms.
+    /// </summary>
+    public bool UseFrame(uint senderId, Action<Bitmap> use)
     {
         lock (_lock)
         {
-            if (!_canvases.TryGetValue(senderId, out var c)) return null;
-            if (DateTime.UtcNow.Ticks - c.LastTicks > TimeSpan.TicksPerSecond * 4) return null;
-            return c.Bmp;
+            if (!_canvases.TryGetValue(senderId, out var c)) return false;
+            if (DateTime.UtcNow.Ticks - c.LastTicks > TimeSpan.TicksPerSecond * 4) return false;
+            use(c.Bmp);
+            return true;
         }
     }
 

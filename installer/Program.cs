@@ -26,11 +26,11 @@ internal static class Program
         }
 
         MessageBoxW(IntPtr.Zero,
-            "O Primicord 0.6.10 usa o Tailscale para criar a rede privada do grupo.\n\n"
+            "O Primicord 0.6.11 usa o Tailscale para criar a rede privada do grupo.\n\n"
           + "Se ele ainda nao estiver instalado, este assistente baixa o MSI oficial, "
           + "pede permissao do Windows e depois instala o Primicord. Nenhuma chave "
           + "da tailnet fica dentro do instalador.",
-            "PRIMICORD 0.6.10", Ok | IconInfo);
+            "PRIMICORD 0.6.11", Ok | IconInfo);
 
         string tempDir = Path.Combine(Path.GetTempPath(), "PrimicordSetup-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);

@@ -1707,7 +1707,7 @@ public sealed class MainForm : Form
         // Palco: mostra a tela de quem esta em foco (a minha ja chega por OnMyFrame).
         if (_stage != null && !_stage.IsDisposed && _focusedSharer != 0)
         {
-            _stage.SetFrame(_screens.FrameOf(_focusedSharer));
+            _stage.SetFrame(_screens, _focusedSharer);
             var who = _session.Peers.FirstOrDefault(p => p.SenderId == _focusedSharer);
             _stage.SharerNick = who?.Nick ?? "";
         }
