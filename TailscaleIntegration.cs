@@ -298,6 +298,13 @@ public static class TailscaleIntegration
                 ?? throw new InvalidOperationException("O Windows nao informou o executavel do Primicord."),
             ct);
 
+    /// <summary>Recria as regras antigas ou incompletas por solicitacao do usuario.</summary>
+    public static Task RepairNetworkFirewallAsync(CancellationToken ct = default)
+        => NetworkFirewall.RepairAsync(
+            Environment.ProcessPath
+                ?? throw new InvalidOperationException("O Windows nao informou o executavel do Primicord."),
+            ct);
+
     public static void OpenClient()
     {
         string? gui = GuiPath;

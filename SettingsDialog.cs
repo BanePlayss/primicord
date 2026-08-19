@@ -59,6 +59,7 @@ public sealed class SettingsDialog : Form
     private readonly TextBox _server = new();
     private readonly PrimCheck _hostServer = new("Este PC mantem uma replica das salas do grupo");
     private readonly Label _tailscaleStatus = new();
+    private readonly Label _firewallStatus = new();
 
     private void UpdateMusicLabel()
         => _musicLabel.Text = _music.Value == 0
@@ -254,21 +255,59 @@ public sealed class SettingsDialog : Form
             _ = RefreshTailscaleStatusAsync();
         };
 
+        _firewallStatus.Location = new Point(24, 1168);
+        _firewallStatus.Size = new Size(250, 42);
+        _firewallStatus.Font = Pv.Body;
+        _firewallStatus.ForeColor = Pv.BoneDim;
+        _firewallStatus.Text = "Firewall: servidor e voz na rede privada";
+        var firewallBtn = new PrimButton("REPARAR FIREWALL", PrimButton.Style.Ghost)
+        {
+            Name = "repairFirewallButton",
+            AccessibleName = "Reparar regras do Firewall do Primicord",
+            Location = new Point(286, 1164), Size = new Size(150, 38),
+        };
+        firewallBtn.Click += async (_, _) =>
+        {
+            firewallBtn.Enabled = false;
+            _firewallStatus.ForeColor = Pv.Orange;
+            _firewallStatus.Text = "Firewall: aguardando permissao do Windows...";
+            try
+            {
+                await TailscaleIntegration.RepairNetworkFirewallAsync();
+                _firewallStatus.ForeColor = Pv.Green;
+                _firewallStatus.Text = "Firewall: servidor e voz liberados no Tailscale.";
+                MessageBox.Show(this,
+                    "As regras do Primicord foram recriadas para a rede privada do Tailscale.",
+                    "PRIMICORD — FIREWALL",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("reparo manual do firewall falhou: " + ex);
+                _firewallStatus.ForeColor = Pv.Red;
+                _firewallStatus.Text = "Firewall: " + ex.Message;
+                MessageBox.Show(this, ex.Message, "PRIMICORD — FIREWALL",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally { if (!IsDisposed) firewallBtn.Enabled = true; }
+        };
+
         // ── SETUP UNIVERSAL ──
         var titleInvite = new Label
         {
             Text = "CONVIDAR PARA O GRUPO", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
-            Location = new Point(24, 1184), AutoSize = true,
+            Location = new Point(24, 1248), AutoSize = true,
         };
         var inviteHint = new Label
         {
             Text = "Envie o mesmo Setup publico para todos e passe o codigo do grupo\n"
                  + "em separado. O instalador configura Tailscale, salas e replicas.",
-            Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(24, 1222),
+            Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(24, 1286),
             Size = new Size(412, 44),
         };
         var inviteBtn = new PrimButton("BAIXAR SETUP")
-        { Location = new Point(24, 1272), Size = new Size(198, 38) };
+        { Location = new Point(24, 1336), Size = new Size(198, 38) };
         inviteBtn.Click += (_, _) =>
         {
             string repo = string.IsNullOrWhiteSpace(_cfg.UpdateRepo)
@@ -278,7 +317,7 @@ public sealed class SettingsDialog : Form
             { UseShellExecute = true });
         };
         var groupCodeBtn = new PrimButton("USAR CÓDIGO", PrimButton.Style.Ghost)
-        { Location = new Point(234, 1272), Size = new Size(202, 38) };
+        { Location = new Point(234, 1336), Size = new Size(202, 38) };
         groupCodeBtn.Click += (_, _) =>
         {
             using var dialog = new GroupCodeDialog(_cfg);
@@ -291,21 +330,21 @@ public sealed class SettingsDialog : Form
         var titleUpd = new Label
         {
             Text = "ATUALIZAR", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
-            Location = new Point(24, 1336), AutoSize = true,
+            Location = new Point(24, 1400), AutoSize = true,
         };
 
         var lblVersion = new Label
         {
             Text = $"voce esta na versao {Updater.CurrentVersion}",
             Font = Pv.Body, ForeColor = Pv.BoneDim,
-            Location = new Point(24, 1374), AutoSize = true,
+            Location = new Point(24, 1438), AutoSize = true,
         };
 
         _updateBtn = new PrimButton("PROCURAR ATUALIZACAO")
-        { Location = new Point(24, 1400), Size = new Size(260, 38) };
+        { Location = new Point(24, 1464), Size = new Size(260, 38) };
         _updateBtn.Click += async (_, _) => await CheckOrInstallAsync();
 
-        _updateStatus.Location = new Point(24, 1446);
+        _updateStatus.Location = new Point(24, 1510);
         _updateStatus.Size = new Size(412, 56);
         _updateStatus.Font = Pv.Body;
         _updateStatus.ForeColor = Pv.BoneDim;
@@ -313,10 +352,10 @@ public sealed class SettingsDialog : Form
             ? $"procura em github.com/{cfg.UpdateRepo}"
             : "rodando pelo dotnet run — a troca automatica so funciona no exe publicado";
 
-        var save = new PrimButton("SALVAR") { Location = new Point(24, 1514), Size = new Size(200, 40) };
+        var save = new PrimButton("SALVAR") { Location = new Point(24, 1578), Size = new Size(200, 40) };
         save.Click += (_, _) => Apply();
         var cancel = new PrimButton("CANCELAR", PrimButton.Style.Ghost)
-        { Location = new Point(236, 1514), Size = new Size(200, 40) };
+        { Location = new Point(236, 1578), Size = new Size(200, 40) };
         cancel.Click += (_, _) => Close();
 
         Controls.AddRange(new Control[]
@@ -325,6 +364,7 @@ public sealed class SettingsDialog : Form
               titleScr, lblBw, _bw, bwHint,
                titleApp, _siteTheme, themeHint, lblMusic, _music, _musicLabel, _tray, _joinSound,
                titleNet, lblServer, _server, _hostServer, serverHint, _tailscaleStatus, tailscaleBtn,
+               _firewallStatus, firewallBtn,
                titleInvite, inviteHint, inviteBtn, groupCodeBtn,
                titleUpd, lblVersion, _updateBtn, _updateStatus,
               save, cancel });

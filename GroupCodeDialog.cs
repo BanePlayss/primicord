@@ -120,7 +120,7 @@ public sealed class GroupCodeDialog : Form
             MiniServerProcess.Configure(enabled: true);
 
             SetStatus("Liberando servidor e voz somente na rede privada...");
-            try { await TailscaleIntegration.EnsureNetworkFirewallAsync(); }
+            try { await TailscaleIntegration.RepairNetworkFirewallAsync(); }
             catch (Exception ex)
             {
                 // A adesao ao grupo continua valida, mas servidor e voz podem ficar

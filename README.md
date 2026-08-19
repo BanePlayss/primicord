@@ -3,6 +3,15 @@
 O Discord dos primitivos — app nativo de Windows pra sala de voz em grupo,
 compartilhar tela e tirar clipe dos últimos segundos.
 
+## 0.6.22 — reparo manual de rede
+
+- As Configurações ganharam o botão `REPARAR FIREWALL`, sem precisar abrir PowerShell.
+- O reparo remove regras antigas ou incompletas e recria servidor TCP, voz UDP de
+  entrada e voz UDP de saída, sempre restritos à rede `100.64.0.0/10` do Tailscale.
+- A entrada UDP habilita a travessia de borda do Windows e o app informa claramente
+  se a permissão de administrador foi aceita ou cancelada.
+- O instalador completo e a entrada pelo código do grupo também executam o reparo.
+
 ## 0.6.21 — rota de voz no Firewall
 
 - O instalador cria a regra `Primicord Voice (Tailscale)` para UDP dinâmico,

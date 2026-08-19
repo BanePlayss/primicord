@@ -41,7 +41,7 @@ internal static class Program
               + "2. conectar este PC a rede privada do grupo;\n"
               + "3. configurar as salas e a replica automaticamente.\n\n"
               + "O Windows pode pedir permissao de administrador.",
-                "PRIMICORD 0.6.21 — GRUPO", Ok | IconInfo);
+                "PRIMICORD 0.6.22 — GRUPO", Ok | IconInfo);
         }
         else
         {
@@ -60,7 +60,7 @@ internal static class Program
                   + "2. conectar este PC a rede privada do grupo;\n"
                   + "3. configurar as salas e a replica automaticamente.\n\n"
                   + "O Windows pode pedir permissao de administrador.",
-                    "PRIMICORD 0.6.21 — GRUPO", Ok | IconInfo);
+                    "PRIMICORD 0.6.22 — GRUPO", Ok | IconInfo);
             }
         }
 
@@ -108,7 +108,7 @@ internal static class Program
             string appPath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "Primicord", "current", "Primicord.exe");
-            try { await NetworkFirewall.EnsureAsync(appPath); }
+            try { await NetworkFirewall.RepairAsync(appPath); }
             catch (Exception ex)
             {
                 MessageBoxW(IntPtr.Zero,
