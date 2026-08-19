@@ -7,6 +7,24 @@ namespace Primicord.Tests;
 public sealed class RoomUxTests
 {
     [Fact]
+    public void Notificacao_pode_ser_fechada_pelo_usuario()
+    {
+        using var banner = new AppBanner();
+        banner.ShowMessage("Convite da sala copiado.", autoDismissMs: 0);
+
+        Assert.True(banner.Visible);
+        Assert.Equal(42, banner.Height);
+        Assert.Equal("Convite da sala copiado.", banner.Message);
+
+        var close = Assert.Single(banner.Controls.OfType<Button>());
+        Assert.Equal("Fechar notificacao", close.AccessibleName);
+        close.PerformClick();
+
+        Assert.False(banner.Visible);
+        Assert.Equal(0, banner.Height);
+    }
+
+    [Fact]
     public void Sala_renderiza_grade_de_chamada_e_tres_colunas()
     {
         using var root = new Panel { Size = new Size(1100, 700), BackColor = Color.Black };

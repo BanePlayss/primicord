@@ -64,11 +64,7 @@ public sealed class MainForm : Form
 
     // shell
     private readonly Panel _body = new() { Dock = DockStyle.Fill, BackColor = Pv.Charcoal };
-    private readonly Label _banner = new()
-    {
-        Dock = DockStyle.Top, Height = 0, BackColor = Pv.Red, ForeColor = Pv.Bone,
-        TextAlign = ContentAlignment.MiddleCenter, Font = Pv.Body, Visible = false,
-    };
+    private readonly AppBanner _banner = new();
 
     private Panel? _rail, _brand, _railList, _voiceStrip, _userPanel, _membersList, _contentHost;
     private Panel? _rightPanel, _membersHead, _championshipPanel, _roomRankingPanel;
@@ -153,12 +149,12 @@ public sealed class MainForm : Form
         Invalidate(true);
     }
 
-    private void ShowBanner(string msg)
+    private void ShowBanner(string msg) => ShowBanner(msg, autoDismiss: true);
+
+    private void ShowBanner(string msg, bool autoDismiss)
     {
-        if (InvokeRequired) { BeginInvoke(() => ShowBanner(msg)); return; }
-        _banner.Text = msg;
-        _banner.Height = 42;
-        _banner.Visible = true;
+        if (InvokeRequired) { BeginInvoke(() => ShowBanner(msg, autoDismiss)); return; }
+        _banner.ShowMessage(msg, autoDismiss ? 6000 : 0);
     }
 
     private bool ServerBackoffActive => DateTimeOffset.UtcNow < _pollBackoffUntil;
@@ -1030,7 +1026,7 @@ public sealed class MainForm : Form
         string text = quota
             ? $"Limite de leituras do servidor atingido. Modo offline; nova tentativa em {wait}."
             : $"Servidor temporariamente indisponivel. Nova tentativa em {wait}.";
-        ShowBanner(text);
+        ShowBanner(text, autoDismiss: false);
         Log.Write($"poll em recuo por {seconds}s: {reason}");
     }
 
@@ -1041,8 +1037,7 @@ public sealed class MainForm : Form
         _pollBackoffUntil = default;
         if (!_serverBanner) return;
         _serverBanner = false;
-        _banner.Visible = false;
-        _banner.Height = 0;
+        _banner.Dismiss();
     }
 
     /// <summary>Le a tabela do Primitivao e joga na coluna da direita.</summary>

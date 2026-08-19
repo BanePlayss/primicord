@@ -3,6 +3,14 @@
 O Discord dos primitivos — app nativo de Windows pra sala de voz em grupo,
 compartilhar tela e tirar clipe dos últimos segundos.
 
+## 0.6.19 — notificações dispensáveis
+
+- Toda faixa de notificação agora tem um botão `×` no canto direito.
+- Avisos rápidos, como "Convite da sala copiado", desaparecem sozinhos após seis
+  segundos e ainda podem ser fechados imediatamente.
+- Alertas de indisponibilidade continuam visíveis para informar o estado da conexão,
+  mas também podem ser dispensados pelo usuário.
+
 ## 0.6.18 — último usuário que entrou
 
 - O painel de atividade mostra o último usuário que entrou e o horário local em
