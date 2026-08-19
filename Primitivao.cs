@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Primicord;
@@ -109,7 +110,10 @@ public static class Primitivao
 
     private static readonly Dictionary<string, Image> AvatarCache = new(StringComparer.OrdinalIgnoreCase);
     private static readonly object AvatarLock = new();
-    private static bool _avatarsLoaded;
+    private static readonly SemaphoreSlim AvatarLoadGate = new(1, 1);
+    private static string _avatarDiskCacheReadFor = "";
+    private static readonly TimeSpan AvatarRefreshInterval = TimeSpan.FromHours(24);
+    private static string AvatarCachePath => Path.Combine(AppEnv.DataDir, "avatars.json");
 
     /// <summary>SHA-256 em hex — mesmo formato do hashPassword() do site.</summary>
     public static string HashPassword(string text)
@@ -318,33 +322,63 @@ public static class Primitivao
     // ─── AVATARES ────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Carrega as fotos dos jogadores (doc primitivao/avatars, { nick: dataUrl }).
-    /// Uma vez por sessao — sao as mesmas fotos que aparecem no site.
+    /// Abre primeiro o cache local e so consulta o doc primitivao/avatars quando
+    /// ele nao existe ou passou de 24 horas. Assim o login salvo recupera as fotos
+    /// imediatamente e nao cria uma leitura do Firestore em toda abertura.
     /// </summary>
     public static async Task LoadAvatarsAsync(Firestore fs, CancellationToken ct = default, bool force = false)
     {
-        if (_avatarsLoaded && !force) return;
-        _avatarsLoaded = true;
+        LoadCachedAvatars();
+        if (!force && AvatarDiskCacheIsFresh()) return;
+
+        await AvatarLoadGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            // Outra chamada pode ter terminado enquanto esta esperava a trava.
+            if (!force && AvatarDiskCacheIsFresh()) return;
             var doc = await fs.GetAsync("primitivao/avatars", ct).ConfigureAwait(false);
             if (doc == null) return;
-            int loaded = 0;
+            var data = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var (nick, val) in doc)
-            {
-                if (val is not string dataUrl || dataUrl.Length == 0) continue;
-                var img = DecodeDataUrl(dataUrl);
-                if (img == null) continue;
-                lock (AvatarLock)
-                {
-                    if (AvatarCache.TryGetValue(nick, out var old)) { try { old.Dispose(); } catch { } }
-                    AvatarCache[nick] = img;
-                }
-                loaded++;
-            }
+                if (val is string dataUrl && dataUrl.Length > 0) data[nick] = dataUrl;
+
+            int loaded = ReplaceAvatarImages(data);
+            SaveAvatarDiskCache(data);
             Log.Write($"avatares carregados: {loaded}");
         }
         catch (Exception ex) { Log.Write("avatares falharam: " + ex.Message); }
+        finally { AvatarLoadGate.Release(); }
+    }
+
+    /// <summary>Carrega as fotos persistidas sem rede. Seguro chamar mais de uma vez.</summary>
+    public static int LoadCachedAvatars()
+    {
+        string path = AvatarCachePath;
+        lock (AvatarLock)
+        {
+            if (string.Equals(_avatarDiskCacheReadFor, path, StringComparison.OrdinalIgnoreCase))
+                return AvatarCache.Count;
+            _avatarDiskCacheReadFor = path;
+            // Importante para o modo portatil e para os harnesses que redirecionam
+            // PRIMICORD_DATA_DIR: nunca misturar fotos de duas pastas de dados.
+            AvatarCache.Clear();
+        }
+
+        try
+        {
+            if (!File.Exists(path)) return 0;
+            var data = JsonSerializer.Deserialize<Dictionary<string, string>>(
+                File.ReadAllText(path));
+            if (data == null) return 0;
+            int loaded = ReplaceAvatarImages(data);
+            Log.Write($"avatares locais carregados: {loaded}");
+            return loaded;
+        }
+        catch (Exception ex)
+        {
+            Log.Write("cache local de avatares falhou: " + ex.Message);
+            return 0;
+        }
     }
 
     /// <summary>Foto do jogador, ou null (o tile cai na inicial).</summary>
@@ -352,6 +386,51 @@ public static class Primitivao
     {
         if (string.IsNullOrEmpty(nick)) return null;
         lock (AvatarLock) return AvatarCache.TryGetValue(nick, out var img) ? img : null;
+    }
+
+    private static bool AvatarDiskCacheIsFresh()
+    {
+        try
+        {
+            var file = new FileInfo(AvatarCachePath);
+            lock (AvatarLock)
+                if (AvatarCache.Count == 0) return false;
+            return file.Exists && file.Length > 2
+                && DateTime.UtcNow - file.LastWriteTimeUtc < AvatarRefreshInterval;
+        }
+        catch { return false; }
+    }
+
+    private static int ReplaceAvatarImages(IReadOnlyDictionary<string, string> data)
+    {
+        var decoded = new Dictionary<string, Image>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (nick, dataUrl) in data)
+        {
+            var image = DecodeDataUrl(dataUrl);
+            if (image != null) decoded[nick] = image;
+        }
+
+        lock (AvatarLock)
+        {
+            // Nao dispose aqui: um paint pode ter acabado de obter a imagem antiga.
+            // Ao tirar as referencias, o GC libera os bitmaps depois que o desenho
+            // terminar, sem uma corrida de GDI+ durante a atualizacao em background.
+            AvatarCache.Clear();
+            foreach (var (nick, image) in decoded) AvatarCache[nick] = image;
+            return AvatarCache.Count;
+        }
+    }
+
+    private static void SaveAvatarDiskCache(IReadOnlyDictionary<string, string> data)
+    {
+        try
+        {
+            string path = AvatarCachePath;
+            string temp = path + ".tmp";
+            File.WriteAllText(temp, JsonSerializer.Serialize(data));
+            File.Move(temp, path, true);
+        }
+        catch (Exception ex) { Log.Write("nao salvei cache de avatares: " + ex.Message); }
     }
 
     private static Image? DecodeDataUrl(string dataUrl)

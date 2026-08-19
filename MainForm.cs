@@ -67,9 +67,8 @@ public sealed class MainForm : Form
     private readonly AppBanner _banner = new();
 
     private Panel? _rail, _brand, _railList, _voiceStrip, _userPanel, _membersList, _contentHost;
-    private Panel? _rightPanel, _membersHead, _championshipPanel, _roomRankingPanel;
+    private Panel? _rightPanel, _membersHead, _championshipPanel;
     private ClassificacaoView? _tabela;
-    private ClassificacaoView? _roomTabela;
     private Label? _tabelaHead;
     private ApostasView? _apostas;
     private Label? _apostasHead;
@@ -308,7 +307,36 @@ public sealed class MainForm : Form
         if (_cfg.UseSiteTheme && user.ThemeAccent != null)
             Log.Write($"tema do site aplicado: {user.ThemeId}");
 
+        // O perfil salvo entra sem consultar o Firestore. As fotos persistidas no
+        // PC precisam estar em memoria antes do primeiro paint para o shell nao
+        // nascer com avatares de iniciais e parecer que os icones sumiram.
+        Primitivao.LoadCachedAvatars();
         BuildShell();
+        _ = RefreshAvatarsAsync();
+    }
+
+    private async Task RefreshAvatarsAsync()
+    {
+        await Primitivao.LoadAvatarsAsync(_fs).ConfigureAwait(false);
+        if (IsDisposed || Disposing) return;
+        if (InvokeRequired)
+        {
+            BeginInvoke(RefreshAvatarViews);
+            return;
+        }
+        RefreshAvatarViews();
+    }
+
+    private void RefreshAvatarViews()
+    {
+        if (IsDisposed || Disposing) return;
+        _userPanel?.Invalidate(true);
+        _membersList?.Invalidate(true);
+        _roomChatView?.Invalidate(true);
+        _chatView?.Invalidate(true);
+        _callGrid?.Invalidate(true);
+        RebuildRail();
+        RefreshMembers();
     }
 
     private void SetLoginBusy(bool busy, string error)
@@ -368,11 +396,7 @@ public sealed class MainForm : Form
             Padding = new Padding(0, 8, 0, 8),
         };
 
-        _roomRankingPanel = BuildRoomRankingPanel();
-        _roomRankingPanel.Visible = false;
-
         _rail.Controls.Add(_railList);   // Fill primeiro
-        _rail.Controls.Add(_roomRankingPanel);
         _rail.Controls.Add(_voiceStrip);
         _rail.Controls.Add(_userPanel);
         _rail.Controls.Add(_brand);
@@ -515,62 +539,43 @@ public sealed class MainForm : Form
         return p;
     }
 
-    private Panel BuildRoomRankingPanel()
-    {
-        var panel = new Panel
-        {
-            Dock = DockStyle.Bottom, Height = 194, BackColor = Color.FromArgb(31, 26, 22),
-            Padding = new Padding(8, 0, 8, 8),
-        };
-        panel.Paint += (_, e) =>
-        {
-            using var line = new Pen(Pv.Char3, 1);
-            e.Graphics.DrawLine(line, 10, 0, panel.Width - 10, 0);
-        };
-
-        var head = new Label
-        {
-            Dock = DockStyle.Top, Height = 34, Text = "RANKING GERAL",
-            Font = Pv.Label, ForeColor = Pv.Red, BackColor = panel.BackColor,
-            Padding = new Padding(8, 12, 0, 0),
-        };
-        _roomTabela = new ClassificacaoView
-        {
-            Dock = DockStyle.Top, MaxLinhas = 5, BackColor = panel.BackColor,
-        };
-        var complete = new PrimButton("VER RANKING COMPLETO", PrimButton.Style.Ghost)
-        {
-            Dock = DockStyle.Bottom, Height = 31,
-        };
-        complete.Click += (_, _) => SelectView("primitivao");
-
-        panel.Controls.Add(_roomTabela);
-        panel.Controls.Add(complete);
-        panel.Controls.Add(head);
-        return panel;
-    }
-
     private void UpdateVoiceStrip()
     {
         if (_voiceStrip == null) return;
-        bool on = _session != null && !_view.StartsWith("room:");
+        // Discord mantem o estado da call visivel mesmo quando a pessoa navega.
+        // A sala nao ganha mais um segundo layout nem toma o lugar do perfil.
+        bool on = _session != null;
         _voiceStrip.Visible = on;
-        _voiceStrip.Height = on ? 92 : 0;
+        _voiceStrip.Height = on ? 106 : 0;
+        foreach (Control control in _voiceStrip.Controls.Cast<Control>().ToList())
+            control.Dispose();
         _voiceStrip.Controls.Clear();
         if (!on) return;
 
         var mute = new GlyphButton((g, r, c, w) => Glyphs.Mic(g, r, c, _session!.Muted))
-        { Size = new Size(34, 34), Location = new Point(14, 48) };
+        { Size = new Size(36, 36), Location = new Point(14, 58) };
         mute.Accent = _session!.Muted ? Pv.Red : Pv.Bone;
         mute.ToolTipText = _session.Muted ? "Desmutar" : "Mutar";
         mute.Click += (_, _) => { ToggleMute(); UpdateVoiceStrip(); };
 
-        var leave = new GlyphButton(Glyphs.Exit) { Size = new Size(34, 34), Location = new Point(54, 48) };
+        var audio = new GlyphButton(Glyphs.Speaker)
+        { Size = new Size(36, 36), Location = new Point(58, 58), Accent = _audioMuted ? Pv.Red : Pv.Bone };
+        audio.ToolTipText = _audioMuted ? "Ativar audio da sala" : "Silenciar audio da sala";
+        audio.Click += (_, _) => ToggleRoomAudio();
+
+        var settings = new GlyphButton(Glyphs.Gear)
+        { Size = new Size(36, 36), Location = new Point(102, 58), Accent = Pv.Bone };
+        settings.ToolTipText = "Configuracoes de voz e video";
+        settings.Click += (_, _) => OpenSettings();
+
+        var leave = new GlyphButton(Glyphs.Exit)
+        { Size = new Size(42, 36), Location = new Point(180, 58) };
         leave.Accent = Pv.Red;
-        leave.ToolTipText = "Sair da call";
+        leave.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        leave.ToolTipText = "Desconectar da sala";
         leave.Click += (_, _) => LeaveVoice();
 
-        _voiceStrip.Controls.AddRange(new Control[] { mute, leave });
+        _voiceStrip.Controls.AddRange(new Control[] { mute, audio, settings, leave });
         _voiceStrip.Invalidate();
     }
 
@@ -631,47 +636,6 @@ public sealed class MainForm : Form
 
         // Dock=Top empilha ao contrario: montamos a lista e adicionamos invertida.
         var items = new List<Control>();
-
-        if (_view.StartsWith("room:"))
-        {
-            string activeId = _view[5..];
-            items.Add(RoomRailHeader());
-            foreach (var room in _rooms.OrderByDescending(r => r.Id == activeId)
-                                       .ThenByDescending(r => r.Count)
-                                       .ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase))
-            {
-                bool active = room.Id == activeId;
-                string badge = room.Count >= 8 ? "LOTADA"
-                    : active || room.Count > 0 ? "AO VIVO" : "ESPERANDO";
-                var it = new RailItem(room.Name, RailItem.Kind.Voice)
-                {
-                    Dock = DockStyle.Top, Height = 48, Active = active,
-                    Detail = $"{room.Count}/8", Badge = badge,
-                };
-                string id = room.Id, name = room.Name;
-                it.Click += async (_, _) => await OnRoomClickedAsync(id, name);
-                items.Add(it);
-
-                if (!active) continue;
-                foreach (string occupant in room.Occupants)
-                {
-                    bool me = string.Equals(occupant, Nick, StringComparison.OrdinalIgnoreCase);
-                    var person = new RailItem(occupant, RailItem.Kind.Dm)
-                    {
-                        Dock = DockStyle.Top, Height = 31, AvatarNick = occupant,
-                        Online = true, Suffix = me ? "VOCE" : "",
-                    };
-                    string target = occupant;
-                    if (!me) person.Click += (_, _) => OpenDm(target);
-                    items.Add(person);
-                }
-            }
-
-            items.Reverse();
-            foreach (var c in items) _railList.Controls.Add(c);
-            _railList.ResumeLayout();
-            return;
-        }
 
         items.Add(RailHeader("PRIMITIVAO"));
         var prim = new RailItem("Campeonato", RailItem.Kind.Action)
@@ -743,24 +707,6 @@ public sealed class MainForm : Form
         _railList.ResumeLayout();
     }
 
-    private Panel RoomRailHeader()
-    {
-        var panel = new Panel { Dock = DockStyle.Top, Height = 43, BackColor = Pv.Char2 };
-        var title = new Label
-        {
-            Text = "SALAS", Font = Pv.Label, ForeColor = Pv.Red, AutoSize = true,
-            Location = new Point(10, 17),
-        };
-        var create = new PrimButton("+ CRIAR SALA", PrimButton.Style.Ghost)
-        {
-            Size = new Size(84, 26), Location = new Point(94, 8),
-        };
-        create.Click += async (_, _) => await CreateRoomAsync();
-        panel.Resize += (_, _) => create.Left = panel.ClientSize.Width - create.Width - 8;
-        panel.Controls.AddRange(new Control[] { title, create });
-        return panel;
-    }
-
     private static Panel RailHeader(string text)
     {
         var p = new Panel { Dock = DockStyle.Top, Height = 28, BackColor = Pv.Char2 };
@@ -819,8 +765,8 @@ public sealed class MainForm : Form
     }
 
     /// <summary>
-    /// Na sala, a coluna direita vira CHAT DA SALA e o ranking continua compacto
-    /// embaixo. Fora dela, volta a lista global de membros.
+    /// O shell e persistente. Na sala apenas a coluna direita troca membros por
+    /// chat/atividade; navegacao, identidade e controles da call nao se movem.
     /// </summary>
     private void UpdateRightContext()
     {
@@ -828,22 +774,17 @@ public sealed class MainForm : Form
             _roomChatView == null) return;
 
         bool inRoom = _view.StartsWith("room:");
-        if (_rail != null) _rail.Width = inRoom ? 188 : 236;
-        if (_brand != null) _brand.Visible = !inRoom;
-        if (_userPanel != null) _userPanel.Visible = !inRoom;
-        if (_voiceStrip != null)
-        {
-            _voiceStrip.Visible = !inRoom && _session != null;
-            _voiceStrip.Height = _voiceStrip.Visible ? 92 : 0;
-        }
-        if (_roomRankingPanel != null) _roomRankingPanel.Visible = inRoom;
+        if (_rail != null) _rail.Width = 236;
+        if (_brand != null) _brand.Visible = true;
+        if (_userPanel != null) _userPanel.Visible = true;
+        UpdateVoiceStrip();
 
         _membersList.Visible = !inRoom;
         _membersHead.Visible = !inRoom;
         _roomChatView.Visible = inRoom && _roomChatVisible;
         if (_roomActivity != null) _roomActivity.Visible = inRoom && _roomChatVisible;
         if (_championshipPanel != null) _championshipPanel.Visible = !inRoom;
-        _rightPanel.Width = inRoom ? 258 : 212;
+        _rightPanel.Width = inRoom ? 288 : 236;
         _rightPanel.Visible = !inRoom || _roomChatVisible;
 
         if (inRoom)
@@ -1071,12 +1012,6 @@ public sealed class MainForm : Form
             _tabela.MeuNick = Nick;
             _tabela.MaxLinhas = 4;   // o TOP 4, como no rascunho
             _tabela.Definir(painel?.Tabela);
-            if (_roomTabela != null && !_roomTabela.IsDisposed)
-            {
-                _roomTabela.MeuNick = Nick;
-                _roomTabela.MaxLinhas = 5;
-                _roomTabela.Definir(painel?.Tabela);
-            }
             if (_tabelaHead != null && !_tabelaHead.IsDisposed)
             {
                 string resumo = _tabela.Resumo;
@@ -1387,6 +1322,7 @@ public sealed class MainForm : Form
         _audioMuted = !_audioMuted;
         if (_voice != null) _voice.OutputMuted = _audioMuted;
         SyncRoomButtons();
+        UpdateVoiceStrip();
     }
 
     private void CopyRoomInvite()
@@ -1502,7 +1438,7 @@ public sealed class MainForm : Form
         _myTile = new PeerTile { Nick = Nick, IsMe = true, Connected = true };
         _callGrid.SetOwn(_myTile);
         _audioMuted = false;
-        _roomChatVisible = ClientSize.Width >= 900;
+        _roomChatVisible = ClientSize.Width >= 1080;
 
         UpdateVoiceStrip();
         UpdateRightContext();
@@ -2234,14 +2170,14 @@ public sealed class MainForm : Form
         base.OnResize(e);
         if (!_view.StartsWith("room:") || WindowState == FormWindowState.Minimized) return;
 
-        if (ClientSize.Width < 900 && _roomChatVisible)
+        if (ClientSize.Width < 1080 && _roomChatVisible)
         {
             _roomChatVisible = false;
             _chatAutoCollapsed = true;
             UpdateRightContext();
             SyncRoomButtons();
         }
-        else if (ClientSize.Width >= 960 && _chatAutoCollapsed)
+        else if (ClientSize.Width >= 1180 && _chatAutoCollapsed)
         {
             _roomChatVisible = true;
             _chatAutoCollapsed = false;

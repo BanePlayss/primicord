@@ -1,4 +1,5 @@
 using Primicord;
+using System.Text.Json;
 using Xunit;
 
 namespace Primicord.Tests;
@@ -190,5 +191,20 @@ public sealed class ConfigTests : IDisposable
         Assert.False(result.FromCache);
         Assert.Equal(1, remoteCalls);
         Assert.Equal("ricle", result.User!.Nick);
+    }
+
+    [Fact]
+    public void Avatar_salvo_no_pc_volta_sem_consultar_a_rede()
+    {
+        using var bitmap = new Bitmap(2, 2);
+        bitmap.SetPixel(0, 0, Color.OrangeRed);
+        using var png = new MemoryStream();
+        bitmap.Save(png, System.Drawing.Imaging.ImageFormat.Png);
+        string dataUrl = "data:image/png;base64," + Convert.ToBase64String(png.ToArray());
+        File.WriteAllText(Path.Combine(_dir, "avatars.json"), JsonSerializer.Serialize(
+            new Dictionary<string, string> { ["bane"] = dataUrl }));
+
+        Assert.Equal(1, Primitivao.LoadCachedAvatars());
+        Assert.NotNull(Primitivao.AvatarFor("BANE"));
     }
 }

@@ -3,6 +3,19 @@
 O Discord dos primitivos — app nativo de Windows pra sala de voz em grupo,
 compartilhar tela e tirar clipe dos últimos segundos.
 
+## 0.6.23 — shell persistente estilo Discord
+
+- Entrar numa sala não troca mais para um segundo layout: marca, canais, salas,
+  conversas e perfil permanecem sempre nos mesmos lugares.
+- O ranking geral deixa o contexto da chamada e continua disponível somente na
+  área do campeonato.
+- O rodapé esquerdo mostra a conexão de voz e mantém microfone, áudio, ajustes e
+  desconectar acessíveis mesmo ao navegar para outro canal ou conversa.
+- Avatares voltam a ser carregados também no login pelo perfil salvo e passam a
+  ter cache local de 24 horas, evitando uma leitura do Firestore a cada abertura.
+- A coluna da sala reserva mais espaço para chat e atividade; em janelas menores
+  ela recolhe automaticamente para não esmagar a grade de participantes.
+
 ## 0.6.22 — reparo manual de rede
 
 - As Configurações ganharam o botão `REPARAR FIREWALL`, sem precisar abrir PowerShell.

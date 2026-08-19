@@ -28,10 +28,15 @@ public sealed class RoomUxTests
     public void Sala_renderiza_grade_de_chamada_e_tres_colunas()
     {
         using var root = new Panel { Size = new Size(1100, 700), BackColor = Color.Black };
-        using var left = new Panel { Dock = DockStyle.Left, Width = 188, BackColor = Pv.Char2 };
-        using var right = new Panel { Dock = DockStyle.Right, Width = 258, BackColor = Pv.Char2 };
+        using var left = new Panel { Dock = DockStyle.Left, Width = 236, BackColor = Pv.Char2 };
+        using var right = new Panel { Dock = DockStyle.Right, Width = 288, BackColor = Pv.Char2 };
         using var center = new Panel { Dock = DockStyle.Fill, BackColor = Color.Black };
 
+        var brand = new Label
+        {
+            Dock = DockStyle.Top, Height = 58, Text = "PRIMICORD",
+            Font = Pv.DisplaySm, ForeColor = Pv.Orange, Padding = new Padding(16, 18, 0, 0),
+        };
         var roomList = new Panel { Dock = DockStyle.Fill, BackColor = Pv.Char2 };
         var sala3 = new RailItem("SALA 03", RailItem.Kind.Voice)
         {
@@ -44,22 +49,36 @@ public sealed class RoomUxTests
         };
         roomList.Controls.Add(sala1);
         roomList.Controls.Add(sala3);
-        left.Controls.Add(roomList);
 
-        var rankingPanel = new Panel { Dock = DockStyle.Bottom, Height = 194, BackColor = Pv.Char2 };
-        var ranking = new ClassificacaoView { Dock = DockStyle.Fill, MeuNick = "bane", MaxLinhas = 5 };
-        var tabela = new Classificacao { RodadaAtual = 3, TotalRodadas = 7, Situacao = "em andamento" };
-        tabela.Times.AddRange(new[]
+        // A sala usa o mesmo shell do restante do app: conexao e identidade
+        // ficam persistentes no rodape, sem trocar por ranking.
+        var voiceStrip = new Panel { Dock = DockStyle.Bottom, Height = 106, BackColor = Pv.Char2 };
+        var voiceTitle = new Label
         {
-            new TimeNaTabela { Nick = "jucamelero", J = 5, V = 4, Gp = 12, Gc = 3, P = 12 },
-            new TimeNaTabela { Nick = "utirrabianc", J = 5, V = 3, E = 1, Gp = 9, Gc = 5, P = 10 },
-            new TimeNaTabela { Nick = "spider", J = 5, V = 3, Gp = 8, Gc = 6, P = 9 },
-            new TimeNaTabela { Nick = "bane", J = 5, V = 2, E = 1, Gp = 7, Gc = 7, P = 7 },
-            new TimeNaTabela { Nick = "celin", J = 5, V = 1, E = 1, Gp = 4, Gc = 9, P = 4 },
-        });
-        ranking.Definir(tabela);
-        rankingPanel.Controls.Add(ranking);
-        left.Controls.Add(rankingPanel);
+            Text = "VOZ CONECTADA\nSALA 03", ForeColor = Pv.Green, Font = Pv.Label,
+            Location = new Point(14, 10), AutoSize = true,
+        };
+        voiceStrip.Controls.Add(voiceTitle);
+        foreach (var button in new[]
+        {
+            new GlyphButton((g, r, c, w) => Glyphs.Mic(g, r, c, false)),
+            new GlyphButton(Glyphs.Speaker), new GlyphButton(Glyphs.Gear),
+            new GlyphButton(Glyphs.Exit) { Accent = Pv.Red },
+        })
+        {
+            button.Size = new Size(36, 36);
+            button.Location = new Point(14 + voiceStrip.Controls.OfType<GlyphButton>().Count() * 44, 58);
+            voiceStrip.Controls.Add(button);
+        }
+        var userPanel = new Label
+        {
+            Dock = DockStyle.Bottom, Height = 62, BackColor = Pv.Char3,
+            ForeColor = Pv.Bone, Text = "  bane\n  331K PC", Padding = new Padding(12, 11, 0, 0),
+        };
+        left.Controls.Add(roomList);
+        left.Controls.Add(voiceStrip);
+        left.Controls.Add(userPanel);
+        left.Controls.Add(brand);
 
         var chat = new ChatView(compact: true) { Dock = DockStyle.Fill };
         chat.SetHeader("CHAT DA SALA", "SALA 03");
@@ -127,9 +146,13 @@ public sealed class RoomUxTests
         using var bitmap = new Bitmap(root.Width, root.Height);
         root.DrawToBitmap(bitmap, root.ClientRectangle);
 
-        Assert.True(call.Width > left.Width * 3);
+        Assert.True(call.Width > left.Width * 2);
         Assert.True(call.Height > 520);
         Assert.Equal(6, call.ParticipantCount);
+        Assert.Empty(left.Controls.OfType<ClassificacaoView>());
+        Assert.Equal(4, voiceStrip.Controls.OfType<GlyphButton>().Count());
+        Assert.True(brand.Visible);
+        Assert.True(userPanel.Visible);
         Assert.All(call.Controls.OfType<PeerTile>(), tile => Assert.True(tile.Width > tile.Height));
         bitmap.Save(Path.Combine(Path.GetTempPath(), "primicord-room-grid-preview.png"));
     }
