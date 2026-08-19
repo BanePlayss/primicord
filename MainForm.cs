@@ -101,6 +101,7 @@ public sealed class MainForm : Form
     private int _pollTick;
     private bool _polling;
     private DateTimeOffset _pollBackoffUntil;
+    private DateTimeOffset _siteBackoffUntil;
     private int _pollBackoffLevel;
     private bool _serverBanner;
 
@@ -261,41 +262,35 @@ public sealed class MainForm : Form
     {
         if (_loginNick == null || _loginPass == null) return;
         SetLoginBusy(true, "");
-        var res = await Primitivao.AuthenticateAsync(_fs, _loginNick.Value, _loginPass.Value);
+        string nick = _loginNick.Value;
+        string password = _loginPass.Value;
+        string hash = Primitivao.HashPassword(password);
+        var res = await Primitivao.AuthenticatePreferCachedAsync(
+            _cfg, nick, hash,
+            () => Primitivao.AuthenticateAsync(_fs, nick, password));
         if (!res.Ok)
         {
-            string hash = Primitivao.HashPassword(_loginPass.Value);
-            if (res.Transient && TryCachedLogin(_loginNick.Value, hash, res)) return;
             SetLoginBusy(false, res.Error ?? "Nao consegui entrar");
             return;
         }
-        OnLoggedIn(res.User!);
+        if (res.FromCache) Log.Write("login pelo perfil salvo; Firestore nao consultado");
+        OnLoggedIn(res.User!, cacheProfile: !res.FromCache);
     }
 
     private async Task TryAutoLoginAsync()
     {
         SetLoginBusy(true, "");
-        var res = await Primitivao.AuthenticateWithHashAsync(_fs, _cfg.Nick, _cfg.SenhaHash);
-        if (res.Ok) { OnLoggedIn(res.User!); return; }
+        var res = await Primitivao.AuthenticatePreferCachedAsync(
+            _cfg, _cfg.Nick, _cfg.SenhaHash,
+            () => Primitivao.AuthenticateWithHashAsync(_fs, _cfg.Nick, _cfg.SenhaHash));
+        if (res.Ok)
+        {
+            if (res.FromCache) Log.Write("auto-login local; Firestore nao consultado");
+            OnLoggedIn(res.User!, cacheProfile: !res.FromCache);
+            return;
+        }
         Log.Write("auto-login falhou: " + res.Error);
-        if (res.Transient && TryCachedLogin(_cfg.Nick, _cfg.SenhaHash, res)) return;
         SetLoginBusy(false, res.Error ?? "");
-    }
-
-    private bool TryCachedLogin(string nick, string hash, Primitivao.AuthResult failure)
-    {
-        var cached = Primitivao.AuthenticateCached(_cfg, nick, hash);
-        if (cached == null) return false;
-
-        int seconds = failure.QuotaExceeded ? 15 * 60 : 30;
-        _pollBackoffLevel = 1;
-        _pollBackoffUntil = DateTimeOffset.UtcNow.AddSeconds(seconds);
-        Log.Write($"login pelo perfil salvo; nova tentativa do servidor em {seconds}s");
-        OnLoggedIn(cached, cacheProfile: false);
-        _serverBanner = true;
-        ShowBanner((failure.Error ?? "Servidor indisponivel") +
-                   $" Perfil salvo ativo; nova tentativa em {(seconds >= 60 ? seconds / 60 + " min" : seconds + " s")}.");
-        return true;
     }
 
     private void OnLoggedIn(PrimitivaoUser user, bool cacheProfile = true)
@@ -945,20 +940,38 @@ public sealed class MainForm : Form
                     return;
                 }
 
-            if (_members.Count == 0) _members = await Primitivao.ListMembersAsync(_fs);
+            // Dados do site sao decorativos no Primicord. Se a cota deles acabar,
+            // pausamos apenas membros/ranking; sala, chat e voz pela malha local
+            // continuam no mesmo ciclo.
+            if (DateTimeOffset.UtcNow >= _siteBackoffUntil)
+            {
+                try
+                {
+                    if (_members.Count == 0)
+                        _members = await Primitivao.ListMembersAsync(_fs);
 
-            // Classificacao: a cada ~5min. Placar de
-            // futebol nao muda em dois segundos, e o doc, por menor que seja, e
-            // uma leitura a mais por ciclo pra todo mundo que estiver com o app
-            // aberto. O primeiro tick busca na hora pra tabela nao nascer vazia.
-            if (first || _pollTick % 30 == 1)
-                await RefreshCampeonatoAsync(propagateFirestore: true);
+                    // Classificacao: a cada ~5min. O primeiro tick busca na hora
+                    // para a tabela nao nascer vazia.
+                    if (first || _pollTick % 30 == 1)
+                        await RefreshCampeonatoAsync(propagateFirestore: true);
+                }
+                catch (FirestoreException ex)
+                {
+                    int seconds = ex.IsQuotaExceeded ? 15 * 60 : 30;
+                    _siteBackoffUntil = DateTimeOffset.UtcNow.AddSeconds(seconds);
+                    Log.Write($"dados opcionais do site pausados por {seconds}s: {ex.Message}");
+                }
+            }
 
             // Lista global e cara porque cada pessoa e um documento. Dois minutos
             // equilibram presenca util e a cota compartilhada.
             if (first || _pollTick % 12 == 1)
             {
                 _presence = await _chat.ReadPresenceAsync();
+                foreach (string member in _presence.Values.Select(p => p.Nick).Append(Nick)
+                             .Where(n => !string.IsNullOrWhiteSpace(n)))
+                    if (!_members.Contains(member, StringComparer.OrdinalIgnoreCase))
+                        _members.Add(member);
                 RefreshMembers();
             }
 

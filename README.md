@@ -3,6 +3,16 @@
 O Discord dos primitivos — app nativo de Windows pra sala de voz em grupo,
 compartilhar tela e tirar clipe dos últimos segundos.
 
+## 0.6.20 — login local e cota isolada
+
+- Um perfil já validado neste PC entra primeiro pelo cache local, sem gastar uma
+  leitura do Firestore em toda abertura ou novo login com a mesma senha.
+- Ranking e lista completa de membros do site agora são dados opcionais: se a cota
+  acabar, somente eles entram em pausa por 15 minutos.
+- Salas, presença, chat e voz continuam funcionando pelas réplicas do Primicord.
+- A lista lateral ainda mostra os participantes encontrados na presença local mesmo
+  enquanto os dados do site estão pausados.
+
 ## 0.6.19 — notificações dispensáveis
 
 - Toda faixa de notificação agora tem um botão `×` no canto direito.

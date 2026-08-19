@@ -38,7 +38,7 @@ app.MapGet("/health", async context =>
     await ServerJson.WriteAsync(context, new JsonObject
     {
         ["ok"] = true,
-        ["version"] = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.6.19",
+        ["version"] = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.6.20",
         ["storage"] = "sqlite",
     });
 });

@@ -121,7 +121,8 @@ public static class Primitivao
     }
 
     public sealed record AuthResult(PrimitivaoUser? User, string? Error,
-                                    bool Transient = false, bool QuotaExceeded = false)
+                                    bool Transient = false, bool QuotaExceeded = false,
+                                    bool FromCache = false)
     {
         public bool Ok => User != null;
     }
@@ -137,7 +138,21 @@ public static class Primitivao
         => await AuthCoreAsync(fs, nick, hash, null, ct).ConfigureAwait(false);
 
     /// <summary>
-    /// Reabre a identidade validada no último login quando o Firestore está fora.
+    /// Usa primeiro a identidade que ja foi validada neste PC. A funcao remota so
+    /// e executada quando nick/senha nao correspondem ao perfil salvo, o que evita
+    /// gastar uma leitura do Firestore em toda abertura do aplicativo.
+    /// </summary>
+    public static async Task<AuthResult> AuthenticatePreferCachedAsync(
+        Config cfg, string nick, string senhaHash, Func<Task<AuthResult>> authenticateRemote)
+    {
+        PrimitivaoUser? cached = AuthenticateCached(cfg, nick, senhaHash);
+        if (cached != null)
+            return new AuthResult(cached, null, FromCache: true);
+        return await authenticateRemote().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reabre a identidade validada no ultimo login sem uma nova leitura remota.
     /// Nunca aceita outro nick ou outra senha: ambos precisam bater com o config.
     /// </summary>
     public static PrimitivaoUser? AuthenticateCached(Config cfg, string nick, string senhaHash)
@@ -156,7 +171,9 @@ public static class Primitivao
             TeamId = cfg.CachedTeamId,
             TeamName = cfg.CachedTeamName,
             ThemeId = cfg.CachedThemeId,
-            IsMod = cfg.CachedIsMod || ModNicks.Contains(nick, StringComparer.OrdinalIgnoreCase),
+            IsAdmin = nick == AdminNick,
+            IsMod = nick == AdminNick || cfg.CachedIsMod
+                || ModNicks.Contains(nick, StringComparer.OrdinalIgnoreCase),
         };
     }
 
@@ -182,7 +199,7 @@ public static class Primitivao
         {
             Log.Write("login: nao li o doc de apostas: " + ex.Message);
             string error = ex.IsQuotaExceeded
-                ? "O servidor atingiu o limite de leituras. Entrando com o perfil salvo."
+                ? "O servidor atingiu o limite de leituras. Tente novamente mais tarde."
                 : ex.IsTransient
                     ? "O servidor do Primitivao esta temporariamente indisponivel."
                     : "O Firestore recusou o login: " + ex.Message;

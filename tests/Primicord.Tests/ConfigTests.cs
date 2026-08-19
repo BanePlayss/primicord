@@ -148,4 +148,47 @@ public sealed class ConfigTests : IDisposable
         Assert.Null(Primitivao.AuthenticateCached(cfg, "ricle", hash));
         Assert.Null(Primitivao.AuthenticateCached(cfg, "bane", Primitivao.HashPassword("errada")));
     }
+
+    [Fact]
+    public async Task Perfil_salvo_e_usado_antes_do_servidor_remoto()
+    {
+        string hash = Primitivao.HashPassword("segredo");
+        var cfg = new Config { Nick = "bane", SenhaHash = hash, CachedPc = 123 };
+        int remoteCalls = 0;
+
+        var result = await Primitivao.AuthenticatePreferCachedAsync(
+            cfg, "BANE", hash,
+            () =>
+            {
+                remoteCalls++;
+                return Task.FromResult(new Primitivao.AuthResult(null, "nao deveria chamar"));
+            });
+
+        Assert.True(result.Ok);
+        Assert.True(result.FromCache);
+        Assert.Equal(0, remoteCalls);
+        Assert.Equal(123, result.User!.Pc);
+    }
+
+    [Fact]
+    public async Task Credencial_sem_cache_ainda_consulta_o_servidor_remoto()
+    {
+        string savedHash = Primitivao.HashPassword("segredo");
+        var cfg = new Config { Nick = "bane", SenhaHash = savedHash };
+        int remoteCalls = 0;
+
+        var result = await Primitivao.AuthenticatePreferCachedAsync(
+            cfg, "ricle", Primitivao.HashPassword("outra senha"),
+            () =>
+            {
+                remoteCalls++;
+                return Task.FromResult(new Primitivao.AuthResult(
+                    new PrimitivaoUser { Nick = "ricle" }, null));
+            });
+
+        Assert.True(result.Ok);
+        Assert.False(result.FromCache);
+        Assert.Equal(1, remoteCalls);
+        Assert.Equal("ricle", result.User!.Nick);
+    }
 }
