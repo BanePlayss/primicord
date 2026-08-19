@@ -141,6 +141,9 @@ public static class Updater
         await mgr.DownloadUpdatesAsync(info, p => progress?.Report(p), ct).ConfigureAwait(false);
 
         Log.Write("update: baixado, reiniciando na versao nova");
+        // O host fica em segundo plano e manteria Primicord.Server.exe bloqueado.
+        // A versao nova o inicia de novo ao abrir, conforme a configuracao salva.
+        MiniServerProcess.Stop();
         // --updated: o processo novo sobe enquanto este ainda morre, e sem isso ele
         // bateria no mutex de instancia unica e sairia — deixando o usuario sem app
         // nenhum na tela depois de mandar atualizar.

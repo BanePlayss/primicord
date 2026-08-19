@@ -3,6 +3,17 @@
 O Discord dos primitivos — app nativo de Windows pra sala de voz em grupo,
 compartilhar tela e tirar clipe dos últimos segundos.
 
+## 0.6.9 — rede privada e mini servidor
+
+- O instalador do Primicord instala o Tailscale quando ele ainda não existe.
+- Atualizações diferenciais também oferecem o onboarding dentro do app.
+- Um mini servidor local com SQLite assume salas, presença, chat e sinalização.
+- O PC servidor inicia o coordenador junto com o login do Windows.
+- O servidor só aceita loopback e endereços da tailnet (`100.64.0.0/10` e IPv6 do Tailscale).
+- A malha publica primeiro o endereço Tailscale; STUN continua como plano B.
+- Firestore permanece como compatibilidade temporária e como leitura dos dados do site.
+- Nenhuma auth key do Tailscale é embutida no executável.
+
 ## 0.6.8 — login resiliente e economia de cota
 
 - Identifica corretamente `429 / Quota exceeded`, sem chamar de falta de internet.
@@ -28,20 +39,30 @@ LAN). O Primicord é feito pra **N pessoas pela internet**.
 
 - **Voz**: malha UDP ponto-a-ponto — cada um manda direto pra cada outro. Não tem
   servidor no meio, ninguém paga hospedagem e nenhum áudio passa por terceiros.
-- **Encontro**: o Firestore do projeto `primitivao` (coleção `pc_rooms`) guarda só
-  a lista de salas, quem está em cada uma, a posição social e o IP:porta público
-  de cada um.
-- **NAT**: cada cliente descobre seu endereço público por STUN e os dois lados furam
-  o NAT mandando pacotes ao mesmo tempo (hole punching).
+- **Encontro**: o mini servidor do Primicord guarda salas, presença, posições,
+  chat e sinalização em SQLite. Durante a migração, o Firestore ainda entra como
+  compatibilidade quando o servidor configurado não responde.
+- **NAT**: o endereço da tailnet é o primeiro candidato. O Tailscale escolhe a rota
+  direta ou relay; STUN e hole punching continuam como plano B.
 - **Áudio**: 48kHz mono, frames de 10ms, jitter buffer por pessoa, mixados com
   NAudio. Na malha vai PCM cru (798 kbps por par); com `webrtc=1` vai Opus por
   RTP/SRTP (49 kbps por par, e criptografado).
 
-### Limite conhecido
+### Configurar o mini servidor
 
-Se os **dois** lados estiverem atrás de NAT simétrico (comum em 4G e alguns
-provedores), o furo não acontece e o par não conecta — só um relay (TURN)
-resolveria. O app avisa na tela em vez de ficar mudo sem explicação.
+1. Todos instalam o Tailscale e entram na mesma tailnet.
+2. No PC que ficará ligado: **Configurações → Rede privada → Este PC hospeda**.
+3. Nos demais PCs, informe `http://100.x.y.z:8765` ou o nome MagicDNS do servidor.
+4. Reabra o Primicord depois de trocar o endereço do mini servidor.
+
+O banco fica em `%LOCALAPPDATA%\PrimicordServer\primicord.db`. Áudio, câmera e
+tela não passam pelo servidor: continuam ponto a ponto.
+
+### Limite conhecido do modo de compatibilidade
+
+Sem Tailscale, se os **dois** lados estiverem atrás de NAT simétrico (comum em
+4G e alguns provedores), o furo pode não acontecer. Com Tailscale ele usa a rota
+privada e o relay da própria tailnet quando a conexão direta não fecha.
 
 ### Eco
 
@@ -83,8 +104,8 @@ dotnet run --project Primicord.csproj
 dotnet test tests/Primicord.Tests
 ```
 
-Sobe a malha UDP em loopback e duas conexões WebRTC no mesmo processo — dá pra
-verificar o caminho de voz inteiro sem precisar de dois PCs. Não toca no
+Sobe a malha UDP em loopback, duas conexões WebRTC e testa o banco SQLite do mini
+servidor — dá pra verificar o caminho principal sem dois PCs. Não toca no
 Firestore nem na internet.
 
 ## Atualizar

@@ -49,12 +49,12 @@ public interface IWebRtcSignaling
 }
 
 /// <summary>
-/// Troca de SDP e candidatos ICE pelo Firestore — o "ponto de encontro" do WebRTC.
+/// Troca de SDP e candidatos ICE pelo document store — o ponto de encontro do WebRTC.
 /// </summary>
 /// <remarks>
 /// POR QUE NAO E TRICKLE ICE: o padrao manda cada candidato assim que ele aparece,
 /// pra conexao fechar o mais cedo possivel. Isso pressupoe um canal de sinalizacao
-/// instantaneo (websocket). O nosso e o Firestore REST com POLL DE 2 SEGUNDOS —
+/// instantaneo (websocket). Este cliente ainda usa poll, agora no mini servidor —
 /// mandar candidato picado nao adianta nada, so multiplica escrita: seriam 4 a 10
 /// documentos por par por sessao, e o outro lado so leria tudo junto no proximo
 /// poll de qualquer jeito.
@@ -80,13 +80,13 @@ public interface IWebRtcSignaling
 /// </remarks>
 public sealed class WebRtcSignaling : IWebRtcSignaling
 {
-    private readonly Firestore _fs;
+    private readonly IDocumentStore _store;
     private readonly string _roomId;
     private readonly string _myPeerId;
 
-    public WebRtcSignaling(Firestore fs, string roomId, string myPeerId)
+    public WebRtcSignaling(IDocumentStore fs, string roomId, string myPeerId)
     {
-        _fs = fs;
+        _store = fs;
         _roomId = roomId;
         _myPeerId = myPeerId;
     }
@@ -110,7 +110,7 @@ public sealed class WebRtcSignaling : IWebRtcSignaling
     public async Task PublishOfferAsync(string otherPeerId, long epoch, string sdp,
                                         IEnumerable<string> candidates, CancellationToken ct = default)
     {
-        await _fs.SetAsync(PathFor(otherPeerId), new Dictionary<string, object?>
+        await _store.SetAsync(PathFor(otherPeerId), new Dictionary<string, object?>
         {
             ["epoch"] = epoch,
             ["offer"] = sdp,
@@ -127,7 +127,7 @@ public sealed class WebRtcSignaling : IWebRtcSignaling
     public async Task PublishAnswerAsync(string otherPeerId, string sdp,
                                          IEnumerable<string> candidates, CancellationToken ct = default)
     {
-        await _fs.SetAsync(PathFor(otherPeerId), new Dictionary<string, object?>
+        await _store.SetAsync(PathFor(otherPeerId), new Dictionary<string, object?>
         {
             ["answer"] = sdp,
             ["answerCand"] = string.Join("\n", candidates),
@@ -138,7 +138,7 @@ public sealed class WebRtcSignaling : IWebRtcSignaling
 
     public async Task<SignalDoc?> ReadAsync(string otherPeerId, CancellationToken ct = default)
     {
-        var f = await _fs.GetAsync(PathFor(otherPeerId), ct).ConfigureAwait(false);
+        var f = await _store.GetAsync(PathFor(otherPeerId), ct).ConfigureAwait(false);
         if (f is null) return null;
         return new SignalDoc
         {
@@ -155,7 +155,7 @@ public sealed class WebRtcSignaling : IWebRtcSignaling
     /// <summary>Apaga o doc do par (saida limpa, pra nao deixar SDP morto pra tras).</summary>
     public async Task ClearAsync(string otherPeerId)
     {
-        try { await _fs.DeleteAsync(PathFor(otherPeerId)).ConfigureAwait(false); }
+        try { await _store.DeleteAsync(PathFor(otherPeerId)).ConfigureAwait(false); }
         catch (Exception ex) { Log.Write($"webrtc: limpar sinalizacao de {otherPeerId}: {ex.Message}"); }
     }
 

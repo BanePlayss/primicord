@@ -43,6 +43,14 @@ internal static class Program
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
+        // Quem veio pelo atualizador diferencial nao passa de novo pelo Setup.
+        // Por isso o proprio app cobre a unica dependencia nova da 0.6.9.
+        if (!TailscaleIntegration.IsInstalled)
+        {
+            using var tailscale = new TailscaleSetupDialog();
+            tailscale.ShowDialog();
+        }
+
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             Log.Write("EXCECAO NAO TRATADA: " + (e.ExceptionObject as Exception)?.ToString());
         Application.ThreadException += (_, e) =>

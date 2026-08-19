@@ -20,7 +20,7 @@ namespace Primicord;
 ///
 /// A apiKey e a mesma do app web (chave publica de cliente; quem protege e a rules).
 /// </remarks>
-public sealed class Firestore
+public sealed class Firestore : IDocumentStore
 {
     public const string ProjectId = "primitivao";
     private const string ApiKey = "AIzaSyB4Tu-OIAfBUfzdtY-wF9tSoBwP_36hdRg";
@@ -317,19 +317,19 @@ public sealed class Firestore
         => f.TryGetValue(key, out var v) && v is bool b ? b : fallback;
 }
 
-public sealed class FirestoreException : Exception
+public sealed class FirestoreException : DocumentStoreException
 {
     public FirestoreException(string message) : base(message) { }
 
     /// <summary>true quando a rules recusou — sinal de que falta publicar as rules.</summary>
-    public bool IsPermissionDenied =>
+    public override bool IsPermissionDenied =>
         Message.Contains("403") || Message.Contains("PERMISSION_DENIED", StringComparison.OrdinalIgnoreCase);
 
-    public bool IsQuotaExceeded =>
+    public override bool IsQuotaExceeded =>
         Message.Contains("429") || Message.Contains("RESOURCE_EXHAUSTED", StringComparison.OrdinalIgnoreCase)
                                 || Message.Contains("Quota exceeded", StringComparison.OrdinalIgnoreCase);
 
-    public bool IsTransient => IsQuotaExceeded || Message.Contains("408") || Message.Contains("425")
+    public override bool IsUnavailable => Message.Contains("408") || Message.Contains("425")
         || Message.Contains("500") || Message.Contains("502") || Message.Contains("503")
         || Message.Contains("504") || Message.Contains("UNAVAILABLE", StringComparison.OrdinalIgnoreCase);
 }

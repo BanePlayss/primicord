@@ -152,8 +152,8 @@ public sealed class WebRtcVoiceMesh : IVoiceTransport, IDisposable
         }
     }
 
-    /// <summary>Caminho normal: sinalizacao pelo Firestore.</summary>
-    public WebRtcVoiceMesh(Firestore fs, string roomId, string myPeerId, RoomSession session)
+    /// <summary>Caminho normal: sinalizacao pelo coordenador configurado.</summary>
+    public WebRtcVoiceMesh(IDocumentStore fs, string roomId, string myPeerId, RoomSession session)
         : this(new WebRtcSignaling(fs, roomId, myPeerId), session) { }
 
     public WebRtcVoiceMesh(IWebRtcSignaling signaling, RoomSession session)
@@ -287,13 +287,12 @@ public sealed class WebRtcVoiceMesh : IVoiceTransport, IDisposable
                 if (link.IAmOfferer) await DriveOffererAsync(link, ct).ConfigureAwait(false);
                 else await DriveAnswererAsync(link, ct).ConfigureAwait(false);
             }
-            catch (FirestoreException ex)
+            catch (DocumentStoreException ex)
             {
                 Log.Write($"webrtc: sinalizacao com {link.Nick} falhou: {ex.Message}");
                 if (ex.IsPermissionDenied)
                 {
-                    Failed?.Invoke("O Firestore recusou a sinalizacao do WebRTC — falta "
-                                 + "publicar as rules de pc_rooms/{sala}/signal no Console.");
+                    Failed?.Invoke("O servidor recusou a sinalizacao do WebRTC.");
                     return;
                 }
             }

@@ -15,9 +15,9 @@ public sealed class RoomInfo
 public sealed class RoomDirectory
 {
     private const int PeerStaleMs = 45_000;
-    private readonly Firestore _fs;
+    private readonly IDocumentStore _fs;
 
-    public RoomDirectory(Firestore fs) => _fs = fs;
+    public RoomDirectory(IDocumentStore fs) => _fs = fs;
 
     public async Task<List<RoomInfo>> ListAsync(bool includeOccupants = true,
                                                 CancellationToken ct = default)
@@ -114,6 +114,8 @@ public sealed class Config
     public string CachedTeamName = "";
     public string CachedThemeId = "";
     public bool CachedIsMod;
+    public string CoordServerUrl = "http://primicord-server:8765";
+    public bool HostMiniServer;
     public int MicDevice = 0;
     public string OutputDeviceId = "";
     public bool PushToTalk;
@@ -233,6 +235,8 @@ public sealed class Config
                     case "profileteamname": c.CachedTeamName = v; break;
                     case "profiletheme": c.CachedThemeId = v; break;
                     case "profilemod": c.CachedIsMod = v == "1"; break;
+                    case "coordserver": if (v.Length > 0) c.CoordServerUrl = v; break;
+                    case "hostserver": c.HostMiniServer = v == "1"; break;
                     case "mic": if (int.TryParse(v, out var m)) c.MicDevice = m; break;
                     case "out": c.OutputDeviceId = v; break;
                     case "ptt": c.PushToTalk = v == "1"; break;
@@ -274,6 +278,8 @@ public sealed class Config
                 "profileteamname=" + CachedTeamName,
                 "profiletheme=" + CachedThemeId,
                 "profilemod=" + (CachedIsMod ? "1" : "0"),
+                "coordserver=" + CoordServerUrl,
+                "hostserver=" + (HostMiniServer ? "1" : "0"),
                 "mic=" + MicDevice,
                 "out=" + OutputDeviceId,
                 "ptt=" + (PushToTalk ? "1" : "0"),

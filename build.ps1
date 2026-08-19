@@ -101,6 +101,15 @@ if ($LASTEXITCODE -ne 0) { throw "publish falhou" }
 # assembly ele entraria no arquivo que muda a cada versao e estragaria o delta.
 if (Test-Path $vlcZip) { Copy-Item $vlcZip $pub -Force }
 
+# O coordenador local vai junto no pacote. Ele e um processo separado porque o PC
+# servidor precisa continuar atendendo mesmo quando a janela do Primicord fecha.
+Write-Host "Publicando mini servidor..." -ForegroundColor DarkYellow
+$serverPub = Join-Path $root "server\bin\Release\publish"
+if (Test-Path $serverPub) { Remove-Item $serverPub -Recurse -Force }
+dotnet publish "$root\server\Primicord.Server.csproj" -c Release -o $serverPub -r win-x64 --self-contained true
+if ($LASTEXITCODE -ne 0) { throw "publish do mini servidor falhou" }
+Copy-Item (Join-Path $serverPub "Primicord.Server.exe") $pub -Force
+
 # --- 3. empacota o instalador ----------------------------------------------
 $ver = ([xml](Get-Content "$root\Primicord.csproj")).Project.PropertyGroup.Version
 $ver = ($ver | Where-Object { $_ }) -as [string]
@@ -115,10 +124,39 @@ if (-not $vpk) {
 
 $rel = Join-Path $root "Releases"
 Write-Host "Empacotando instalador $ver..." -ForegroundColor DarkYellow
+# Reconstruir a mesma versao precisa ser seguro durante desenvolvimento. Remove
+# somente os artefatos gerados DESTA versao e os indices (o vpk os recria lendo
+# todos os pacotes antigos que continuam na pasta).
+foreach ($name in @(
+    "Primicord-$ver-full.nupkg", "Primicord-$ver-delta.nupkg",
+    "Primicord-win-Setup.exe", "Primicord-win-Portable.zip",
+    "assets.win.json", "releases.win.json", "RELEASES"
+)) {
+    $generated = Join-Path $rel $name
+    if (Test-Path $generated) { Remove-Item -LiteralPath $generated -Force }
+}
 vpk pack --packId Primicord --packVersion $ver --packDir $pub --mainExe Primicord.exe `
          --packTitle PRIMICORD --packAuthors Primitivao --icon "$root\Primicord.ico" `
          --outputDir $rel
 if ($LASTEXITCODE -ne 0) { throw "vpk pack falhou" }
+
+# O Setup do Velopack instala/atualiza o Primicord. Um bootstrap pequeno fica por
+# fora dele para instalar o Tailscale antes, sem mudar o atualizador diferencial.
+$velopackSetup = Join-Path $rel "Primicord-win-Setup.exe"
+if (Test-Path $velopackSetup) {
+    Write-Host "Integrando Tailscale ao instalador..." -ForegroundColor DarkYellow
+    $setupCache = Join-Path $env:TEMP "primicord-velopack-$ver.exe"
+    Copy-Item $velopackSetup $setupCache -Force
+    $installerPub = Join-Path $root "installer\bin\Release\publish"
+    if (Test-Path $installerPub) { Remove-Item $installerPub -Recurse -Force }
+    dotnet publish "$root\installer\Primicord.Installer.csproj" -c Release -o $installerPub `
+        -r win-x64 --self-contained true "/p:PrimicordSetupPath=$setupCache"
+    if ($LASTEXITCODE -ne 0) { throw "bootstrap do instalador falhou" }
+    Copy-Item (Join-Path $installerPub "Primicord.Setup.exe") $velopackSetup -Force
+    $verify = Start-Process -FilePath $velopackSetup -ArgumentList "--verify" -Wait -PassThru -WindowStyle Hidden
+    if ($verify.ExitCode -ne 0) { throw "bootstrap nao contem o Setup interno (codigo $($verify.ExitCode))" }
+    Remove-Item $setupCache -Force
+}
 
 Get-ChildItem $rel -File | Where-Object { $_.Name -match "$([regex]::Escape($ver))|Setup" } |
     Sort-Object Length -Descending | ForEach-Object {

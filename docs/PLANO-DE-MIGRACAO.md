@@ -6,11 +6,10 @@ Este plano parte da sua proposta de 10 fases e **muda quatro coisas**. As
 mudanças estão justificadas na §1; se você discordar de alguma, a ordem original
 continua executável — só fica mais cara nos pontos indicados.
 
-> **DECISÃO TOMADA (13/08/2026):** ir direto pro WebRTC, sem Tailscale antes. A
-> ressalva da §1.1 (Tailscale e WebRTC resolvem o mesmo problema de NAT) foi
-> levantada, discutida e **descartada pelo dono do projeto**. A voz por WebRTC
-> está implementada — ver §6. O resto deste plano segue valendo como mapa; as
-> fases não feitas continuam na ordem descrita.
+> **DECISÃO ATUALIZADA (19/08/2026):** o dono do projeto decidiu adotar Tailscale
+> e reduzir o uso do Firestore. A 0.6.9 entrega o instalador integrado, candidatos
+> `100.64/10`, mini servidor local com SQLite e Firestore como compatibilidade.
+> A voz por WebRTC já estava implementada e foi preservada.
 
 ---
 
@@ -294,13 +293,23 @@ referência. É a mesma limitação de qualquer AEC de aplicativo.
 
 ---
 
-### F3 — Tailscale, com a malha atual como plano B 🔴
+### F3 — Tailscale, com a malha atual como plano B 🔴 ✅ 0.6.9
 
 **Por quê:** mata o limite de NAT simétrico, dá IP estável (que torna TCP
 trivial na F7) e é a primeira peça da arquitetura alvo que muda o que o app
 consegue fazer.
 
-**Escopo:**
+**Entregue na 0.6.9:**
+
+- Setup integrado baixa e instala o MSI oficial quando necessário; o atualizador
+  diferencial também tem onboarding. Não existe auth key embutida.
+- Endereços Tailscale são publicados primeiro; LAN/STUN continuam candidatos.
+- Mini servidor ASP.NET Core + SQLite para `pc_rooms`, `pc_presence`, `pc_chat`,
+  `pc_dm` e sinalização. Só aceita loopback e tailnet.
+- Configuração de host/endpoint na UI e inicialização automática no PC servidor.
+- Firestore continua como fallback temporário durante a adoção pelos participantes.
+
+**Escopo original preservado como referência:**
 - `IPrivateNetwork` com **duas** implementações: `TailscaleNetwork` e
   `DirectStunNetwork` (o código atual, extraído). Contrato mínimo:
   `Status`, `LocalAddress`, `EnsureUpAsync()`, `CandidatesFor(peer)`.

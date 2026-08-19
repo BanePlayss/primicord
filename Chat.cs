@@ -40,7 +40,7 @@ public sealed class ChatService
     public const string GeneralChannel = "geral";
     private const int RecentCount = 60;
 
-    private readonly Firestore _fs;
+    private readonly IDocumentStore _fs;
     private readonly string _myNick;
     private readonly SemaphoreSlim _readGate = new(1, 1);
     private readonly Dictionary<string, ChatCache> _cache = new(StringComparer.Ordinal);
@@ -52,7 +52,7 @@ public sealed class ChatService
         public readonly List<ChatMessage> Messages = new();
     }
 
-    public ChatService(Firestore fs, string myNick)
+    public ChatService(IDocumentStore fs, string myNick)
     {
         _fs = fs;
         _myNick = myNick.ToLowerInvariant();

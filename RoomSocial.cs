@@ -46,9 +46,9 @@ public readonly record struct SocialPosition(double X, double Y, int Scale)
 /// </summary>
 public sealed class RoomSocialService
 {
-    private readonly Firestore _fs;
+    private readonly IDocumentStore _fs;
 
-    public RoomSocialService(Firestore fs) => _fs = fs;
+    public RoomSocialService(IDocumentStore fs) => _fs = fs;
 
     public async Task<SocialPosition?> LoadAsync(string roomId, string nick,
                                                   CancellationToken ct = default)

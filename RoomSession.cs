@@ -59,7 +59,7 @@ public sealed class RemotePeer
 /// </summary>
 /// <remarks>
 /// Cada um manda a propria voz DIRETO pra cada outro (malha). Sem servidor no meio:
-/// o Firestore so serve pra trocar enderecos; depois disso o audio nao passa por
+/// o coordenador so serve pra trocar enderecos; depois disso o audio nao passa por
 /// lugar nenhum alem dos dois PCs. Com 6 pessoas cada um sobe ~5x64kbps (~320kbps),
 /// tranquilo em qualquer banda larga.
 ///
@@ -99,7 +99,7 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
     private const int PresenceSyncMs = 10_000;  // descoberta de pares; midia segue P2P
     private const int PeerStaleMs = 45_000; // tolera tres ciclos perdidos sem expulsar
 
-    private readonly Firestore _fs;
+    private readonly IDocumentStore _fs;
     private readonly string _roomId;
     private readonly string _peerId;
     private readonly string _nick;
@@ -161,7 +161,7 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
     /// <summary>Erro que o usuario precisa ver (ex.: rules do Firestore faltando).</summary>
     public event Action<string>? Failed;
 
-    public RoomSession(Firestore fs, string roomId, string peerId, string nick)
+    public RoomSession(IDocumentStore fs, string roomId, string peerId, string nick)
     {
         _fs = fs;
         _roomId = roomId;
@@ -217,7 +217,7 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
         try { _socket.SendBufferSize = 2 * 1024 * 1024; } catch { }
         _socket.Bind(new IPEndPoint(IPAddress.Any, 0));
         int localPort = ((IPEndPoint)_socket.LocalEndPoint!).Port;
-        foreach (var ip in AppEnv.LocalIPv4()) _localEps.Add(new IPEndPoint(ip, localPort));
+        foreach (var ip in OrderedLocalAddresses()) _localEps.Add(new IPEndPoint(ip, localPort));
 
         if (useStun) _publicEp = await Stun.DiscoverAsync(_socket, ct: _cts.Token).ConfigureAwait(false);
 
@@ -266,7 +266,7 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
         _socket.Bind(new IPEndPoint(IPAddress.Any, 0));   // porta efemera: o STUN descobre qual
         int localPort = ((IPEndPoint)_socket.LocalEndPoint!).Port;
 
-        foreach (var ip in AppEnv.LocalIPv4()) _localEps.Add(new IPEndPoint(ip, localPort));
+        foreach (var ip in OrderedLocalAddresses()) _localEps.Add(new IPEndPoint(ip, localPort));
         Log.Write($"sala {_roomId}: socket na porta {localPort}, locais=[{string.Join(",", _localEps)}]");
 
         // STUN ANTES do loop de recepcao (ele consome do mesmo socket).
@@ -304,7 +304,7 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
         Log.Write($"sala {_roomId}: encerrada");
     }
 
-    // ─── PRESENCA (Firestore) ────────────────────────────────────────────────
+    // ─── PRESENCA (mini servidor; Firestore durante a migracao) ─────────────
 
     private async Task PresenceLoopAsync(CancellationToken ct)
     {
@@ -317,13 +317,12 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
                 await SyncPeersAsync(ct).ConfigureAwait(false);
                 delayMs = PresenceSyncMs;
             }
-            catch (FirestoreException ex)
+            catch (DocumentStoreException ex)
             {
                 Log.Write("presenca falhou: " + ex.Message);
                 if (ex.IsPermissionDenied)
                 {
-                    Failed?.Invoke("O Firestore recusou a escrita — falta publicar as rules "
-                                 + "do pc_rooms no Firebase Console.");
+                    Failed?.Invoke("O servidor de coordenacao recusou a presenca desta sala.");
                     return;
                 }
                 delayMs = ex.IsQuotaExceeded
@@ -448,6 +447,13 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
         p.Candidates.Clear();
         p.Candidates.AddRange(fresh);
     }
+
+    /// <summary>
+    /// O candidato 100.64/10 vai primeiro: o Tailscale escolhe rota direta ou DERP
+    /// sozinho. LAN e STUN continuam publicados como plano B da mesma sessao.
+    /// </summary>
+    private static IEnumerable<IPAddress> OrderedLocalAddresses()
+        => AppEnv.LocalIPv4().Distinct().OrderByDescending(TailscaleIntegration.IsTailnetAddress);
 
     // ─── HOLE PUNCHING + KEEPALIVE ───────────────────────────────────────────
 

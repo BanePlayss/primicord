@@ -74,7 +74,8 @@ public static class AppEnv
     }
 
     /// <summary>
-    /// Faixas privadas (RFC 1918) + link-local. Se o par fechou num endereco desses,
+    /// Faixas privadas (RFC 1918), link-local e CGNAT reservado do Tailscale.
+    /// Se o par fechou num endereco desses,
     /// o trafego nao sai pra internet — esta na mesma rede que a gente.
     /// </summary>
     public static bool IsPrivateAddress(IPAddress ip)
@@ -88,6 +89,7 @@ public static class AppEnv
             172 => b[1] >= 16 && b[1] <= 31,         // 172.16.0.0/12
             192 => b[1] == 168,                      // 192.168.0.0/16
             169 => b[1] == 254,                      // 169.254.0.0/16 (link-local)
+            100 => b[1] >= 64 && b[1] <= 127,        // 100.64.0.0/10 (Tailscale/CGNAT)
             _ => false,
         };
     }

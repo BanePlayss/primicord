@@ -56,6 +56,9 @@ public sealed class SettingsDialog : Form
     private readonly Label _musicLabel = new();
     private readonly PrimCheck _tray = new("Fechar minimiza pra bandeja (continua na call)");
     private readonly PrimCheck _joinSound = new("Bipe quando alguem entra ou sai da sala");
+    private readonly TextBox _server = new();
+    private readonly PrimCheck _hostServer = new("Este PC hospeda o mini servidor do grupo");
+    private readonly Label _tailscaleStatus = new();
 
     private void UpdateMusicLabel()
         => _musicLabel.Text = _music.Value == 0
@@ -209,25 +212,66 @@ public sealed class SettingsDialog : Form
         _joinSound.Size = new Size(412, 26);
         _joinSound.Checked = cfg.JoinLeaveSound;
 
+        // ── REDE PRIVADA ──
+        var titleNet = new Label
+        {
+            Text = "REDE PRIVADA", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
+            Location = new Point(24, 930), AutoSize = true,
+        };
+        var lblServer = Section("ENDERECO DO MINI SERVIDOR", new Point(24, 968));
+        _server.Location = new Point(24, 988);
+        _server.Size = new Size(412, 34);
+        _server.Text = cfg.CoordServerUrl;
+        _server.BackColor = Pv.Charcoal;
+        _server.ForeColor = Pv.Bone;
+        _server.BorderStyle = BorderStyle.FixedSingle;
+        _server.Font = Pv.Body;
+
+        _hostServer.Location = new Point(24, 1030);
+        _hostServer.Size = new Size(412, 26);
+        _hostServer.Checked = cfg.HostMiniServer;
+        var serverHint = new Label
+        {
+            Text = "No PC servidor, marque acima. Nos outros, use o IP 100.x do\n"
+                 + "servidor ou o nome MagicDNS, por exemplo primicord-server:8765.\n"
+                 + "Reabra o Primicord depois de trocar este endereco.",
+            Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(48, 1058),
+            Size = new Size(388, 58),
+        };
+
+        _tailscaleStatus.Location = new Point(24, 1124);
+        _tailscaleStatus.Size = new Size(250, 38);
+        _tailscaleStatus.Font = Pv.Body;
+        _tailscaleStatus.ForeColor = Pv.BoneDim;
+        _tailscaleStatus.Text = "Tailscale: verificando...";
+        var tailscaleBtn = new PrimButton("ABRIR TAILSCALE", PrimButton.Style.Ghost)
+        { Location = new Point(286, 1120), Size = new Size(150, 38) };
+        tailscaleBtn.Click += (_, _) =>
+        {
+            using var dialog = new TailscaleSetupDialog();
+            dialog.ShowDialog(this);
+            _ = RefreshTailscaleStatusAsync();
+        };
+
         // ── ATUALIZAR ──
         var titleUpd = new Label
         {
             Text = "ATUALIZAR", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
-            Location = new Point(24, 930), AutoSize = true,
+            Location = new Point(24, 1184), AutoSize = true,
         };
 
         var lblVersion = new Label
         {
             Text = $"voce esta na versao {Updater.CurrentVersion}",
             Font = Pv.Body, ForeColor = Pv.BoneDim,
-            Location = new Point(24, 968), AutoSize = true,
+            Location = new Point(24, 1222), AutoSize = true,
         };
 
         _updateBtn = new PrimButton("PROCURAR ATUALIZACAO")
-        { Location = new Point(24, 994), Size = new Size(260, 38) };
+        { Location = new Point(24, 1248), Size = new Size(260, 38) };
         _updateBtn.Click += async (_, _) => await CheckOrInstallAsync();
 
-        _updateStatus.Location = new Point(24, 1040);
+        _updateStatus.Location = new Point(24, 1294);
         _updateStatus.Size = new Size(412, 56);
         _updateStatus.Font = Pv.Body;
         _updateStatus.ForeColor = Pv.BoneDim;
@@ -235,10 +279,10 @@ public sealed class SettingsDialog : Form
             ? $"procura em github.com/{cfg.UpdateRepo}"
             : "rodando pelo dotnet run — a troca automatica so funciona no exe publicado";
 
-        var save = new PrimButton("SALVAR") { Location = new Point(24, 1108), Size = new Size(200, 40) };
+        var save = new PrimButton("SALVAR") { Location = new Point(24, 1362), Size = new Size(200, 40) };
         save.Click += (_, _) => Apply();
         var cancel = new PrimButton("CANCELAR", PrimButton.Style.Ghost)
-        { Location = new Point(236, 1108), Size = new Size(200, 40) };
+        { Location = new Point(236, 1362), Size = new Size(200, 40) };
         cancel.Click += (_, _) => Close();
 
         Controls.AddRange(new Control[]
@@ -246,10 +290,11 @@ public sealed class SettingsDialog : Form
               titleClip, lblKey, _hotkeyBox, lblSecs, _secs, _secsLabel, _autoBuf,
               titleScr, lblBw, _bw, bwHint,
               titleApp, _siteTheme, themeHint, lblMusic, _music, _musicLabel, _tray, _joinSound,
+              titleNet, lblServer, _server, _hostServer, serverHint, _tailscaleStatus, tailscaleBtn,
               titleUpd, lblVersion, _updateBtn, _updateStatus,
               save, cancel });
 
-        Shown += (_, _) => RestartMonitor();
+        Shown += (_, _) => { RestartMonitor(); _ = RefreshTailscaleStatusAsync(); };
         FormClosed += (_, _) => { _monitor?.Dispose(); _monitor = null; };
     }
 
@@ -356,9 +401,21 @@ public sealed class SettingsDialog : Form
         _cfg.MusicVolume = _music.Value;
         _cfg.TrayOnClose = _tray.Checked;
         _cfg.JoinLeaveSound = _joinSound.Checked;
+        _cfg.CoordServerUrl = string.IsNullOrWhiteSpace(_server.Text)
+            ? "http://primicord-server:8765"
+            : _server.Text.Trim();
+        _cfg.HostMiniServer = _hostServer.Checked;
         _cfg.Save();
+        MiniServerProcess.Configure(_cfg.HostMiniServer);
         Applied?.Invoke();
         Close();
+    }
+
+    private async Task RefreshTailscaleStatusAsync()
+    {
+        var status = await TailscaleIntegration.GetStatusAsync();
+        if (!IsDisposed)
+            _tailscaleStatus.Text = "Tailscale: " + status.Description;
     }
 
     /// <summary>

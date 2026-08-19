@@ -83,6 +83,7 @@ public sealed class ConfigTests : IDisposable
             CamDevice = "Logi C270 HD WebCam", CamWidth = 640, CamHeight = 480, CamFps = 20,
             CachedPc = 1234, CachedCc = 77, CachedTeamId = "caco",
             CachedTeamName = "Caco", CachedThemeId = "oceano", CachedIsMod = true,
+            CoordServerUrl = "http://100.90.80.70:8765", HostMiniServer = true,
         };
         original.Save();
 
@@ -104,6 +105,8 @@ public sealed class ConfigTests : IDisposable
         Assert.Equal("Caco", lido.CachedTeamName);
         Assert.Equal("oceano", lido.CachedThemeId);
         Assert.True(lido.CachedIsMod);
+        Assert.Equal("http://100.90.80.70:8765", lido.CoordServerUrl);
+        Assert.True(lido.HostMiniServer);
     }
 
     [Fact]

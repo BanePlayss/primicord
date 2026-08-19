@@ -14,6 +14,7 @@ namespace Primicord;
 public sealed class MainForm : Form
 {
     private readonly Firestore _fs = new();
+    private readonly IDocumentStore _coord;
     private readonly RoomDirectory _dir;
     private readonly RoomSocialService _social;
     private readonly Config _cfg;
@@ -110,9 +111,12 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        _dir = new RoomDirectory(_fs);
-        _social = new RoomSocialService(_fs);
         _cfg = Config.Load();
+        MiniServerProcess.Configure(_cfg.HostMiniServer);
+        string serverUrl = _cfg.HostMiniServer ? "http://127.0.0.1:8765" : _cfg.CoordServerUrl;
+        _coord = new MigratingDocumentStore(new MiniServerStore(serverUrl), _fs);
+        _dir = new RoomDirectory(_coord);
+        _social = new RoomSocialService(_coord);
 
         Text = "PRIMICORD";
         try
@@ -294,7 +298,7 @@ public sealed class MainForm : Form
         _cfg.SenhaHash = user.SenhaHash;
         if (cacheProfile) _cfg.CacheProfile(user);
         _cfg.Save();
-        _chat = new ChatService(_fs, user.Nick);
+        _chat = new ChatService(_coord, user.Nick);
 
         // Adota o tema escolhido no site (so leitura — trocar continua sendo la).
         Pv.SetAccent(_cfg.UseSiteTheme ? user.ThemeAccent : null);
@@ -891,9 +895,9 @@ public sealed class MainForm : Form
                 await _chat.SendToChannelAsync(ChatService.RoomChannel(_view[5..]), text);
             await RefreshChatAsync(propagateFirestore: true);
         }
-        catch (FirestoreException ex) when (ex.IsPermissionDenied)
+        catch (DocumentStoreException ex) when (ex.IsPermissionDenied)
         {
-            ShowBanner("O Firestore recusou — falta publicar as rules (pc_chat/pc_dm) no Console.");
+            ShowBanner("O servidor recusou a mensagem.");
         }
         catch (Exception ex)
         {
@@ -922,9 +926,9 @@ public sealed class MainForm : Form
             // separado; escrever aqui a cada 20s triplicava custo sem melhorar voz.
             if (first || _pollTick % 6 == 1)
                 try { await _chat.HeartbeatAsync(_voiceRoomId.Length > 0 ? _voiceRoomName : ""); }
-                catch (FirestoreException ex) when (ex.IsPermissionDenied)
+                catch (DocumentStoreException ex) when (ex.IsPermissionDenied)
                 {
-                    ShowBanner("O Firestore recusou a escrita — falta publicar as rules no Console.");
+                    ShowBanner("O servidor recusou a presenca.");
                     _pollTimer?.Stop();
                     return;
                 }
@@ -977,6 +981,10 @@ public sealed class MainForm : Form
         catch (FirestoreException ex)
         {
             ApplyServerBackoff(ex.IsQuotaExceeded, ex.Message);
+        }
+        catch (DocumentStoreException ex)
+        {
+            ApplyServerBackoff(quota: false, ex.Message);
         }
         catch (HttpRequestException ex)
         {
@@ -1087,7 +1095,7 @@ public sealed class MainForm : Form
                 if (!_chatView.IsDisposed) _chatView.SetMessages(msgs, Nick);
             }
         }
-        catch (FirestoreException ex)
+        catch (DocumentStoreException ex)
         {
             if (propagateFirestore) throw;
             Log.Write("ler chat falhou: " + ex.Message);
@@ -1159,9 +1167,9 @@ public sealed class MainForm : Form
             await JoinVoiceAsync(room.Id, room.Name);
             SelectView("room:" + room.Id);
         }
-        catch (FirestoreException ex) when (ex.IsPermissionDenied)
+        catch (DocumentStoreException ex) when (ex.IsPermissionDenied)
         {
-            ShowBanner("O Firestore recusou a escrita — falta publicar as rules do pc_rooms no Console.");
+            ShowBanner("O servidor recusou a criacao da sala.");
         }
         catch (Exception ex)
         {
@@ -1423,7 +1431,7 @@ public sealed class MainForm : Form
         catch (Exception ex) { Log.Write("posicao social nao carregou: " + ex.Message); }
 
         string peerId = Sanitize(Nick) + "-" + Random.Shared.Next(0x10000, 0xFFFFF).ToString("x5");
-        _session = new RoomSession(_fs, roomId, peerId, Nick);
+        _session = new RoomSession(_coord, roomId, peerId, Nick);
         _session.UpdateSocial(myPosition);
         _session.PeersChanged += OnPeersChanged;
         _session.SocialMoved += OnPeerSocialMoved;
@@ -1444,7 +1452,7 @@ public sealed class MainForm : Form
         // A chave decide so quem leva a VOZ.
         if (_cfg.UseWebRtc)
         {
-            _webrtc = new WebRtcVoiceMesh(_fs, roomId, peerId, _session);
+            _webrtc = new WebRtcVoiceMesh(_coord, roomId, peerId, _session);
             _webrtc.Failed += ShowBanner;
             _webrtc.StateChanged += () =>
             {
@@ -1495,9 +1503,9 @@ public sealed class MainForm : Form
             _webrtc?.Start();
             UpdateRoomStatus();
         }
-        catch (FirestoreException ex) when (ex.IsPermissionDenied)
+        catch (DocumentStoreException ex) when (ex.IsPermissionDenied)
         {
-            ShowBanner("O Firestore recusou a escrita — falta publicar as rules do pc_rooms no Console.");
+            ShowBanner("O servidor recusou a entrada na sala.");
         }
         catch (Exception ex)
         {
