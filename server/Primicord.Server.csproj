@@ -6,13 +6,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Primicord.Server</AssemblyName>
     <RootNamespace>Primicord.Server</RootNamespace>
-    <Version>0.6.13</Version>
-    <PublishSingleFile>true</PublishSingleFile>
-    <SelfContained>true</SelfContained>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <PublishTrimmed>true</PublishTrimmed>
-    <TrimMode>partial</TrimMode>
+    <Version>0.6.14</Version>
+    <!-- Single-file/self-contained/trimming sao propriedades de PUBLICACAO e
+         ficam no build.ps1. Assim o build normal continua executavel nos testes. -->
     <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
   </PropertyGroup>
   <ItemGroup>

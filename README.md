@@ -3,6 +3,15 @@
 O Discord dos primitivos — app nativo de Windows pra sala de voz em grupo,
 compartilhar tela e tirar clipe dos últimos segundos.
 
+## 0.6.14 — salas sem dono físico
+
+- Todo PC com Primicord mantém uma réplica SQLite das salas, presença e chat.
+- Os participantes online são descobertos automaticamente pelo Tailscale.
+- Leituras usam um coordenador determinístico e migram para o próximo se ele cair.
+- Escritas são espelhadas nas réplicas online; o áudio continua ponto a ponto.
+- Snapshots fazem um PC que voltou receber o estado atual do grupo.
+- Exclusões viram tombstones para uma réplica antiga não ressuscitar salas apagadas.
+
 ## 0.6.13 — instalador privado do grupo
 
 - O administrador gera um único Setup protegido por senha para o grupo inteiro.
@@ -66,32 +75,31 @@ LAN). O Primicord é feito pra **N pessoas pela internet**.
 
 - **Voz**: malha UDP ponto-a-ponto — cada um manda direto pra cada outro. Não tem
   servidor no meio, ninguém paga hospedagem e nenhum áudio passa por terceiros.
-- **Encontro**: o mini servidor do Primicord guarda salas, presença, posições,
-  chat e sinalização em SQLite. Durante a migração, o Firestore ainda entra como
-  compatibilidade quando o servidor configurado não responde.
+- **Encontro**: cada Primicord guarda uma réplica de salas, presença, chat e
+  sinalização em SQLite. O primeiro PC saudável coordena leituras; escritas vão
+  para todos e outro assume automaticamente se ele cair.
 - **NAT**: o endereço da tailnet é o primeiro candidato. O Tailscale escolhe a rota
   direta ou relay; STUN e hole punching continuam como plano B.
 - **Áudio**: 48kHz mono, frames de 10ms, jitter buffer por pessoa, mixados com
   NAudio. Na malha vai PCM cru (798 kbps por par); com `webrtc=1` vai Opus por
   RTP/SRTP (49 kbps por par, e criptografado).
 
-### Configurar o mini servidor
+### Configurar o grupo
 
-1. No PC que ficará ligado: **Configurações → Rede privada → Este PC hospeda**.
-2. Em **Instalador do grupo**, abra a página de chaves do Tailscale e gere uma
+1. Em **Instalador do grupo**, abra a página de chaves do Tailscale e gere uma
    chave `Reusable`, não efêmera. Se houver aprovação de dispositivos, use
    também `Pre-approved`.
-3. Informe a chave e uma senha compartilhada e gere `Primicord-Grupo-Setup.exe`.
-4. Os participantes executam esse mesmo arquivo e digitam a senha. Tailscale,
-   tailnet e endereço do servidor são configurados sem passos adicionais.
-5. Depois que todos instalarem, revogue a auth key. Os PCs já conectados continuam
+2. Informe a chave e uma senha compartilhada e gere `Primicord-Grupo-Setup.exe`.
+3. Os participantes executam esse mesmo arquivo e digitam a senha. Tailscale,
+   tailnet e a descoberta das réplicas são configurados sem passos adicionais.
+4. Depois que todos instalarem, revogue a auth key. Os PCs já conectados continuam
    autorizados; para removê-los, use a tela Machines do Tailscale.
 
 O instalador público continua sem credenciais. A senha e a auth key do grupo
 existem somente na cópia privada gerada localmente.
 
-O banco fica em `%LOCALAPPDATA%\PrimicordServer\primicord.db`. Áudio, câmera e
-tela não passam pelo servidor: continuam ponto a ponto.
+Cada PC guarda sua réplica em `%LOCALAPPDATA%\PrimicordServer\primicord.db`.
+Áudio, câmera e tela não passam por ela: continuam ponto a ponto.
 
 ### Limite conhecido do modo de compatibilidade
 
@@ -174,9 +182,10 @@ binário que se distribui por aí não é opção.
 - [x] Cancelamento de eco
 - [x] Atualização pelo próprio app
 - [x] Chamada em grade responsiva com palco de tela e miniaturas
+- [x] Réplicas SQLite com troca automática de coordenador
 
 Ver [docs/PLANO-DE-MIGRACAO.md](docs/PLANO-DE-MIGRACAO.md) pro que vem depois.
 
-**Compatibilidade:** quem ainda não configurou o mini servidor depende das rules
-de `pc_rooms`, `peers/**` e `signal/**` no Firebase. Na tailnet, salas e sinalização
-seguem pelo SQLite local e não exigem essas regras para o caminho principal.
+**Compatibilidade:** quem ainda não entrou na tailnet depende das rules de
+`pc_rooms`, `peers/**` e `signal/**` no Firebase. Na tailnet, salas e sinalização
+seguem pelas réplicas SQLite e não exigem essas regras para o caminho principal.

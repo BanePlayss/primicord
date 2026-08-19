@@ -12,6 +12,8 @@ public sealed record TailscaleStatus(bool Installed, bool Connected, string Addr
         : "instalado — falta entrar na tailnet";
 }
 
+public sealed record TailnetNode(string Address, string DnsName, bool IsSelf);
+
 public static class TailscaleIntegration
 {
     public const string LatestMsiUrl =
@@ -57,6 +59,79 @@ public static class TailscaleIntegration
         {
             Log.Write("tailscale: status falhou: " + ex.Message);
             return new TailscaleStatus(true, false, "", "", "Unknown");
+        }
+    }
+
+    /// <summary>
+    /// PCs online da tailnet, incluindo este. A 0.6.14 usa a lista para achar as
+    /// replicas sem servidor fixo, DNS manual ou API administrativa do Tailscale.
+    /// </summary>
+    public static async Task<List<TailnetNode>> GetOnlineNodesAsync(CancellationToken ct = default)
+    {
+        string? cli = CliPath;
+        if (cli == null) return new List<TailnetNode>();
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo(cli, "status --json")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            });
+            if (process == null) return new List<TailnetNode>();
+            string json = await process.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            await process.WaitForExitAsync(ct).ConfigureAwait(false);
+            if (process.ExitCode != 0) return new List<TailnetNode>();
+            return ParseOnlineNodes(json);
+        }
+        catch (Exception ex)
+        {
+            Log.Write("tailscale: descoberta falhou: " + ex.Message);
+            return new List<TailnetNode>();
+        }
+    }
+
+    public static List<TailnetNode> ParseOnlineNodes(string json)
+    {
+        var result = new List<TailnetNode>();
+        JsonNode? root = JsonNode.Parse(json);
+        if (!string.Equals(root?["BackendState"]?.GetValue<string>(), "Running",
+                           StringComparison.OrdinalIgnoreCase))
+            return result;
+
+        AddNode(root?["TailscaleIPs"] as JsonArray,
+                root?["Self"]?["DNSName"]?.GetValue<string>() ?? "", true, result);
+
+        if (root?["Peer"] is JsonObject peers)
+            foreach (var (_, value) in peers)
+            {
+                if (value?["Online"] is not JsonValue online
+                    || !online.TryGetValue<bool>(out bool isOnline) || !isOnline)
+                    continue;
+                AddNode(value["TailscaleIPs"] as JsonArray,
+                        value["DNSName"]?.GetValue<string>() ?? "", false, result);
+            }
+
+        return result
+            .GroupBy(node => node.Address, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .OrderBy(node => IPAddress.Parse(node.Address).GetAddressBytes(), ByteArrayComparer.Instance)
+            .ToList();
+    }
+
+    private static void AddNode(JsonArray? addresses, string dns, bool self,
+                                List<TailnetNode> result)
+    {
+        if (addresses == null) return;
+        foreach (JsonNode? node in addresses)
+        {
+            string text = node?.GetValue<string>() ?? "";
+            if (IPAddress.TryParse(text, out var address) && IsTailnetAddress(address))
+            {
+                result.Add(new TailnetNode(text, dns.TrimEnd('.'), self));
+                return;
+            }
         }
     }
 
@@ -154,6 +229,21 @@ public static class TailscaleIntegration
             catch { }
         }
         return null;
+    }
+
+    private sealed class ByteArrayComparer : IComparer<byte[]>
+    {
+        public static readonly ByteArrayComparer Instance = new();
+        public int Compare(byte[]? x, byte[]? y)
+        {
+            if (ReferenceEquals(x, y)) return 0;
+            if (x == null) return -1;
+            if (y == null) return 1;
+            int length = Math.Min(x.Length, y.Length);
+            for (int i = 0; i < length; i++)
+                if (x[i] != y[i]) return x[i].CompareTo(y[i]);
+            return x.Length.CompareTo(y.Length);
+        }
     }
 }
 

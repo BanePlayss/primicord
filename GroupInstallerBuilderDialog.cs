@@ -93,7 +93,6 @@ public sealed class GroupInstallerBuilderDialog : Form
 
         Shown += async (_, _) =>
         {
-            if (!cfg.HostMiniServer) return;
             var tailscale = await TailscaleIntegration.GetStatusAsync();
             if (!IsDisposed && tailscale.Connected && tailscale.Address.Length > 0)
                 _server.Text = Config.NormalizeCoordServerUrl(tailscale.Address);

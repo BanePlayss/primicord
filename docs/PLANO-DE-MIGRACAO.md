@@ -316,6 +316,16 @@ consegue fazer.
 - O Setup privado instala o Tailscale, autentica o dispositivo e grava o endpoint.
 - O segredo não entra no repositório, release, `config.txt` ou linha de comando.
 
+**Failover entregue na 0.6.14:**
+
+- Todo cliente inicia uma réplica SQLite e descobre as demais pelo status local
+  do Tailscale, sem precisar de API administrativa ou servidor público.
+- Escritas são espelhadas; leituras migram imediatamente para a próxima réplica.
+- Anti-entropia por snapshot atualiza PCs que voltaram depois de ficar offline.
+- Exclusões persistem como tombstones e não reaparecem por causa de banco antigo.
+- A mídia continua na malha ponto a ponto, portanto a troca de coordenador não
+  reinicia o áudio entre os participantes restantes.
+
 **Escopo original preservado como referência:**
 - `IPrivateNetwork` com **duas** implementações: `TailscaleNetwork` e
   `DirectStunNetwork` (o código atual, extraído). Contrato mínimo:

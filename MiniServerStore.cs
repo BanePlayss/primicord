@@ -6,11 +6,23 @@ using System.Text.Json.Nodes;
 
 namespace Primicord;
 
+public sealed record ReplicaDocument(string Path, Dictionary<string, object?> Fields,
+                                     long UpdatedAt, bool Deleted);
+
+public interface IClusterReplica : IDocumentStore
+{
+    string BaseUrl { get; }
+    Task<bool> IsAvailableAsync(CancellationToken ct = default);
+    Task<List<ReplicaDocument>> ExportSnapshotAsync(CancellationToken ct = default);
+    Task ImportSnapshotAsync(IReadOnlyList<ReplicaDocument> documents,
+                             CancellationToken ct = default);
+}
+
 /// <summary>
 /// Cliente do mini servidor que roda dentro da tailnet. O contrato replica apenas
 /// as operacoes de documento que o Primicord ja usa; nenhuma midia passa por ele.
 /// </summary>
-public sealed class MiniServerStore : IDocumentStore
+public sealed class MiniServerStore : IClusterReplica
 {
     private readonly HttpClient _http;
 
@@ -22,7 +34,9 @@ public sealed class MiniServerStore : IDocumentStore
         _http = new HttpClient
         {
             BaseAddress = new Uri(BaseUrl, UriKind.Absolute),
-            Timeout = TimeSpan.FromSeconds(4),
+            // Midia continua P2P; esta espera so decide qual replica coordena.
+            // Dois segundos evitam congelar lobby/chat quando o lider acabou de cair.
+            Timeout = TimeSpan.FromSeconds(2),
         };
     }
 
@@ -121,6 +135,44 @@ public sealed class MiniServerStore : IDocumentStore
                                       null, ct, allowNotFound: true).ConfigureAwait(false);
     }
 
+    public async Task<List<ReplicaDocument>> ExportSnapshotAsync(CancellationToken ct = default)
+    {
+        using var response = await SendAsync(HttpMethod.Get, "v1/snapshot", null, ct)
+            .ConfigureAwait(false);
+        var array = JsonNode.Parse(await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false))
+                    as JsonArray;
+        var result = new List<ReplicaDocument>();
+        if (array == null) return result;
+        foreach (JsonNode? node in array)
+        {
+            if (node is not JsonObject item) continue;
+            string path = item["path"]?.GetValue<string>() ?? "";
+            if (path.Length == 0) continue;
+            result.Add(new ReplicaDocument(
+                path,
+                ParseFields(item["fields"] as JsonObject),
+                item["updatedAt"]?.GetValue<long>() ?? 0,
+                item["deleted"]?.GetValue<bool>() ?? false));
+        }
+        return result;
+    }
+
+    public async Task ImportSnapshotAsync(IReadOnlyList<ReplicaDocument> documents,
+                                          CancellationToken ct = default)
+    {
+        var array = new JsonArray();
+        foreach (ReplicaDocument document in documents)
+            array.Add(new JsonObject
+            {
+                ["path"] = document.Path,
+                ["fields"] = ToJson(document.Fields),
+                ["updatedAt"] = document.UpdatedAt,
+                ["deleted"] = document.Deleted,
+            });
+        using var body = new StringContent(array.ToJsonString(), Encoding.UTF8, "application/json");
+        using var _ = await SendAsync(HttpMethod.Post, "v1/snapshot", body, ct).ConfigureAwait(false);
+    }
+
     private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string url,
                                                        HttpContent? body, CancellationToken ct,
                                                        bool allowNotFound = false)
@@ -174,6 +226,27 @@ public sealed class MiniServerStore : IDocumentStore
                 _ => value.ToJsonString(),
             };
         }
+        return result;
+    }
+
+    internal static JsonObject ToJson(Dictionary<string, object?> fields)
+    {
+        var result = new JsonObject();
+        foreach (var (key, value) in fields)
+            result[key] = value switch
+            {
+                null => null,
+                bool b => b,
+                byte b => b,
+                short s => s,
+                int i => i,
+                long l => l,
+                float f => f,
+                double d => d,
+                decimal d => (double)d,
+                string s => s,
+                _ => value.ToString(),
+            };
         return result;
     }
 }

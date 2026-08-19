@@ -57,7 +57,7 @@ public sealed class SettingsDialog : Form
     private readonly PrimCheck _tray = new("Fechar minimiza pra bandeja (continua na call)");
     private readonly PrimCheck _joinSound = new("Bipe quando alguem entra ou sai da sala");
     private readonly TextBox _server = new();
-    private readonly PrimCheck _hostServer = new("Este PC hospeda o mini servidor do grupo");
+    private readonly PrimCheck _hostServer = new("Este PC mantem uma replica das salas do grupo");
     private readonly Label _tailscaleStatus = new();
 
     private void UpdateMusicLabel()
@@ -218,7 +218,7 @@ public sealed class SettingsDialog : Form
             Text = "REDE PRIVADA", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
             Location = new Point(24, 930), AutoSize = true,
         };
-        var lblServer = Section("ENDERECO DO MINI SERVIDOR", new Point(24, 968));
+        var lblServer = Section("PONTO DE ENTRADA (PLANO B)", new Point(24, 968));
         _server.Location = new Point(24, 988);
         _server.Size = new Size(412, 34);
         _server.Text = cfg.CoordServerUrl;
@@ -229,16 +229,13 @@ public sealed class SettingsDialog : Form
 
         _hostServer.Location = new Point(24, 1030);
         _hostServer.Size = new Size(412, 26);
-        _hostServer.Checked = cfg.HostMiniServer;
-        _hostServer.Click += async (_, _) =>
-        {
-            if (_hostServer.Checked) await RefreshTailscaleStatusAsync(fillHostAddress: true);
-        };
+        _hostServer.Checked = true;
+        _hostServer.Enabled = false;
         var serverHint = new Label
         {
-            Text = "No PC servidor, marque acima. Nos outros, use o IP 100.x do\n"
-                 + "servidor ou o nome MagicDNS, por exemplo primicord-server:8765.\n"
-                 + "Reabra o Primicord depois de trocar este endereco.",
+            Text = "Os PCs com Primicord sao descobertos pelo Tailscale e replicam\n"
+                 + "salas, presenca e chat. Este endereco so entra se a descoberta\n"
+                 + "automatica estiver temporariamente indisponivel.",
             Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(48, 1058),
             Size = new Size(388, 58),
         };
@@ -254,7 +251,7 @@ public sealed class SettingsDialog : Form
         {
             using var dialog = new TailscaleSetupDialog();
             dialog.ShowDialog(this);
-            _ = RefreshTailscaleStatusAsync(fillHostAddress: _hostServer.Checked);
+            _ = RefreshTailscaleStatusAsync();
         };
 
         // ── CONVITE PRIVADO ──
@@ -266,7 +263,7 @@ public sealed class SettingsDialog : Form
         var inviteHint = new Label
         {
             Text = "Gera um unico Setup com senha para o grupo. Nos outros PCs ele\n"
-                 + "entra na tailnet e configura este mini servidor automaticamente.",
+                 + "entra na tailnet e configura a rede Primicord automaticamente.",
             Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(24, 1222),
             Size = new Size(412, 44),
         };
@@ -323,7 +320,7 @@ public sealed class SettingsDialog : Form
         Shown += (_, _) =>
         {
             RestartMonitor();
-            _ = RefreshTailscaleStatusAsync(fillHostAddress: _hostServer.Checked);
+            _ = RefreshTailscaleStatusAsync();
         };
         FormClosed += (_, _) => { _monitor?.Dispose(); _monitor = null; };
     }
@@ -432,9 +429,9 @@ public sealed class SettingsDialog : Form
         _cfg.TrayOnClose = _tray.Checked;
         _cfg.JoinLeaveSound = _joinSound.Checked;
         _cfg.CoordServerUrl = Config.NormalizeCoordServerUrl(_server.Text);
-        _cfg.HostMiniServer = _hostServer.Checked;
+        _cfg.HostMiniServer = true; // chave legada; desde 0.6.14 todos replicam
         _cfg.Save();
-        MiniServerProcess.Configure(_cfg.HostMiniServer);
+        MiniServerProcess.Configure(enabled: true);
         Applied?.Invoke();
         Close();
     }

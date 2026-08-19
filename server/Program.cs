@@ -6,7 +6,8 @@ using Primicord.Server;
 var builder = WebApplication.CreateSlimBuilder(args);
 builder.Logging.ClearProviders();
 builder.Logging.AddSimpleConsole(options => options.SingleLine = true);
-builder.WebHost.UseUrls("http://0.0.0.0:8765");
+builder.WebHost.UseUrls(Environment.GetEnvironmentVariable("PRIMICORD_SERVER_URLS")
+                       ?? "http://0.0.0.0:8765");
 
 string dataDir = Environment.GetEnvironmentVariable("PRIMICORD_SERVER_DATA_DIR")
                  ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -37,7 +38,7 @@ app.MapGet("/health", async context =>
     await ServerJson.WriteAsync(context, new JsonObject
     {
         ["ok"] = true,
-        ["version"] = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.6.13",
+        ["version"] = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.6.14",
         ["storage"] = "sqlite",
     });
 });
@@ -92,6 +93,43 @@ app.MapPost("/v1/query", async context =>
     await ServerJson.WriteRowsAsync(context, rows);
 });
 
+// Anti-entropia entre os PCs do grupo. Inclui tombstones para exclusoes feitas
+// enquanto alguma replica estava offline.
+app.MapGet("/v1/snapshot", async context =>
+{
+    var documents = await store.ExportAsync(context.RequestAborted);
+    var array = new JsonArray();
+    foreach (var document in documents)
+        array.Add(new JsonObject
+        {
+            ["path"] = document.Path,
+            ["fields"] = document.Fields.DeepClone(),
+            ["updatedAt"] = document.UpdatedAt,
+            ["deleted"] = document.Deleted,
+        });
+    await ServerJson.WriteAsync(context, array);
+});
+
+app.MapPost("/v1/snapshot", async context =>
+{
+    JsonArray array = await ServerJson.ReadArrayAsync(context);
+    if (array.Count > 20_000) throw new BadHttpRequestException("Snapshot grande demais.");
+    var documents = new List<SnapshotDocument>(array.Count);
+    foreach (JsonNode? node in array)
+    {
+        if (node is not JsonObject item) continue;
+        string path = ServerJson.String(item, "path");
+        if (path.Length == 0) continue;
+        documents.Add(new SnapshotDocument(
+            path,
+            item["fields"] as JsonObject ?? new JsonObject(),
+            item["updatedAt"]?.GetValue<long>() ?? 0,
+            item["deleted"]?.GetValue<bool>() ?? false));
+    }
+    await store.ImportAsync(documents, context.RequestAborted);
+    context.Response.StatusCode = StatusCodes.Status204NoContent;
+});
+
 app.Run();
 
 namespace Primicord.Server
@@ -119,6 +157,11 @@ namespace Primicord.Server
             => await JsonNode.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted)
                    as JsonObject
                ?? throw new BadHttpRequestException("O corpo precisa ser um objeto JSON.");
+
+        public static async Task<JsonArray> ReadArrayAsync(HttpContext context)
+            => await JsonNode.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted)
+                   as JsonArray
+               ?? throw new BadHttpRequestException("O corpo precisa ser uma lista JSON.");
 
         public static async Task WriteRowsAsync(HttpContext context, IEnumerable<StoreRow> rows)
         {

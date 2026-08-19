@@ -111,9 +111,11 @@ public sealed class MainForm : Form
     public MainForm()
     {
         _cfg = Config.Load();
-        MiniServerProcess.Configure(_cfg.HostMiniServer);
-        string serverUrl = _cfg.HostMiniServer ? "http://127.0.0.1:8765" : _cfg.CoordServerUrl;
-        _coord = new MigratingDocumentStore(new MiniServerStore(serverUrl), _fs);
+        // Desde a 0.6.14 todo PC e uma replica. O primeiro IP online e o lider de
+        // leitura; escritas sao espelhadas e outro assume se ele cair.
+        MiniServerProcess.Configure(enabled: true);
+        _coord = new ClusterDocumentStore(
+            new TailscaleClusterEndpointProvider(_cfg.CoordServerUrl), _fs);
         _dir = new RoomDirectory(_coord);
 
         Text = "PRIMICORD";

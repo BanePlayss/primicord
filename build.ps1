@@ -106,7 +106,9 @@ if (Test-Path $vlcZip) { Copy-Item $vlcZip $pub -Force }
 Write-Host "Publicando mini servidor..." -ForegroundColor DarkYellow
 $serverPub = Join-Path $root "server\bin\Release\publish"
 if (Test-Path $serverPub) { Remove-Item $serverPub -Recurse -Force }
-dotnet publish "$root\server\Primicord.Server.csproj" -c Release -o $serverPub -r win-x64 --self-contained true
+dotnet publish "$root\server\Primicord.Server.csproj" -c Release -o $serverPub -r win-x64 --self-contained true `
+    /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true `
+    /p:PublishTrimmed=true /p:TrimMode=partial
 if ($LASTEXITCODE -ne 0) { throw "publish do mini servidor falhou" }
 Copy-Item (Join-Path $serverPub "Primicord.Server.exe") $pub -Force
 

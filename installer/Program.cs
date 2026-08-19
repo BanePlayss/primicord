@@ -39,18 +39,18 @@ internal static class Program
                 "Convite aceito. Agora o Primicord vai:\n\n"
               + "1. instalar o Tailscale, se necessario;\n"
               + "2. conectar este PC a rede privada do grupo;\n"
-              + "3. configurar as salas automaticamente.\n\n"
-              + "O Windows pode pedir permissao de administrador uma vez.",
-                "PRIMICORD 0.6.13 — GRUPO", Ok | IconInfo);
+              + "3. configurar as salas e a replica automaticamente.\n\n"
+              + "O Windows pode pedir permissao de administrador.",
+                "PRIMICORD 0.6.14 — GRUPO", Ok | IconInfo);
         }
         else
         {
             MessageBoxW(IntPtr.Zero,
-                "O Primicord 0.6.13 usa o Tailscale para criar a rede privada do grupo.\n\n"
+                "O Primicord 0.6.14 usa o Tailscale para criar a rede privada do grupo.\n\n"
               + "Este e o instalador publico. Ele instala o Tailscale, mas nao entra "
               + "em nenhuma tailnet. Para configuracao automatica, use o instalador "
               + "privado gerado pelo administrador do grupo.",
-                "PRIMICORD 0.6.13", Ok | IconInfo);
+                "PRIMICORD 0.6.14", Ok | IconInfo);
         }
 
         string tempDir = Path.Combine(Path.GetTempPath(), "PrimicordSetup-" + Guid.NewGuid().ToString("N"));
@@ -78,6 +78,15 @@ internal static class Program
             {
                 await ConnectTailscaleAsync(invite, tempDir);
                 WritePrimicordConfig(invite.ServerUrl);
+            }
+
+            try { await EnsureReplicaFirewallAsync(); }
+            catch when (invite == null)
+            {
+                MessageBoxW(IntPtr.Zero,
+                    "A regra de rede das replicas nao foi criada. O Primicord sera instalado, "
+                  + "mas este PC pode nao assumir as salas ate a permissao ser aceita nas configuracoes.",
+                    "PRIMICORD — FIREWALL", Ok | IconWarning);
             }
 
             string setup = Path.Combine(tempDir, "Primicord-win-Setup.exe");
@@ -216,11 +225,58 @@ internal static class Program
         lines.RemoveAll(line => line.StartsWith("coordserver=", StringComparison.OrdinalIgnoreCase)
                              || line.StartsWith("hostserver=", StringComparison.OrdinalIgnoreCase));
         lines.Add("coordserver=" + serverUrl.TrimEnd('/'));
-        lines.Add("hostserver=0");
+        lines.Add("hostserver=1"); // 0.6.14+: todo participante mantem uma replica
 
         string temp = path + ".new";
         File.WriteAllLines(temp, lines);
         File.Move(temp, path, overwrite: true);
+    }
+
+    private static async Task EnsureReplicaFirewallAsync()
+    {
+        const string name = "Primicord Mini Server (Tailscale)";
+        using (var check = Process.Start(new ProcessStartInfo("netsh.exe")
+        {
+            Arguments = $"advfirewall firewall show rule name=\"{name}\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        }))
+        {
+            if (check != null)
+            {
+                string output = await check.StandardOutput.ReadToEndAsync();
+                await check.WaitForExitAsync();
+                if (check.ExitCode == 0 && output.Contains(name, StringComparison.OrdinalIgnoreCase))
+                    return;
+            }
+        }
+
+        Process? firewall;
+        try
+        {
+            firewall = Process.Start(new ProcessStartInfo("netsh.exe")
+            {
+                Arguments = "advfirewall firewall add rule "
+                          + $"name=\"{name}\" dir=in action=allow enable=yes "
+                          + "protocol=TCP localport=8765 remoteip=100.64.0.0/10",
+                UseShellExecute = true,
+                Verb = "runas",
+                WindowStyle = ProcessWindowStyle.Hidden,
+            });
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            throw new InvalidOperationException("A permissao da rede de replicas foi cancelada.", ex);
+        }
+        using (firewall)
+        {
+            if (firewall == null) throw new InvalidOperationException("O Windows nao abriu o firewall.");
+            await firewall.WaitForExitAsync();
+            if (firewall.ExitCode != 0)
+                throw new InvalidOperationException("O firewall terminou com codigo " + firewall.ExitCode + ".");
+        }
     }
 
     private static bool TailscaleInstalled() => FindTailscaleCli() != null
