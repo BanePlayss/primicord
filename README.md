@@ -3,6 +3,13 @@
 O Discord dos primitivos — app nativo de Windows pra sala de voz em grupo,
 compartilhar tela e tirar clipe dos últimos segundos.
 
+## 0.6.12 — chamada em grade como o Discord
+
+- Remove a arena espacial, o arraste, o zoom e as posições livres dos avatares.
+- Organiza os participantes automaticamente em cards responsivos.
+- Câmera preenche o card; voz ativa ganha contorno verde e status no rodapé.
+- Durante tela compartilhada, o vídeo ocupa o palco e os usuários viram miniaturas.
+
 ## 0.6.11 — compartilhamento sem X vermelho
 
 - Sincroniza a pintura do palco com os blocos recebidos da tela compartilhada.
@@ -150,11 +157,10 @@ binário que se distribui por aí não é opção.
 - [x] Voz por WebRTC com Opus (`webrtc=1`)
 - [x] Cancelamento de eco
 - [x] Atualização pelo próprio app
-- [x] Espaço social por sala (avatares livres, tamanho, proximidade e chat próprio)
+- [x] Chamada em grade responsiva com palco de tela e miniaturas
 
 Ver [docs/PLANO-DE-MIGRACAO.md](docs/PLANO-DE-MIGRACAO.md) pro que vem depois.
 
-**Passo manual pendente:** publicar as rules do `pc_rooms` no Firebase Console,
-cobrindo `peers/**` e — se for usar `webrtc=1` — também `signal/**`. Sem isso o
-app não lista nem cria sala. A posição social reutiliza `peers/**`, então não
-exige regra adicional na série 0.6.x.
+**Compatibilidade:** quem ainda não configurou o mini servidor depende das rules
+de `pc_rooms`, `peers/**` e `signal/**` no Firebase. Na tailnet, salas e sinalização
+seguem pelo SQLite local e não exigem essas regras para o caminho principal.

@@ -16,7 +16,6 @@ public sealed class MainForm : Form
     private readonly Firestore _fs = new();
     private readonly IDocumentStore _coord;
     private readonly RoomDirectory _dir;
-    private readonly RoomSocialService _social;
     private readonly Config _cfg;
 
     private PrimitivaoUser? _me;
@@ -82,7 +81,7 @@ public sealed class MainForm : Form
     private ChatView? _roomChatView;
     private PrimitivaoView? _primitivao;
     private Panel? _roomPanel;
-    private SocialArena? _arena;
+    private CallGrid? _callGrid;
     private RoomHeader? _roomHeader;
     private RoomActivityView? _roomActivity;
     private readonly Dictionary<uint, PeerTile> _peerTiles = new();
@@ -116,7 +115,6 @@ public sealed class MainForm : Form
         string serverUrl = _cfg.HostMiniServer ? "http://127.0.0.1:8765" : _cfg.CoordServerUrl;
         _coord = new MigratingDocumentStore(new MiniServerStore(serverUrl), _fs);
         _dir = new RoomDirectory(_coord);
-        _social = new RoomSocialService(_coord);
 
         Text = "PRIMICORD";
         try
@@ -1207,16 +1205,15 @@ public sealed class MainForm : Form
         };
 
         // Ferramentas ficam no cabeçalho; embaixo sobram apenas as quatro ações
-        // essenciais da call. Isso devolve quase 70px de altura para a arena.
+        // essenciais da call. Isso devolve quase 70px de altura para a grade.
         var actions = BuildRoomActions(out var tools);
         _roomHeader.Controls.Add(tools);
 
-        _arena = new SocialArena { Dock = DockStyle.Fill, RoomName = _voiceRoomName };
-        _arena.OwnPositionChanged += OnOwnSocialPositionChanged;
+        _callGrid = new CallGrid { Dock = DockStyle.Fill };
         _stage = new StageView { Visible = false };
-        _arena.AttachStage(_stage);
+        _callGrid.AttachStage(_stage);
 
-        _roomPanel.Controls.Add(_arena);      // Fill primeiro
+        _roomPanel.Controls.Add(_callGrid);   // Fill primeiro
         _roomPanel.Controls.Add(actions);
         _roomPanel.Controls.Add(_djLabel);
         _roomPanel.Controls.Add(_roomStatus);
@@ -1422,19 +1419,9 @@ public sealed class MainForm : Form
         _voiceRoomId = roomId;
         _voiceRoomName = roomName;
 
-        SocialPosition myPosition = SocialPosition.DefaultFor(
-            RoomSession.HashId(Nick.ToLowerInvariant()));
-        try
-        {
-            myPosition = await _social.LoadAsync(roomId, Nick) ?? myPosition;
-        }
-        catch (Exception ex) { Log.Write("posicao social nao carregou: " + ex.Message); }
-
         string peerId = Sanitize(Nick) + "-" + Random.Shared.Next(0x10000, 0xFFFFF).ToString("x5");
         _session = new RoomSession(_coord, roomId, peerId, Nick);
-        _session.UpdateSocial(myPosition);
         _session.PeersChanged += OnPeersChanged;
-        _session.SocialMoved += OnPeerSocialMoved;
         _session.Failed += ShowBanner;
 
         _session.ScreenFrameReceived += OnPeerFrame;
@@ -1470,11 +1457,10 @@ public sealed class MainForm : Form
         _voice.HeardPcm += (b, o, c) => _clips?.PushHeard(b, o, c);
         _voice.MicPcm += (b, o, c) => _clips?.PushMic(b, o, c);
 
-        // Recria as bolinhas do zero pra esta sala.
+        // Recria os cards do zero pra esta sala.
         _peerTiles.Clear();
         EnsureRoomPanel();
-        _arena!.RoomName = roomName;
-        _arena.ClearParticipants();
+        _callGrid!.ClearParticipants();
         if (_roomHeader != null)
         {
             _roomHeader.RoomName = roomName;
@@ -1486,7 +1472,7 @@ public sealed class MainForm : Form
         if (joiningRoom != null && !joiningRoom.Occupants.Contains(Nick, StringComparer.OrdinalIgnoreCase))
             joiningRoom.Occupants.Add(Nick);
         _myTile = new PeerTile { Nick = Nick, IsMe = true, Connected = true };
-        _arena.SetOwn(_myTile, myPosition);
+        _callGrid.SetOwn(_myTile);
         _audioMuted = false;
         _roomChatVisible = ClientSize.Width >= 900;
 
@@ -1562,7 +1548,7 @@ public sealed class MainForm : Form
         _voiceRoomName = "";
         _peerTiles.Clear();
         _roomKnownPeers.Clear();
-        _arena?.ClearParticipants();
+        _callGrid?.ClearParticipants();
         _myTile = null;
 
         UpdateVoiceStrip();
@@ -1572,7 +1558,7 @@ public sealed class MainForm : Form
     private void OnPeersChanged()
     {
         if (InvokeRequired) { BeginInvoke(OnPeersChanged); return; }
-        if (_session == null || _arena == null || _arena.IsDisposed) return;
+        if (_session == null || _callGrid == null || _callGrid.IsDisposed) return;
 
         var peers = _session.Peers;
         var alive = peers.Select(p => p.SenderId).ToHashSet();
@@ -1604,7 +1590,7 @@ public sealed class MainForm : Form
             {
                 tile = new PeerTile { Margin = new Padding(6) };
                 _peerTiles[p.SenderId] = tile;
-                _arena.SetParticipant(p.SenderId, tile, p.Social);
+                _callGrid.SetParticipant(p.SenderId, tile);
             }
             tile.Nick = p.Nick;
             tile.Muted = p.Muted;
@@ -1612,7 +1598,6 @@ public sealed class MainForm : Form
             tile.Connected = p.Connected;
             tile.Punching = p.Locked == null;
             tile.SilentSeconds = p.SilentSeconds;
-            _arena.SetPosition(p.SenderId, p.Social);
             // Clicar no tile de quem compartilha joga a tela dele no palco.
             if (p.Sharing && (string?)tile.Tag != "clickable")
             {
@@ -1635,7 +1620,7 @@ public sealed class MainForm : Form
         {
             var tile = _peerTiles[sid];
             _peerTiles.Remove(sid);
-            _arena.RemoveParticipant(sid);
+            _callGrid.RemoveParticipant(sid);
             _voice?.RemovePeer(sid);
             _screens.Remove(sid);
             _cams.Remove(sid);
@@ -1644,47 +1629,18 @@ public sealed class MainForm : Form
         UpdateRoomStatus();
     }
 
-    private void OnPeerSocialMoved(uint senderId, SocialPosition position)
-    {
-        if (InvokeRequired)
-        {
-            try { BeginInvoke(() => OnPeerSocialMoved(senderId, position)); } catch { }
-            return;
-        }
-        _arena?.SetPosition(senderId, position);
-    }
-
-    private void OnOwnSocialPositionChanged(SocialPosition position, bool final)
-    {
-        var session = _session;
-        if (session == null) return;
-        session.UpdateSocial(position, final);
-        if (!final) return;
-
-        string roomId = _voiceRoomId;
-        string nick = Nick;
-        _ = _social.SaveAsync(roomId, nick, position).ContinueWith(t =>
-        {
-            if (t.IsFaulted) Log.Write("posicao social nao salvou: " + t.Exception?.GetBaseException().Message);
-        }, TaskScheduler.Default);
-    }
-
     private int _stageTick;
 
     private void TickVoice()
     {
         if (_voice == null || _session == null) return;
 
-        // Sem compartilhamento, a arena ocupa todo o centro. Com tela, o palco
-        // aparece atras das bolinhas — a presenca social nao some durante o jogo.
+        // Sem compartilhamento, os participantes ocupam uma grade. Com tela, o
+        // palco cresce e os mesmos cards viram miniaturas na parte inferior.
         if (_stage != null && !_stage.IsDisposed)
         {
             bool showStage = _iAmSharing || _session.Peers.Any(p => p.Sharing);
-            if (_stage.Visible != showStage)
-            {
-                _stage.Visible = showStage;
-                _arena?.Invalidate();
-            }
+            _callGrid?.SetStageVisible(showStage);
         }
 
         // Cameras: reaponta cada tile pro quadro mais novo. O FrameOf devolve null

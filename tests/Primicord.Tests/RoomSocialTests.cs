@@ -24,33 +24,37 @@ public sealed class RoomSocialTests
     }
 
     [Fact]
-    public void Posicao_inicial_e_id_social_sao_estaveis()
+    public void Posicao_legada_inicial_e_estavel_para_clientes_antigos()
     {
         Assert.Equal(SocialPosition.DefaultFor(12345), SocialPosition.DefaultFor(12345));
-        Assert.Equal(RoomSocialService.DocumentIdFor(" Bane "),
-                     RoomSocialService.DocumentIdFor("bane"));
-        Assert.NotEqual(RoomSocialService.DocumentIdFor("bane"),
-                        RoomSocialService.DocumentIdFor("ricle"));
-        Assert.Equal("pc_rooms/sala-03/peers/saved-social-" +
-                     RoomSocialService.DocumentIdFor("bane"),
-                     RoomSocialService.DocumentPathFor("sala-03", "bane"));
     }
 
     [Fact]
-    public void Arena_social_renderiza_avatares_em_posicoes_livres()
+    public void Compartilhamento_mantem_cards_em_miniaturas_alinhadas()
     {
-        using var arena = new SocialArena { Size = new Size(760, 460), RoomName = "SALA 03" };
-        arena.SetOwn(new PeerTile { Nick = "bane", Connected = true },
-                     new SocialPosition(0.22, 0.28, 112));
-        arena.SetParticipant(10, new PeerTile { Nick = "ricle", Connected = true },
-                             new SocialPosition(0.76, 0.30, 86));
-        arena.SetParticipant(11, new PeerTile { Nick = "mohamed", Connected = true },
-                             new SocialPosition(0.52, 0.68, 138));
+        using var root = new Panel { Size = new Size(760, 460) };
+        using var call = new CallGrid { Dock = DockStyle.Fill };
+        using var stage = new StageView();
+        root.Controls.Add(call);
+        call.AttachStage(stage);
+        call.SetOwn(new PeerTile { Nick = "bane", Connected = true });
+        call.SetParticipant(10, new PeerTile { Nick = "ricle", Connected = true });
+        call.SetParticipant(11, new PeerTile { Nick = "mohamed", Connected = true });
+        call.SetStageVisible(true);
+        root.CreateControl();
+        root.PerformLayout();
+        foreach (Control child in call.Controls) child.CreateControl();
 
-        using var bitmap = new Bitmap(arena.Width, arena.Height);
-        arena.DrawToBitmap(bitmap, arena.ClientRectangle);
+        using var bitmap = new Bitmap(root.Width, root.Height);
+        root.DrawToBitmap(bitmap, root.ClientRectangle);
 
-        Assert.NotEqual(bitmap.GetPixel(20, 20), bitmap.GetPixel(arena.Width / 2, arena.Height / 2));
-        bitmap.Save(Path.Combine(Path.GetTempPath(), "primicord-social-arena-preview.png"));
+        Assert.True(stage.Visible);
+        Assert.Equal(3, call.ParticipantCount);
+        Assert.All(call.Controls.OfType<PeerTile>(), tile =>
+        {
+            Assert.True(tile.Bottom <= call.Height);
+            Assert.True(tile.Top > call.Height / 2);
+        });
+        bitmap.Save(Path.Combine(Path.GetTempPath(), "primicord-call-stage-preview.png"));
     }
 }

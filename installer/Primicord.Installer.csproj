@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Primicord.Setup</AssemblyName>
     <RootNamespace>Primicord.Installer</RootNamespace>
-    <Version>0.6.11</Version>
+    <Version>0.6.12</Version>
     <ApplicationIcon>..\Primicord.ico</ApplicationIcon>
     <PublishAot>true</PublishAot>
     <SelfContained>true</SelfContained>

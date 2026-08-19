@@ -1,11 +1,10 @@
-using System.ComponentModel;
 using System.Drawing.Drawing2D;
 
 namespace Primicord;
 
 /// <summary>
-/// A bolinha social de um participante. Foto/camera ficam no centro, o halo mostra
-/// presenca e voz, e nome/microfone acompanham o jogador pela arena.
+/// Card de um participante na chamada. Camera ocupa o fundo; sem camera, avatar e
+/// estado de voz seguem o padrao visual de uma chamada em grade.
 /// </summary>
 public sealed class PeerTile : Control
 {
@@ -22,24 +21,6 @@ public sealed class PeerTile : Control
     public Image? Cam;
 
     private const float SpeakThreshold = 0.045f;
-    private int _avatarDiameter = SocialPosition.DefaultScale;
-
-    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
-    public int AvatarDiameter
-    {
-        get => _avatarDiameter;
-        set
-        {
-            int next = Math.Clamp(value, SocialPosition.MinScale, SocialPosition.MaxScale);
-            if (next == _avatarDiameter && Width > 0) return;
-            _avatarDiameter = next;
-            Size = new Size(Math.Max(116, next + 30), next + 56);
-            Invalidate();
-        }
-    }
-
-    /// <summary>Centro geometrico usado pela arena para posicionar a bolinha.</summary>
-    public PointF AvatarCenter => new(Width / 2f, 10 + AvatarDiameter / 2f);
 
     public bool Speaking => Level > SpeakThreshold && !Muted && Connected;
 
@@ -51,7 +32,6 @@ public sealed class PeerTile : Control
         BackColor = Color.Transparent;
         Cursor = Cursors.Hand;
         TabStop = true;
-        AvatarDiameter = SocialPosition.DefaultScale;
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -60,96 +40,88 @@ public sealed class PeerTile : Control
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
-        int haloSize = AvatarDiameter;
-        var halo = new Rectangle((Width - haloSize) / 2, 8, haloSize, haloSize);
+        DrawGridCard(g);
+    }
+
+    private void DrawGridCard(Graphics g)
+    {
+        var card = new Rectangle(1, 1, Math.Max(1, Width - 3), Math.Max(1, Height - 3));
         Color accent = AccentFor(Nick);
         if (!Connected) accent = Pv.BoneDim;
-        else if (Muted) accent = Color.FromArgb(145, 112, 160);
 
-        var aura = Rectangle.Inflate(halo, Speaking ? 12 : 7, Speaking ? 12 : 7);
-        using (var path = new GraphicsPath())
-        {
-            path.AddEllipse(aura);
-            using var glow = new PathGradientBrush(path)
-            {
-                CenterColor = Color.FromArgb(Speaking ? 72 : 40, accent),
-                SurroundColors = new[] { Color.FromArgb(0, accent) },
-            };
-            g.FillEllipse(glow, aura);
-        }
-        using (var core = new SolidBrush(Color.FromArgb(Speaking ? 36 : 21, accent)))
-            g.FillEllipse(core, halo);
-        using (var glow2 = new Pen(Color.FromArgb(Speaking ? 210 : 145, accent), Speaking ? 2.6f : 1.5f))
-            g.DrawEllipse(glow2, Rectangle.Inflate(halo, -2, -2));
-        if (Speaking)
-            using (var ring = new Pen(Color.FromArgb(75, accent), 6f))
-                g.DrawEllipse(ring, Rectangle.Inflate(halo, 2, 2));
+        using (var path = Pv.RoundRect(card, 9))
+        using (var fill = new SolidBrush(Color.FromArgb(35, 36, 40)))
+            g.FillPath(fill, path);
 
-        int photoSize = Math.Max(30, (int)Math.Round(haloSize * 0.58));
-        var photoBox = new Rectangle(
-            halo.X + (halo.Width - photoSize) / 2,
-            halo.Y + Math.Max(8, (halo.Height - photoSize) / 2 - 8),
-            photoSize, photoSize);
-
-        var cam = Cam;
-        bool drewCam = cam != null && TryDrawImageCircle(g, cam, photoBox);
+        bool drewCam = Cam != null && TryDrawImageCover(g, Cam, card);
         if (!drewCam)
         {
+            int size = Math.Clamp((int)(Math.Min(Width, Height) * .44f), 52, 126);
+            var avatar = new Rectangle((Width - size) / 2, Math.Max(12, (Height - size) / 2 - 7),
+                                       size, size);
             var photo = Primitivao.AvatarFor(Nick);
-            if (photo != null) DrawImageCircle(g, photo, photoBox);
-            else DrawInitial(g, photoBox, accent, Nick);
+            if (photo != null) DrawImageCircle(g, photo, avatar);
+            else DrawInitial(g, avatar, accent, Nick);
+            using var outline = new Pen(Color.FromArgb(120, accent), 2f);
+            g.DrawEllipse(outline, avatar);
         }
 
-        if (Muted || !Connected)
-            using (var veil = new SolidBrush(Color.FromArgb(125, Pv.Charcoal)))
-                g.FillEllipse(veil, photoBox);
-        using (var border = new Pen(Pv.Charcoal, 2)) g.DrawEllipse(border, photoBox);
+        int footerH = Math.Clamp(Height / 4, 30, 42);
+        var footer = new Rectangle(card.Left, card.Bottom - footerH, card.Width, footerH);
+        using (var path = Pv.RoundRect(footer, 8))
+        using (var shade = new SolidBrush(Color.FromArgb(218, 18, 19, 22)))
+            g.FillPath(shade, path);
 
-        DrawCaption(g, halo, accent);
+        string name = Nick.ToLowerInvariant() + (IsMe ? " (voce)" : "");
+        using (var nameBrush = new SolidBrush(Pv.Bone))
+            g.DrawString(name, Pv.BodyBold, nameBrush, footer.Left + 11,
+                         footer.Top + (footer.Height - Pv.BodyBold.Height) / 2f);
+
+        string status = !Connected ? "SEM ROTA" : Muted ? "MUTADO" : Speaking ? "FALANDO" : "MIC";
+        Color statusColor = !Connected ? Pv.Red : Muted ? Pv.BoneDim : Speaking ? Pv.Green : Pv.BoneDim;
+        float statusWidth = Pv.TrackedWidth(g, status, Pv.Label, .7f);
+        using (var statusBrush = new SolidBrush(statusColor))
+            Pv.DrawTracked(g, status, Pv.Label, statusBrush,
+                           footer.Right - statusWidth - 10,
+                           footer.Top + (footer.Height - Pv.Label.Height) / 2f + 1, .7f);
+
+        if (Sharing)
+        {
+            const string live = "AO VIVO";
+            float liveWidth = Pv.TrackedWidth(g, live, Pv.Label, .8f);
+            var badge = new Rectangle(card.Right - (int)liveWidth - 23, card.Top + 10,
+                                      (int)liveWidth + 14, 22);
+            using (var path = Pv.RoundRect(badge, 4))
+            using (var fill = new SolidBrush(Pv.Red)) g.FillPath(fill, path);
+            using var text = new SolidBrush(Color.White);
+            Pv.DrawTracked(g, live, Pv.Label, text, badge.Left + 7, badge.Top + 5, .8f);
+        }
+
+        Color borderColor = Speaking ? Pv.Green : Color.FromArgb(80, Pv.Char3);
+        float borderWidth = Speaking ? 3f : 1f;
+        using (var path = Pv.RoundRect(card, 9))
+        using (var border = new Pen(borderColor, borderWidth))
+            g.DrawPath(border, path);
     }
 
-    private void DrawCaption(Graphics g, Rectangle halo, Color accent)
+    private static bool TryDrawImageCover(Graphics g, Image image, Rectangle box)
     {
-        string original = Nick.ToLowerInvariant();
-        string name = original;
-        while (name.Length > 4 && Pv.TrackedWidth(g, name, Pv.DisplaySm, 0.8f) > Width - 8)
-            name = name[..^1];
-        if (name != original) name = name[..Math.Max(1, name.Length - 1)] + "…";
-
-        using (var b = new SolidBrush(Pv.Bone))
+        var saved = g.Save();
+        try
         {
-            float w = Pv.TrackedWidth(g, name, Pv.DisplaySm, 0.8f);
-            Pv.DrawTracked(g, name, Pv.DisplaySm, b, (Width - w) / 2f, halo.Bottom + 1, 0.8f);
+            using var clip = Pv.RoundRect(box, 9);
+            g.SetClip(clip);
+            double scale = Math.Max(box.Width / (double)image.Width, box.Height / (double)image.Height);
+            int sourceW = Math.Max(1, (int)(box.Width / scale));
+            int sourceH = Math.Max(1, (int)(box.Height / scale));
+            var source = new Rectangle((image.Width - sourceW) / 2, (image.Height - sourceH) / 2,
+                                       sourceW, sourceH);
+            g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+            g.DrawImage(image, box, source, GraphicsUnit.Pixel);
+            return true;
         }
-
-        const int GiveUpSeconds = 25;
-        string status = !Connected
-            ? (Punching ? (SilentSeconds >= GiveUpSeconds ? "SEM ROTA" : "CONECTANDO") : "SEM SINAL")
-            : Muted ? "⌁  MUTADO"
-            : Speaking ? "●  FALANDO"
-            : Sharing ? "NA TELA" : "MIC ATIVO";
-        Color statusColor = !Connected
-            ? (Punching && SilentSeconds < GiveUpSeconds ? Pv.OrangeDim : Pv.Red)
-            : Muted ? Color.FromArgb(176, 150, 190)
-            : Speaking ? Pv.Green : accent;
-        using (var b = new SolidBrush(statusColor))
-        {
-            float w = Pv.TrackedWidth(g, status, Pv.Label, 1.0f);
-            Pv.DrawTracked(g, status, Pv.Label, b, (Width - w) / 2f, halo.Bottom + 25, 1.0f);
-        }
-
-        if (Connected && !Muted && Level > 0.01f)
-        {
-            int bw = (int)(Math.Min(1f, Level * 3f) * Math.Max(22, halo.Width - 28));
-            using var b = new SolidBrush(Pv.Green);
-            g.FillRectangle(b, (Width - bw) / 2, Height - 5, bw, 2);
-        }
-    }
-
-    private static bool TryDrawImageCircle(Graphics g, Image image, Rectangle box)
-    {
-        try { DrawImageCircle(g, image, box); return true; }
         catch { return false; }
+        finally { g.Restore(saved); }
     }
 
     private static void DrawImageCircle(Graphics g, Image image, Rectangle box)

@@ -7,7 +7,7 @@ namespace Primicord.Tests;
 public sealed class RoomUxTests
 {
     [Fact]
-    public void Sala_067_renderiza_com_arena_dominante_e_tres_colunas()
+    public void Sala_renderiza_grade_de_chamada_e_tres_colunas()
     {
         using var root = new Panel { Size = new Size(1100, 700), BackColor = Color.Black };
         using var left = new Panel { Dock = DockStyle.Left, Width = 188, BackColor = Pv.Char2 };
@@ -82,21 +82,15 @@ public sealed class RoomUxTests
             actions.Controls.Add(button);
         }
 
-        var arena = new SocialArena { Dock = DockStyle.Fill, RoomName = "SALA 03" };
-        arena.SetOwn(new PeerTile { Nick = "bane", Connected = true, Level = .2f },
-                     new SocialPosition(.20, .24, 112));
-        arena.SetParticipant(1, new PeerTile { Nick = "ricle", Connected = true, Level = .3f },
-                             new SocialPosition(.76, .23, 88));
-        arena.SetParticipant(2, new PeerTile { Nick = "mohamed", Connected = true, Level = .5f },
-                             new SocialPosition(.48, .48, 140));
-        arena.SetParticipant(3, new PeerTile { Nick = "celin", Connected = true, Muted = true },
-                             new SocialPosition(.22, .72, 94));
-        arena.SetParticipant(4, new PeerTile { Nick = "pitera", Connected = true, Level = .15f },
-                             new SocialPosition(.78, .65, 104));
-        arena.SetParticipant(5, new PeerTile { Nick = "vitinho", Connected = true, Muted = true },
-                             new SocialPosition(.57, .80, 78));
+        var call = new CallGrid { Dock = DockStyle.Fill };
+        call.SetOwn(new PeerTile { Nick = "bane", Connected = true, Level = .2f });
+        call.SetParticipant(1, new PeerTile { Nick = "ricle", Connected = true, Level = .3f });
+        call.SetParticipant(2, new PeerTile { Nick = "mohamed", Connected = true, Level = .5f });
+        call.SetParticipant(3, new PeerTile { Nick = "celin", Connected = true, Muted = true });
+        call.SetParticipant(4, new PeerTile { Nick = "pitera", Connected = true, Level = .15f });
+        call.SetParticipant(5, new PeerTile { Nick = "vitinho", Connected = true, Muted = true });
 
-        center.Controls.Add(arena);
+        center.Controls.Add(call);
         center.Controls.Add(actions);
         center.Controls.Add(header);
         root.Controls.Add(center);
@@ -108,8 +102,10 @@ public sealed class RoomUxTests
         using var bitmap = new Bitmap(root.Width, root.Height);
         root.DrawToBitmap(bitmap, root.ClientRectangle);
 
-        Assert.True(arena.Width > left.Width * 3);
-        Assert.True(arena.Height > 520);
-        bitmap.Save(Path.Combine(Path.GetTempPath(), "primicord-room-067-preview.png"));
+        Assert.True(call.Width > left.Width * 3);
+        Assert.True(call.Height > 520);
+        Assert.Equal(6, call.ParticipantCount);
+        Assert.All(call.Controls.OfType<PeerTile>(), tile => Assert.True(tile.Width > tile.Height));
+        bitmap.Save(Path.Combine(Path.GetTempPath(), "primicord-room-grid-preview.png"));
     }
 }
