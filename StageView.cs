@@ -27,8 +27,8 @@ public sealed class StageView : Control
 
     /// <summary>
     /// Ligado quando EU sou quem compartilha: mostra a previa local recebida do
-    /// capturador. A janela do Primicord e excluida da captura pelo MainForm para
-    /// impedir o espelho infinito.
+    /// capturador. Se o Primicord estiver visivel na area escolhida, ele aparece
+    /// normalmente no quadro, como qualquer outra janela.
     /// </summary>
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public bool SelfPreview { get; set; }

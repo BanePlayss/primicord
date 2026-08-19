@@ -12,7 +12,7 @@ public static class GroupActivationDefaults
     // somente no Worker; este endereco pode estar no app e no Setup sem risco.
     public const string Endpoint =
         "https://primicord-activation.primicord-primitivos-bane.workers.dev";
-    public const string ClientVersion = "0.6.16";
+    public const string ClientVersion = "0.6.17";
 }
 
 public sealed class GroupActivationException : Exception

@@ -3,6 +3,14 @@
 O Discord dos primitivos — app nativo de Windows pra sala de voz em grupo,
 compartilhar tela e tirar clipe dos últimos segundos.
 
+## 0.6.17 — o Primicord também aparece na transmissão
+
+- Remove a exclusão da janela do Primicord durante o compartilhamento.
+- Se o app estiver visível no monitor ou na janela escolhida, todos o verão no
+  quadro normalmente, inclusive na prévia local.
+- Ao compartilhar o próprio monitor com o Primicord aberto, o efeito de espelho
+  passa a ser esperado porque a prévia está filmando a si mesma.
+
 ## 0.6.16 — prévia, áudio isolado e volume por pessoa
 
 - Quem compartilha passa a ver a própria tela ao vivo no palco.

@@ -1,5 +1,4 @@
 using System.Drawing.Drawing2D;
-using System.Runtime.InteropServices;
 
 namespace Primicord;
 
@@ -1549,7 +1548,6 @@ public sealed class MainForm : Form
         _screenSender = null;
         _iAmSharing = false;
         _stage?.ClearSelfFrame();
-        SetCaptureExclusion(false);
         try { _music?.Dispose(); } catch { }
         _music = null;
         try { _clips?.Dispose(); } catch { }
@@ -1756,8 +1754,8 @@ public sealed class MainForm : Form
             _stage.SetFrame(null);
         }
 
-        // Minha propria tela agora aparece no palco. A janela do Primicord fica
-        // excluida da captura para nao criar o espelho infinito.
+        // Minha propria tela aparece no palco. O Primicord tambem faz parte do
+        // quadro quando sua janela esta dentro do monitor/janela escolhida.
         if (_stage != null && !_stage.IsDisposed)
         {
             bool self = _iAmSharing && _focusedSharer == 0;
@@ -1881,7 +1879,6 @@ public sealed class MainForm : Form
             _screenSender = null;
             _iAmSharing = false;
             _stage?.ClearSelfFrame();
-            SetCaptureExclusion(false);
             _session.Sharing = false;
             SyncSystemAudio();      // sem tela, o som do sistema so segue se for DJ
             SyncRoomButtons();
@@ -1907,7 +1904,6 @@ public sealed class MainForm : Form
             };
             // Quadro inteiro custa um encode a mais — so quando o clipe precisa.
             _screenSender.NeedFullFrames = _cfg.AutoBuffer;
-            SetCaptureExclusion(true);
             _screenSender.Start();
             _iAmSharing = true;
             _session.Sharing = true;
@@ -1919,7 +1915,6 @@ public sealed class MainForm : Form
         }
         catch (Exception ex)
         {
-            SetCaptureExclusion(false);
             Log.Write("compartilhar tela falhou: " + ex.Message);
             ShowBanner("Nao consegui capturar a tela: " + ex.Message);
         }
@@ -1987,34 +1982,6 @@ public sealed class MainForm : Form
 
     private void OnMyPreviewFrame(byte[] jpeg, int w, int h)
         => _stage?.SetSelfFrame(jpeg);
-
-    private const uint WdaNone = 0x00000000;
-    private const uint WdaExcludeFromCapture = 0x00000011;
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool SetWindowDisplayAffinity(IntPtr window, uint affinity);
-
-    /// <summary>
-    /// O mesmo recurso usado por overlays de gravacao: a janela continua visivel
-    /// para o usuario, mas nao entra no quadro capturado. E melhor-esforco porque
-    /// drivers antigos de duplicacao de desktop podem ignorar a afinidade.
-    /// </summary>
-    private void SetCaptureExclusion(bool exclude)
-    {
-        if (!IsHandleCreated) return;
-        if (InvokeRequired)
-        {
-            try { BeginInvoke(() => SetCaptureExclusion(exclude)); } catch { }
-            return;
-        }
-        try
-        {
-            if (!SetWindowDisplayAffinity(Handle, exclude ? WdaExcludeFromCapture : WdaNone))
-                Log.Write("excluir janela da captura falhou: win32="
-                        + Marshal.GetLastWin32Error());
-        }
-        catch (Exception ex) { Log.Write("afinidade de captura falhou: " + ex.Message); }
-    }
 
     private void OnPeerFrame(uint senderId, byte[] payload, int w, int h)
     {
@@ -2383,7 +2350,6 @@ public sealed class MainForm : Form
 
         try { _tray?.Dispose(); } catch { }
         _tray = null;
-        SetCaptureExclusion(false);
         _clipHotkey.Unregister();
         try { _toast?.Dispose(); } catch { }
         StopTimers();
