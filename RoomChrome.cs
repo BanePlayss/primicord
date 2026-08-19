@@ -77,9 +77,15 @@ public sealed class RoomHeader : Panel
 /// <summary>Atividade local e real da sala, sem notificações fictícias.</summary>
 public sealed class RoomActivityView : Control
 {
-    private readonly Queue<(string Title, string Detail)> _events = new();
     private int _participants = 1;
     private string _connection = "conectando voz...";
+    private string _selfNick = "";
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public string LastJoinedUser { get; private set; } = "";
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public DateTimeOffset? LastJoinedAt { get; private set; }
 
     public RoomActivityView()
     {
@@ -97,20 +103,27 @@ public sealed class RoomActivityView : Control
         Invalidate();
     }
 
-    public void Push(string title, string detail)
+    /// <summary>
+    /// Atualiza o ultimo ingresso observado. O painel guarda isso em memoria; o
+    /// banco recebe somente joinedAt dentro da presenca que ja existia.
+    /// </summary>
+    public void RecordJoin(string nick, DateTimeOffset joinedAt)
     {
-        if (_events.TryPeek(out var last) && last.Title == title && last.Detail == detail) return;
-        _events.Enqueue((title, detail));
-        while (_events.Count > 2) _events.Dequeue();
+        if (string.IsNullOrWhiteSpace(nick)) return;
+        if (LastJoinedAt is { } current && joinedAt < current) return;
+        LastJoinedUser = nick.Trim();
+        LastJoinedAt = joinedAt;
         Invalidate();
     }
 
-    public void Reset(string roomName)
+    public void Reset(string selfNick, DateTimeOffset joinedAt)
     {
-        _events.Clear();
+        _selfNick = selfNick.Trim();
         _participants = 1;
         _connection = "conectando voz...";
-        Push("Voce entrou na sala", roomName.ToUpperInvariant());
+        LastJoinedUser = "";
+        LastJoinedAt = null;
+        RecordJoin(_selfNick, joinedAt);
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -129,7 +142,13 @@ public sealed class RoomActivityView : Control
             ($"{_participants} participante{(_participants == 1 ? "" : "s")} na sala", "agora"),
             (_connection, "conexao atual"),
         };
-        if (_events.Count > 0) rows.Add(_events.Last());
+        if (LastJoinedAt is { } joinedAt)
+        {
+            string who = string.Equals(LastJoinedUser, _selfNick,
+                                       StringComparison.OrdinalIgnoreCase)
+                ? "Voce" : LastJoinedUser;
+            rows.Add(($"{who} entrou na sala", joinedAt.ToLocalTime().ToString("HH:mm")));
+        }
 
         int y = 42;
         foreach (var (title, detail) in rows.Take(3))

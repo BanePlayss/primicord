@@ -3,6 +3,16 @@
 O Discord dos primitivos — app nativo de Windows pra sala de voz em grupo,
 compartilhar tela e tirar clipe dos últimos segundos.
 
+## 0.6.18 — último usuário que entrou
+
+- O painel de atividade mostra o último usuário que entrou e o horário local em
+  formato `HH:mm`.
+- Um único campo `joinedAt` é acrescentado à presença que já existia: não há tabela,
+  request ou heartbeat adicional.
+- O painel conserva o último ingresso em memória mesmo se essa pessoa sair da sala.
+- O custo é de apenas um `Int64` por participante, irrelevante perto de voz, câmera
+  ou compartilhamento de tela.
+
 ## 0.6.17 — o Primicord também aparece na transmissão
 
 - Remove a exclusão da janela do Primicord durante o compartilhamento.

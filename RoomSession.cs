@@ -29,6 +29,9 @@ public sealed class RemotePeer
     public long LastRecvTicks;
     public long LastSeenMs;
 
+    /// <summary>Horario de entrada publicado junto da presenca existente.</summary>
+    public long JoinedAtMs;
+
     /// <summary>Quando este par apareceu na sala.</summary>
     public readonly long JoinedTicks = DateTime.UtcNow.Ticks;
 
@@ -103,6 +106,7 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
     private readonly string _roomId;
     private readonly string _peerId;
     private readonly string _nick;
+    private readonly long _joinedAtMs;
 
     private Socket? _socket;
     private Thread? _rxThread;
@@ -132,6 +136,7 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
 
     public string RoomId => _roomId;
     public string PeerId => _peerId;
+    public DateTimeOffset JoinedAt => DateTimeOffset.FromUnixTimeMilliseconds(_joinedAtMs);
     public IPEndPoint? PublicEndpoint => _publicEp;
 
     /// <summary>Voz recebida de alguem (thread de rede — nao toque na UI daqui).</summary>
@@ -167,6 +172,7 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
         _roomId = roomId;
         _peerId = peerId;
         _nick = nick;
+        _joinedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         _mySenderId = HashId(peerId);
         _social = SocialPosition.DefaultFor(_mySenderId);
     }
@@ -191,6 +197,7 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
                 p = new RemotePeer
                 {
                     PeerId = peerId, SenderId = sid,
+                    JoinedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     Social = SocialPosition.DefaultFor(sid),
                 };
                 _peers[sid] = p;
@@ -355,6 +362,9 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
         if (full)
         {
             fields["nick"] = _nick;
+            // Um Int64 a mais na mesma escrita inicial. Nao cria tabela, request
+            // nem heartbeat adicional.
+            fields["joinedAt"] = _joinedAtMs;
             fields["pubIp"] = _publicEp?.Address.ToString() ?? "";
             fields["pubPort"] = (long)(_publicEp?.Port ?? 0);
             fields["locEps"] = string.Join(",", _localEps.Select(e => e.ToString()));
@@ -375,6 +385,7 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
             if (id == _peerId) continue;
             long lastSeen = Firestore.Num(f, "lastSeen");
             if (now - lastSeen > PeerStaleMs) continue;   // fantasma de sessao morta
+            long joinedAt = Firestore.Num(f, "joinedAt");
 
             uint sid = HashId(id);
             alive.Add(sid);
@@ -386,6 +397,7 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
                     p = new RemotePeer
                     {
                         PeerId = id, SenderId = sid,
+                        JoinedAtMs = joinedAt,
                         Social = SocialPosition.DefaultFor(sid),
                     };
                     _peers[sid] = p;
@@ -396,8 +408,10 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
                 string nick = Firestore.Str(f, "nick", id);
                 bool muted = Firestore.Flag(f, "muted");
                 bool sharing = Firestore.Flag(f, "sharing");
-                if (p.Nick != nick || p.Muted != muted || p.Sharing != sharing) changed = true;
+                if (p.Nick != nick || p.Muted != muted || p.Sharing != sharing
+                    || (joinedAt > 0 && p.JoinedAtMs != joinedAt)) changed = true;
                 p.Nick = nick; p.Muted = muted; p.Sharing = sharing;
+                if (joinedAt > 0) p.JoinedAtMs = joinedAt;
                 p.LastSeenMs = lastSeen;
 
                 var social = new SocialPosition(

@@ -1487,7 +1487,7 @@ public sealed class MainForm : Form
             _roomHeader.Participants = 1;
         }
         _roomKnownPeers.Clear();
-        _roomActivity?.Reset(roomName);
+        _roomActivity?.Reset(Nick, _session.JoinedAt);
         var joiningRoom = _rooms.FirstOrDefault(r => r.Id == roomId);
         if (joiningRoom != null && !joiningRoom.Occupants.Contains(Nick, StringComparer.OrdinalIgnoreCase))
             joiningRoom.Occupants.Add(Nick);
@@ -1585,10 +1585,15 @@ public sealed class MainForm : Form
         var alive = peers.Select(p => p.SenderId).ToHashSet();
         var currentNames = peers.Select(p => p.Nick).Where(n => n.Length > 0)
                                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (string entered in currentNames.Except(_roomKnownPeers, StringComparer.OrdinalIgnoreCase))
-            _roomActivity?.Push($"{entered} entrou na sala", "agora");
-        foreach (string left in _roomKnownPeers.Except(currentNames, StringComparer.OrdinalIgnoreCase))
-            _roomActivity?.Push($"{left} saiu da sala", "agora");
+        // joinedAt vem no mesmo documento de presenca que ja era lido. O painel
+        // guarda o maior horario em memoria, entao a saida de alguem nao apaga quem
+        // foi o ultimo a entrar e nenhuma consulta adicional e feita.
+        var newest = peers.Where(peer => peer.JoinedAtMs > 0)
+                          .OrderByDescending(peer => peer.JoinedAtMs)
+                          .FirstOrDefault();
+        if (newest != null)
+            _roomActivity?.RecordJoin(newest.Nick,
+                DateTimeOffset.FromUnixTimeMilliseconds(newest.JoinedAtMs));
         _roomKnownPeers = currentNames;
 
         var activeRoom = _rooms.FirstOrDefault(r => r.Id == _voiceRoomId);

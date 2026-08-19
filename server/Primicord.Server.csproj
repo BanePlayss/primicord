@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Primicord.Server</AssemblyName>
     <RootNamespace>Primicord.Server</RootNamespace>
-    <Version>0.6.17</Version>
+    <Version>0.6.18</Version>
     <!-- Single-file/self-contained/trimming sao propriedades de PUBLICACAO e
          ficam no build.ps1. Assim o build normal continua executavel nos testes. -->
     <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
