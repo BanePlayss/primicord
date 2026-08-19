@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Primicord.Setup</AssemblyName>
     <RootNamespace>Primicord.Installer</RootNamespace>
-    <Version>0.6.12</Version>
+    <Version>0.6.13</Version>
     <ApplicationIcon>..\Primicord.ico</ApplicationIcon>
     <PublishAot>true</PublishAot>
     <SelfContained>true</SelfContained>
@@ -16,5 +16,8 @@
   </PropertyGroup>
   <ItemGroup Condition="Exists('$(PrimicordSetupPath)')">
     <EmbeddedResource Include="$(PrimicordSetupPath)" LogicalName="Primicord.Velopack.Setup.exe" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\GroupInvitePackage.cs" Link="GroupInvitePackage.cs" />
   </ItemGroup>
 </Project>

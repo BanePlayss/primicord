@@ -2,6 +2,9 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
+using Primicord.SetupShared;
 
 namespace Primicord.Installer;
 
@@ -25,12 +28,30 @@ internal static class Program
             return embedded is { Length: > 10_000_000 } ? 0 : 3;
         }
 
-        MessageBoxW(IntPtr.Zero,
-            "O Primicord 0.6.12 usa o Tailscale para criar a rede privada do grupo.\n\n"
-          + "Se ele ainda nao estiver instalado, este assistente baixa o MSI oficial, "
-          + "pede permissao do Windows e depois instala o Primicord. Nenhuma chave "
-          + "da tailnet fica dentro do instalador.",
-            "PRIMICORD 0.6.12", Ok | IconInfo);
+        string ownPath = Environment.ProcessPath
+            ?? throw new InvalidOperationException("O Windows nao informou o caminho do instalador.");
+        GroupInvite? invite = null;
+        if (GroupInvitePackage.HasInvite(ownPath))
+        {
+            invite = AskAndUnlockInvite(ownPath);
+            if (invite == null) return 2;
+            MessageBoxW(IntPtr.Zero,
+                "Convite aceito. Agora o Primicord vai:\n\n"
+              + "1. instalar o Tailscale, se necessario;\n"
+              + "2. conectar este PC a rede privada do grupo;\n"
+              + "3. configurar as salas automaticamente.\n\n"
+              + "O Windows pode pedir permissao de administrador uma vez.",
+                "PRIMICORD 0.6.13 — GRUPO", Ok | IconInfo);
+        }
+        else
+        {
+            MessageBoxW(IntPtr.Zero,
+                "O Primicord 0.6.13 usa o Tailscale para criar a rede privada do grupo.\n\n"
+              + "Este e o instalador publico. Ele instala o Tailscale, mas nao entra "
+              + "em nenhuma tailnet. Para configuracao automatica, use o instalador "
+              + "privado gerado pelo administrador do grupo.",
+                "PRIMICORD 0.6.13", Ok | IconInfo);
+        }
 
         string tempDir = Path.Combine(Path.GetTempPath(), "PrimicordSetup-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
@@ -41,12 +62,22 @@ internal static class Program
                 try { await InstallTailscaleAsync(tempDir); }
                 catch (Exception ex)
                 {
+                    if (invite != null)
+                        throw new InvalidOperationException("O convite nao conseguiu instalar o Tailscale. "
+                                                          + ex.Message, ex);
+
                     int answer = MessageBoxW(IntPtr.Zero,
                         "O Tailscale nao foi instalado:\n\n" + ex.Message
                       + "\n\nContinuar instalando o Primicord com o modo de compatibilidade?",
                         "PRIMICORD — TAILSCALE", YesNo | IconWarning);
                     if (answer != Yes) return 2;
                 }
+            }
+
+            if (invite != null)
+            {
+                await ConnectTailscaleAsync(invite, tempDir);
+                WritePrimicordConfig(invite.ServerUrl);
             }
 
             string setup = Path.Combine(tempDir, "Primicord-win-Setup.exe");
@@ -66,19 +97,148 @@ internal static class Program
         }
         finally
         {
+            invite = null;
             try { Directory.Delete(tempDir, recursive: true); } catch { }
         }
     }
 
-    private static bool TailscaleInstalled()
+    private static GroupInvite? AskAndUnlockInvite(string ownPath)
+    {
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            if (!PromptPassword(attempt > 0, out string password)) return null;
+            try { return GroupInvitePackage.ReadInstaller(ownPath, password); }
+            catch (CryptographicException) { }
+            catch (InvalidDataException) { }
+            finally { password = ""; }
+        }
+        MessageBoxW(IntPtr.Zero,
+            "A senha foi recusada cinco vezes. Peca a senha novamente ao administrador do grupo.",
+            "PRIMICORD — SENHA", Ok | IconWarning);
+        return null;
+    }
+
+    private static async Task ConnectTailscaleAsync(GroupInvite invite, string tempDir)
+    {
+        // Se este PC ja esta na tailnet certa, nao consome nem expoe a auth key.
+        if (await ServerReachableAsync(invite.ServerUrl)) return;
+
+        string? cli = null;
+        for (int i = 0; i < 20 && cli == null; i++)
+        {
+            cli = FindTailscaleCli();
+            if (cli == null) await Task.Delay(500);
+        }
+        if (cli == null)
+            throw new InvalidOperationException("O Tailscale foi instalado, mas o comando tailscale.exe nao apareceu.");
+
+        string keyFile = Path.Combine(tempDir, ".primicord-auth-" + Guid.NewGuid().ToString("N"));
+        await File.WriteAllTextAsync(keyFile, invite.AuthKey);
+        try
+        {
+            Exception? last = null;
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                try
+                {
+                    var start = new ProcessStartInfo(cli)
+                    {
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                    };
+                    // login adiciona/ativa o perfil da tailnet sem apagar perfis que o
+                    // usuario ja possua. file: evita colocar o segredo na command line.
+                    start.ArgumentList.Add("login");
+                    start.ArgumentList.Add("--auth-key=file:" + keyFile);
+                    using var process = Process.Start(start)
+                        ?? throw new InvalidOperationException("O Windows nao abriu o comando do Tailscale.");
+                    Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
+                    Task<string> stderrTask = process.StandardError.ReadToEndAsync();
+                    try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(2)); }
+                    catch (TimeoutException)
+                    {
+                        try { process.Kill(entireProcessTree: true); } catch { }
+                        throw new InvalidOperationException("O Tailscale demorou demais para autenticar.");
+                    }
+                    string stdout = await stdoutTask;
+                    string stderr = await stderrTask;
+                    if (process.ExitCode != 0)
+                        throw new InvalidOperationException((stderr + " " + stdout).Trim());
+
+                    await Task.Delay(1_000);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    last = ex;
+                    await Task.Delay(1_500);
+                }
+            }
+            throw new InvalidOperationException("Nao foi possivel entrar na tailnet do grupo. "
+                                              + last?.Message, last);
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(keyFile))
+                {
+                    byte[] zeros = new byte[new FileInfo(keyFile).Length];
+                    await File.WriteAllBytesAsync(keyFile, zeros);
+                    File.Delete(keyFile);
+                }
+            }
+            catch { }
+        }
+    }
+
+    private static async Task<bool> ServerReachableAsync(string serverUrl)
+    {
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+            string health = serverUrl.TrimEnd('/') + "/health";
+            using var response = await http.GetAsync(health);
+            return response.IsSuccessStatusCode;
+        }
+        catch { return false; }
+    }
+
+    private static void WritePrimicordConfig(string serverUrl)
+    {
+        string dataDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Primicord");
+        Directory.CreateDirectory(dataDir);
+        string path = Path.Combine(dataDir, "config.txt");
+        var lines = File.Exists(path) ? File.ReadAllLines(path).ToList() : new List<string>();
+        lines.RemoveAll(line => line.StartsWith("coordserver=", StringComparison.OrdinalIgnoreCase)
+                             || line.StartsWith("hostserver=", StringComparison.OrdinalIgnoreCase));
+        lines.Add("coordserver=" + serverUrl.TrimEnd('/'));
+        lines.Add("hostserver=0");
+
+        string temp = path + ".new";
+        File.WriteAllLines(temp, lines);
+        File.Move(temp, path, overwrite: true);
+    }
+
+    private static bool TailscaleInstalled() => FindTailscaleCli() != null
+        || Directory.Exists(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Tailscale"));
+
+    private static string? FindTailscaleCli()
     {
         foreach (string root in new[]
         {
             Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
             Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
         })
-            if (File.Exists(Path.Combine(root, "Tailscale", "tailscale.exe"))) return true;
-        return false;
+        {
+            string path = Path.Combine(root, "Tailscale", "tailscale.exe");
+            if (File.Exists(path)) return path;
+        }
+        return null;
     }
 
     private static async Task InstallTailscaleAsync(string tempDir)
@@ -132,4 +292,45 @@ internal static class Program
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int MessageBoxW(IntPtr hWnd, string text, string caption, uint type);
+
+    private static bool PromptPassword(bool wrongPassword, out string password)
+    {
+        var info = new CredUiInfo
+        {
+            Size = Marshal.SizeOf<CredUiInfo>(),
+            Caption = "PRIMICORD — INSTALADOR DO GRUPO",
+            Message = wrongPassword
+                ? "Senha incorreta. Digite novamente a senha compartilhada."
+                : "Digite a senha compartilhada do instalador. O campo Usuario identifica apenas o grupo.",
+        };
+        var user = new StringBuilder("Grupo Primicord", 128);
+        var secret = new StringBuilder(256);
+        bool save = false;
+        uint result = CredUIPromptForCredentialsW(ref info, "Primicord", IntPtr.Zero, 0,
+            user, user.Capacity, secret, secret.Capacity, ref save,
+            0x00040000 /* GENERIC_CREDENTIALS */ |
+            0x00000080 /* ALWAYS_SHOW_UI */ |
+            0x00000002 /* DO_NOT_PERSIST */ |
+            0x00100000 /* KEEP_USERNAME */);
+        password = result == 0 ? secret.ToString() : "";
+        secret.Clear();
+        return result == 0;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct CredUiInfo
+    {
+        public int Size;
+        public IntPtr Parent;
+        [MarshalAs(UnmanagedType.LPWStr)] public string Message;
+        [MarshalAs(UnmanagedType.LPWStr)] public string Caption;
+        public IntPtr Banner;
+    }
+
+    [DllImport("credui.dll", CharSet = CharSet.Unicode)]
+    private static extern uint CredUIPromptForCredentialsW(
+        ref CredUiInfo info, string targetName, IntPtr reserved, uint authError,
+        StringBuilder userName, int userNameMaxChars,
+        StringBuilder password, int passwordMaxChars,
+        ref bool save, uint flags);
 }

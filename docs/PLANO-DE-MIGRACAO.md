@@ -309,6 +309,13 @@ consegue fazer.
 - Configuração de host/endpoint na UI e inicialização automática no PC servidor.
 - Firestore continua como fallback temporário durante a adoção pelos participantes.
 
+**Onboarding entregue na 0.6.13:**
+
+- O app baixa o Setup público e gera localmente uma cópia privada para o grupo.
+- Uma senha compartilhada cifra a auth key reutilizável e o endpoint do servidor.
+- O Setup privado instala o Tailscale, autentica o dispositivo e grava o endpoint.
+- O segredo não entra no repositório, release, `config.txt` ou linha de comando.
+
 **Escopo original preservado como referência:**
 - `IPrivateNetwork` com **duas** implementações: `TailscaleNetwork` e
   `DirectStunNetwork` (o código atual, extraído). Contrato mínimo:

@@ -3,6 +3,14 @@
 O Discord dos primitivos — app nativo de Windows pra sala de voz em grupo,
 compartilhar tela e tirar clipe dos últimos segundos.
 
+## 0.6.13 — instalador privado do grupo
+
+- O administrador gera um único Setup protegido por senha para o grupo inteiro.
+- A auth key reutilizável fica cifrada e nunca é publicada no GitHub ou no `config.txt`.
+- O Setup instala o Tailscale, entra na tailnet e configura o mini servidor sozinho.
+- A chave passa ao Tailscale por arquivo temporário, sem aparecer na linha de comando.
+- Quem já está conectado à tailnet correta não consome a chave novamente.
+
 ## 0.6.12 — chamada em grade como o Discord
 
 - Remove a arena espacial, o arraste, o zoom e as posições livres dos avatares.
@@ -69,10 +77,18 @@ LAN). O Primicord é feito pra **N pessoas pela internet**.
 
 ### Configurar o mini servidor
 
-1. Todos instalam o Tailscale e entram na mesma tailnet.
-2. No PC que ficará ligado: **Configurações → Rede privada → Este PC hospeda**.
-3. Nos demais PCs, informe `http://100.x.y.z:8765` ou o nome MagicDNS do servidor.
-4. Reabra o Primicord depois de trocar o endereço do mini servidor.
+1. No PC que ficará ligado: **Configurações → Rede privada → Este PC hospeda**.
+2. Em **Instalador do grupo**, abra a página de chaves do Tailscale e gere uma
+   chave `Reusable`, não efêmera. Se houver aprovação de dispositivos, use
+   também `Pre-approved`.
+3. Informe a chave e uma senha compartilhada e gere `Primicord-Grupo-Setup.exe`.
+4. Os participantes executam esse mesmo arquivo e digitam a senha. Tailscale,
+   tailnet e endereço do servidor são configurados sem passos adicionais.
+5. Depois que todos instalarem, revogue a auth key. Os PCs já conectados continuam
+   autorizados; para removê-los, use a tela Machines do Tailscale.
+
+O instalador público continua sem credenciais. A senha e a auth key do grupo
+existem somente na cópia privada gerada localmente.
 
 O banco fica em `%LOCALAPPDATA%\PrimicordServer\primicord.db`. Áudio, câmera e
 tela não passam pelo servidor: continuam ponto a ponto.

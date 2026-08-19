@@ -257,25 +257,46 @@ public sealed class SettingsDialog : Form
             _ = RefreshTailscaleStatusAsync(fillHostAddress: _hostServer.Checked);
         };
 
+        // ── CONVITE PRIVADO ──
+        var titleInvite = new Label
+        {
+            Text = "INSTALADOR DO GRUPO", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
+            Location = new Point(24, 1184), AutoSize = true,
+        };
+        var inviteHint = new Label
+        {
+            Text = "Gera um unico Setup com senha para o grupo. Nos outros PCs ele\n"
+                 + "entra na tailnet e configura este mini servidor automaticamente.",
+            Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(24, 1222),
+            Size = new Size(412, 44),
+        };
+        var inviteBtn = new PrimButton("GERAR INSTALADOR PRIVADO")
+        { Location = new Point(24, 1272), Size = new Size(260, 38) };
+        inviteBtn.Click += (_, _) =>
+        {
+            using var dialog = new GroupInstallerBuilderDialog(_cfg);
+            dialog.ShowDialog(this);
+        };
+
         // ── ATUALIZAR ──
         var titleUpd = new Label
         {
             Text = "ATUALIZAR", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
-            Location = new Point(24, 1184), AutoSize = true,
+            Location = new Point(24, 1336), AutoSize = true,
         };
 
         var lblVersion = new Label
         {
             Text = $"voce esta na versao {Updater.CurrentVersion}",
             Font = Pv.Body, ForeColor = Pv.BoneDim,
-            Location = new Point(24, 1222), AutoSize = true,
+            Location = new Point(24, 1374), AutoSize = true,
         };
 
         _updateBtn = new PrimButton("PROCURAR ATUALIZACAO")
-        { Location = new Point(24, 1248), Size = new Size(260, 38) };
+        { Location = new Point(24, 1400), Size = new Size(260, 38) };
         _updateBtn.Click += async (_, _) => await CheckOrInstallAsync();
 
-        _updateStatus.Location = new Point(24, 1294);
+        _updateStatus.Location = new Point(24, 1446);
         _updateStatus.Size = new Size(412, 56);
         _updateStatus.Font = Pv.Body;
         _updateStatus.ForeColor = Pv.BoneDim;
@@ -283,19 +304,20 @@ public sealed class SettingsDialog : Form
             ? $"procura em github.com/{cfg.UpdateRepo}"
             : "rodando pelo dotnet run — a troca automatica so funciona no exe publicado";
 
-        var save = new PrimButton("SALVAR") { Location = new Point(24, 1362), Size = new Size(200, 40) };
+        var save = new PrimButton("SALVAR") { Location = new Point(24, 1514), Size = new Size(200, 40) };
         save.Click += (_, _) => Apply();
         var cancel = new PrimButton("CANCELAR", PrimButton.Style.Ghost)
-        { Location = new Point(236, 1362), Size = new Size(200, 40) };
+        { Location = new Point(236, 1514), Size = new Size(200, 40) };
         cancel.Click += (_, _) => Close();
 
         Controls.AddRange(new Control[]
             { title, lblMic, _mic, lblTest, _level, lblOut, _out, warn,
               titleClip, lblKey, _hotkeyBox, lblSecs, _secs, _secsLabel, _autoBuf,
               titleScr, lblBw, _bw, bwHint,
-              titleApp, _siteTheme, themeHint, lblMusic, _music, _musicLabel, _tray, _joinSound,
-              titleNet, lblServer, _server, _hostServer, serverHint, _tailscaleStatus, tailscaleBtn,
-              titleUpd, lblVersion, _updateBtn, _updateStatus,
+               titleApp, _siteTheme, themeHint, lblMusic, _music, _musicLabel, _tray, _joinSound,
+               titleNet, lblServer, _server, _hostServer, serverHint, _tailscaleStatus, tailscaleBtn,
+               titleInvite, inviteHint, inviteBtn,
+               titleUpd, lblVersion, _updateBtn, _updateStatus,
               save, cancel });
 
         Shown += (_, _) =>
