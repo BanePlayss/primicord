@@ -10,10 +10,6 @@ namespace Primicord.Installer;
 
 internal static class Program
 {
-    // Substituido pelo endpoint real antes da publicacao. Ele e publico; os
-    // segredos ficam nas variaveis cifradas do ativador, nunca neste binario.
-    private const string ActivationEndpoint =
-        "https://primicord-activation.primicord-primitivos-bane.workers.dev";
     private const string TailscaleMsi =
         "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi";
     private const uint Ok = 0x00000000;
@@ -45,7 +41,7 @@ internal static class Program
               + "2. conectar este PC a rede privada do grupo;\n"
               + "3. configurar as salas e a replica automaticamente.\n\n"
               + "O Windows pode pedir permissao de administrador.",
-                "PRIMICORD 0.6.15 — GRUPO", Ok | IconInfo);
+                "PRIMICORD 0.6.16 — GRUPO", Ok | IconInfo);
         }
         else
         {
@@ -64,7 +60,7 @@ internal static class Program
                   + "2. conectar este PC a rede privada do grupo;\n"
                   + "3. configurar as salas e a replica automaticamente.\n\n"
                   + "O Windows pode pedir permissao de administrador.",
-                    "PRIMICORD 0.6.15 — GRUPO", Ok | IconInfo);
+                    "PRIMICORD 0.6.16 — GRUPO", Ok | IconInfo);
             }
         }
 
@@ -137,7 +133,7 @@ internal static class Program
             try
             {
                 var activation = await GroupActivationClient.ActivateAsync(
-                    http, ActivationEndpoint, code, installId);
+                    http, GroupActivationDefaults.Endpoint, code, installId);
                 return new GroupInvite(activation.ServerUrl, activation.AuthKey);
             }
             catch (GroupActivationException ex) when (ex.ErrorCode == "invalid_code")

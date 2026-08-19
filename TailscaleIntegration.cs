@@ -136,7 +136,8 @@ public static class TailscaleIntegration
     }
 
     public static async Task InstallLatestAsync(IProgress<int>? progress = null,
-                                                 CancellationToken ct = default)
+                                                 CancellationToken ct = default,
+                                                 bool openClient = true)
     {
         if (IsInstalled) return;
         string dir = Path.Combine(Path.GetTempPath(), "Primicord", "prerequisites");
@@ -183,11 +184,160 @@ public static class TailscaleIntegration
                 throw new InvalidOperationException($"O instalador do Tailscale terminou com codigo {installer.ExitCode}.");
 
             progress?.Report(100);
-            OpenClient();
+            if (openClient) OpenClient();
         }
         finally
         {
             try { if (File.Exists(msi)) File.Delete(msi); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Entra na tailnet do grupo usando a credencial temporaria devolvida pelo
+    /// ativador. A chave nunca vai na linha de comando (onde outros processos
+    /// poderiam ve-la): o CLI le um arquivo efemero, que e sobrescrito e apagado.
+    /// </summary>
+    public static async Task ConnectWithAuthKeyAsync(string authKey,
+                                                     CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(authKey))
+            throw new ArgumentException("O ativador nao devolveu uma credencial do Tailscale.",
+                                        nameof(authKey));
+
+        string? cli = CliPath;
+        for (int i = 0; i < 20 && cli == null; i++)
+        {
+            await Task.Delay(500, ct).ConfigureAwait(false);
+            cli = CliPath;
+        }
+        if (cli == null)
+            throw new InvalidOperationException(
+                "O Tailscale foi instalado, mas o comando tailscale.exe nao apareceu.");
+
+        string tempDir = Path.Combine(Path.GetTempPath(), "Primicord",
+                                      "activation-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        string keyFile = Path.Combine(tempDir, ".auth-key");
+        await File.WriteAllTextAsync(keyFile, authKey, ct).ConfigureAwait(false);
+        try
+        {
+            Exception? last = null;
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                try
+                {
+                    var start = new ProcessStartInfo(cli)
+                    {
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                    };
+                    start.ArgumentList.Add("login");
+                    start.ArgumentList.Add("--auth-key=file:" + keyFile);
+                    using var process = Process.Start(start)
+                        ?? throw new InvalidOperationException(
+                            "O Windows nao abriu o comando do Tailscale.");
+                    Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
+                    Task<string> stderrTask = process.StandardError.ReadToEndAsync(ct);
+                    try
+                    {
+                        await process.WaitForExitAsync(ct).WaitAsync(TimeSpan.FromMinutes(2), ct)
+                                     .ConfigureAwait(false);
+                    }
+                    catch (TimeoutException)
+                    {
+                        try { process.Kill(entireProcessTree: true); } catch { }
+                        throw new InvalidOperationException(
+                            "O Tailscale demorou demais para autenticar.");
+                    }
+                    string stdout = await stdoutTask.ConfigureAwait(false);
+                    string stderr = await stderrTask.ConfigureAwait(false);
+                    if (process.ExitCode != 0)
+                        throw new InvalidOperationException((stderr + " " + stdout).Trim());
+
+                    await Task.Delay(1000, ct).ConfigureAwait(false);
+                    var status = await GetStatusAsync(ct).ConfigureAwait(false);
+                    if (!status.Connected)
+                        throw new InvalidOperationException(
+                            "O Tailscale aceitou a credencial, mas ainda nao ficou conectado.");
+                    return;
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    last = ex;
+                    if (attempt < 2) await Task.Delay(1500, ct).ConfigureAwait(false);
+                }
+            }
+            throw new InvalidOperationException("Nao foi possivel entrar na rede do grupo. "
+                                              + last?.Message, last);
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(keyFile))
+                {
+                    long length = new FileInfo(keyFile).Length;
+                    await File.WriteAllBytesAsync(keyFile, new byte[Math.Max(0, (int)length)])
+                              .ConfigureAwait(false);
+                    File.Delete(keyFile);
+                }
+                Directory.Delete(tempDir, recursive: false);
+            }
+            catch { }
+        }
+    }
+
+    /// <summary>Libera somente a porta das replicas e somente para a faixa Tailscale.</summary>
+    public static async Task EnsureReplicaFirewallAsync(CancellationToken ct = default)
+    {
+        const string name = "Primicord Mini Server (Tailscale)";
+        using (var check = Process.Start(new ProcessStartInfo("netsh.exe")
+        {
+            Arguments = $"advfirewall firewall show rule name=\"{name}\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        }))
+        {
+            if (check != null)
+            {
+                string output = await check.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+                await check.WaitForExitAsync(ct).ConfigureAwait(false);
+                if (check.ExitCode == 0 && output.Contains(name, StringComparison.OrdinalIgnoreCase))
+                    return;
+            }
+        }
+
+        Process? firewall;
+        try
+        {
+            firewall = Process.Start(new ProcessStartInfo("netsh.exe")
+            {
+                Arguments = "advfirewall firewall add rule "
+                          + $"name=\"{name}\" dir=in action=allow enable=yes "
+                          + "protocol=TCP localport=8765 remoteip=100.64.0.0/10",
+                UseShellExecute = true,
+                Verb = "runas",
+                WindowStyle = ProcessWindowStyle.Hidden,
+            });
+        }
+        catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            throw new InvalidOperationException(
+                "A permissao da rede de replicas foi cancelada.", ex);
+        }
+        using (firewall)
+        {
+            if (firewall == null)
+                throw new InvalidOperationException("O Windows nao abriu o firewall.");
+            await firewall.WaitForExitAsync(ct).ConfigureAwait(false);
+            if (firewall.ExitCode != 0)
+                throw new InvalidOperationException(
+                    "O firewall terminou com codigo " + firewall.ExitCode + ".");
         }
     }
 

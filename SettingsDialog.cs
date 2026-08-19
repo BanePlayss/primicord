@@ -267,8 +267,8 @@ public sealed class SettingsDialog : Form
             Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(24, 1222),
             Size = new Size(412, 44),
         };
-        var inviteBtn = new PrimButton("BAIXAR SETUP UNIVERSAL")
-        { Location = new Point(24, 1272), Size = new Size(260, 38) };
+        var inviteBtn = new PrimButton("BAIXAR SETUP")
+        { Location = new Point(24, 1272), Size = new Size(198, 38) };
         inviteBtn.Click += (_, _) =>
         {
             string repo = string.IsNullOrWhiteSpace(_cfg.UpdateRepo)
@@ -276,6 +276,15 @@ public sealed class SettingsDialog : Form
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
                 $"https://github.com/{repo}/releases/latest/download/Primicord-win-Setup.exe")
             { UseShellExecute = true });
+        };
+        var groupCodeBtn = new PrimButton("USAR CÓDIGO", PrimButton.Style.Ghost)
+        { Location = new Point(234, 1272), Size = new Size(202, 38) };
+        groupCodeBtn.Click += (_, _) =>
+        {
+            using var dialog = new GroupCodeDialog(_cfg);
+            if (dialog.ShowDialog(this) != DialogResult.OK) return;
+            _server.Text = _cfg.CoordServerUrl;
+            _ = RefreshTailscaleStatusAsync();
         };
 
         // ── ATUALIZAR ──
@@ -316,7 +325,7 @@ public sealed class SettingsDialog : Form
               titleScr, lblBw, _bw, bwHint,
                titleApp, _siteTheme, themeHint, lblMusic, _music, _musicLabel, _tray, _joinSound,
                titleNet, lblServer, _server, _hostServer, serverHint, _tailscaleStatus, tailscaleBtn,
-               titleInvite, inviteHint, inviteBtn,
+               titleInvite, inviteHint, inviteBtn, groupCodeBtn,
                titleUpd, lblVersion, _updateBtn, _updateStatus,
               save, cancel });
 

@@ -73,6 +73,7 @@ public sealed class VoiceEngine : IDisposable
 
     private readonly object _streamsLock = new();
     private readonly Dictionary<uint, PeerStream> _streams = new();
+    private readonly Dictionary<uint, float> _peerVolumes = new();
 
     /// <summary>Nivel do meu microfone (0..1) — pra barrinha e "estou falando".</summary>
     public float MyPeak { get; private set; }
@@ -317,7 +318,8 @@ public sealed class VoiceEngine : IDisposable
                     BufferDuration = TimeSpan.FromMilliseconds(JitterMaxMs),
                     DiscardOnBufferOverflow = true,
                 };
-                float targetVolume = music ? _musicVolume : 1.0f;
+                float targetVolume = music ? _musicVolume
+                    : _peerVolumes.TryGetValue(key, out float saved) ? saved : 1.0f;
                 var vol = new VolumeSampleProvider(jitter.ToSampleProvider())
                 { Volume = _outputMuted ? 0f : targetVolume };
                 st = new PeerStream { Jitter = jitter, Volume = vol, TargetVolume = targetVolume };
@@ -372,11 +374,21 @@ public sealed class VoiceEngine : IDisposable
     public void SetPeerVolume(uint senderId, float volume)
     {
         lock (_streamsLock)
+        {
+            float clamped = Math.Clamp(volume, 0f, 2f);
+            _peerVolumes[senderId] = clamped;
             if (_streams.TryGetValue(senderId, out var st))
             {
-                st.TargetVolume = Math.Clamp(volume, 0f, 2f);
+                st.TargetVolume = clamped;
                 st.Volume.Volume = _outputMuted ? 0f : st.TargetVolume;
             }
+        }
+    }
+
+    public float GetPeerVolume(uint senderId)
+    {
+        lock (_streamsLock)
+            return _peerVolumes.TryGetValue(senderId, out float volume) ? volume : 1f;
     }
 
     /// <summary>

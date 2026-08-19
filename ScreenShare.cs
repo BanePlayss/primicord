@@ -82,6 +82,13 @@ public sealed class ScreenSender : IDisposable
 
     public event Action<byte[], int, int>? FullFrameProduced;
 
+    /// <summary>
+    /// Previa local em baixa frequencia. E separada do buffer de clipe para quem
+    /// desligou clips ainda enxergar o que esta transmitindo sem pagar um JPEG
+    /// completo extra nos 30 quadros de cada segundo.
+    /// </summary>
+    public event Action<byte[], int, int>? PreviewFrameProduced;
+
     public int Fps { get; private set; }
     public int KbPerSecond { get; private set; }
     public int Quality => (int)_quality;
@@ -151,6 +158,7 @@ public sealed class ScreenSender : IDisposable
         long lastStat = Environment.TickCount64;
         int framesSec = 0, bytesSec = 0;
         int overBudgetStreak = 0, underBudgetStreak = 0;
+        long nextPreview = 0;
 
         void Rebuild(int targetW, int targetH, int ladderIdx)
         {
@@ -379,12 +387,20 @@ public sealed class ScreenSender : IDisposable
                     }
                 }
 
-                if (NeedFullFrames)
+                long now = Environment.TickCount64;
+                bool previewDue = PreviewFrameProduced != null && now >= nextPreview;
+                if (NeedFullFrames || previewDue)
                 {
                     tileMs.SetLength(0);
                     ep.Param[0] = new EncoderParameter(Encoder.Quality, 70L);
                     scaled.Save(tileMs, _jpegCodec, ep);
-                    FullFrameProduced?.Invoke(tileMs.ToArray(), outW, outH);
+                    byte[] full = tileMs.ToArray();
+                    if (NeedFullFrames) FullFrameProduced?.Invoke(full, outW, outH);
+                    if (previewDue)
+                    {
+                        nextPreview = now + 125; // 8 fps: fluido sem roubar CPU da transmissao
+                        PreviewFrameProduced?.Invoke(full, outW, outH);
+                    }
                 }
 
                 framesSec++;

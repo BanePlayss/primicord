@@ -3,6 +3,18 @@
 O Discord dos primitivos — app nativo de Windows pra sala de voz em grupo,
 compartilhar tela e tirar clipe dos últimos segundos.
 
+## 0.6.16 — prévia, áudio isolado e volume por pessoa
+
+- Quem compartilha passa a ver a própria tela ao vivo no palco.
+- A janela do Primicord é excluída da captura para evitar o espelho infinito.
+- O process loopback usa o ponteiro COM correto e foi validado no Windows real.
+- Se o isolamento do áudio falhar, a tela continua sem áudio em vez de devolver
+  as vozes para a sala e criar eco.
+- Botão direito no card de uma pessoa abre um volume local de 0% a 200%; cada PC
+  guarda seu próprio valor e não afeta os demais participantes.
+- A tela de login e as configurações agora têm **Entrar no grupo com código**,
+  cobrindo também quem recebeu o app por atualização diferencial.
+
 ## 0.6.15 — um Setup e um código curto
 
 - Todos baixam o mesmo `Primicord-win-Setup.exe`; não existe mais um executável

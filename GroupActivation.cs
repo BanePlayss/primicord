@@ -6,6 +6,15 @@ namespace Primicord.SetupShared;
 
 public sealed record GroupActivation(string ServerUrl, string AuthKey, string ActivationId);
 
+public static class GroupActivationDefaults
+{
+    // Endpoint publico. O segredo do codigo e as credenciais do Tailscale ficam
+    // somente no Worker; este endereco pode estar no app e no Setup sem risco.
+    public const string Endpoint =
+        "https://primicord-activation.primicord-primitivos-bane.workers.dev";
+    public const string ClientVersion = "0.6.16";
+}
+
 public sealed class GroupActivationException : Exception
 {
     public HttpStatusCode? StatusCode { get; }
@@ -53,13 +62,13 @@ public static class GroupActivationClient
             writer.WriteStartObject();
             writer.WriteString("code", normalized);
             writer.WriteString("installId", installId);
-            writer.WriteString("version", "0.6.15");
+            writer.WriteString("version", GroupActivationDefaults.ClientVersion);
             writer.WriteEndObject();
         }
 
         using var request = new HttpRequestMessage(HttpMethod.Post,
             new Uri(baseUri, "/v1/activate"));
-        request.Headers.UserAgent.ParseAdd("Primicord-Setup/0.6.15");
+        request.Headers.UserAgent.ParseAdd("Primicord-Setup/" + GroupActivationDefaults.ClientVersion);
         request.Content = new ByteArrayContent(buffer.WrittenSpan.ToArray());
         request.Content.Headers.ContentType = new("application/json");
 

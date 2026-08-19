@@ -12,6 +12,8 @@ public sealed class StageView : Control
     private ScreenReceiver? _frames;
     private uint _senderId;
     private bool _paintErrorLogged;
+    private readonly object _selfFrameLock = new();
+    private Bitmap? _selfFrame;
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public string SharerNick { get; set; } = "";
@@ -24,10 +26,9 @@ public sealed class StageView : Control
     public bool Recording { get; set; }
 
     /// <summary>
-    /// Ligado quando EU sou quem compartilha: em vez do video ao vivo, mostra um
-    /// cartao. Ver a propria tela aqui criava espelho infinito (o Primicord aparecia
-    /// dentro da propria captura), e como o espelho muda a cada quadro, TODOS os
-    /// blocos ficavam sujos sempre — a tela gastava a banda inteira se filmando.
+    /// Ligado quando EU sou quem compartilha: mostra a previa local recebida do
+    /// capturador. A janela do Primicord e excluida da captura pelo MainForm para
+    /// impedir o espelho infinito.
     /// </summary>
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public bool SelfPreview { get; set; }
@@ -51,12 +52,76 @@ public sealed class StageView : Control
         Invalidate();
     }
 
+    /// <summary>Troca a previa local de forma segura entre a thread de captura e a UI.</summary>
+    public void SetSelfFrame(byte[] jpeg)
+    {
+        Bitmap next;
+        try
+        {
+            using var ms = new MemoryStream(jpeg, writable: false);
+            using var decoded = Image.FromStream(ms);
+            next = new Bitmap(decoded);
+        }
+        catch (Exception ex)
+        {
+            Log.Write("previa local nao decodificou: " + ex.Message);
+            return;
+        }
+
+        lock (_selfFrameLock)
+        {
+            var old = _selfFrame;
+            _selfFrame = next;
+            try { old?.Dispose(); } catch { }
+        }
+        RequestInvalidate();
+    }
+
+    public void ClearSelfFrame()
+    {
+        lock (_selfFrameLock)
+        {
+            try { _selfFrame?.Dispose(); } catch { }
+            _selfFrame = null;
+        }
+        RequestInvalidate();
+    }
+
+    private void RequestInvalidate()
+    {
+        if (IsDisposed || !IsHandleCreated) return;
+        try
+        {
+            if (InvokeRequired) BeginInvoke(Invalidate);
+            else Invalidate();
+        }
+        catch { }
+    }
+
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
         g.Clear(Color.Black);
 
-        if (SelfPreview) { DrawSelfCard(g); return; }
+        if (SelfPreview)
+        {
+            bool drewSelf = false;
+            lock (_selfFrameLock)
+                if (_selfFrame != null)
+                {
+                    DrawFrame(g, _selfFrame);
+                    drewSelf = true;
+                }
+            if (!drewSelf) DrawSelfCard(g);
+            else
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+                DrawTag(g, "SUA TELA · AO VIVO", true);
+                if (StatusRight.Length > 0) DrawTag(g, StatusRight, false);
+            }
+            return;
+        }
 
         bool drewFrame = false;
         try
@@ -102,7 +167,7 @@ public sealed class StageView : Control
         g.DrawImage(frame, dest);
     }
 
-    /// <summary>Cartao de "voce esta transmitindo" — sem video, sem espelho.</summary>
+    /// <summary>Cartao temporario enquanto o primeiro quadro local ainda nao chegou.</summary>
     private void DrawSelfCard(Graphics g)
     {
         g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -129,7 +194,7 @@ public sealed class StageView : Control
         }
         using (var b = new SolidBrush(Pv.BoneDim))
         {
-            const string t = "a galera esta vendo — sua propria tela nao aparece aqui";
+            const string t = "preparando sua prévia local...";
             var sz = g.MeasureString(t, Pv.Body);
             g.DrawString(t, Pv.Body, b, card.X + (cw - sz.Width) / 2, card.Y + 128);
         }
@@ -141,6 +206,19 @@ public sealed class StageView : Control
             }
 
         if (StatusRight.Length > 0) DrawTag(g, StatusRight, false);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            lock (_selfFrameLock)
+            {
+                try { _selfFrame?.Dispose(); } catch { }
+                _selfFrame = null;
+            }
+        }
+        base.Dispose(disposing);
     }
 
     private void DrawTag(Graphics g, string text, bool left)

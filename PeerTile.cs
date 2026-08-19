@@ -16,6 +16,7 @@ public sealed class PeerTile : Control
     public bool Punching;
     public int SilentSeconds;
     public float Level;
+    public int LocalVolumePercent = 100;
 
     /// <summary>Ultimo quadro da camera; o tile nao e dono da imagem.</summary>
     public Image? Cam;
@@ -77,7 +78,8 @@ public sealed class PeerTile : Control
             g.DrawString(name, Pv.BodyBold, nameBrush, footer.Left + 11,
                          footer.Top + (footer.Height - Pv.BodyBold.Height) / 2f);
 
-        string status = !Connected ? "SEM ROTA" : Muted ? "MUTADO" : Speaking ? "FALANDO" : "MIC";
+        string status = !Connected ? "SEM ROTA" : Muted ? "MUTADO" : Speaking ? "FALANDO"
+                      : LocalVolumePercent != 100 ? $"VOL {LocalVolumePercent}%" : "MIC";
         Color statusColor = !Connected ? Pv.Red : Muted ? Pv.BoneDim : Speaking ? Pv.Green : Pv.BoneDim;
         float statusWidth = Pv.TrackedWidth(g, status, Pv.Label, .7f);
         using (var statusBrush = new SolidBrush(statusColor))

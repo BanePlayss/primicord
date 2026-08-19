@@ -2,6 +2,12 @@ using NAudio.Wave;
 
 namespace Primicord;
 
+public sealed class ProcessLoopbackUnavailableException : Exception
+{
+    public ProcessLoopbackUnavailableException(string message, Exception inner)
+        : base(message, inner) { }
+}
+
 /// <summary>
 /// Modo DJ: transmite o audio do SISTEMA (Spotify, YouTube, o que estiver tocando)
 /// pra todo mundo da sala.
@@ -16,8 +22,8 @@ namespace Primicord;
 ///
 /// ECO: usa ProcessLoopbackCapture EXCLUINDO o proprio processo, senao o audio das
 /// vozes que o Primicord esta tocando seria recapturado e devolvido pra sala — todo
-/// mundo se ouviria com atraso. Se o Windows for antigo demais pro process loopback,
-/// cai pro loopback comum e AVISA que vai ter eco.
+/// mundo se ouviria com atraso. Se o Windows nao oferecer o isolamento, o audio da
+/// tela fica desligado em vez de cair no loopback comum e criar eco.
 /// </remarks>
 public sealed class MusicShare : IDisposable
 {
@@ -30,7 +36,7 @@ public sealed class MusicShare : IDisposable
     private float[] _floatBuf = Array.Empty<float>();
     private byte[] _pcmBuf = Array.Empty<byte>();
 
-    /// <summary>true se caiu no loopback comum (vai ter eco — avisar o usuario).</summary>
+    /// <summary>Compatibilidade de UI; desde 0.6.16 nunca habilitamos captura com eco.</summary>
     public bool EchoRisk { get; private set; }
 
     public bool Running { get; private set; }
@@ -55,17 +61,11 @@ public sealed class MusicShare : IDisposable
         }
         catch (Exception ex)
         {
-            Log.Write("DJ: process loopback indisponivel (" + ex.Message + "), usando loopback comum");
-            try
-            {
-                _capture = new WasapiLoopbackCapture();
-                EchoRisk = true;
-            }
-            catch (Exception ex2)
-            {
-                Log.Write("DJ: nenhum loopback disponivel: " + ex2.Message);
-                throw;
-            }
+            Log.Write("DJ: process loopback indisponivel; audio bloqueado para evitar eco: "
+                    + ex.Message);
+            throw new ProcessLoopbackUnavailableException(
+                "O audio da tela foi desligado porque o Windows nao conseguiu isolar "
+              + "as vozes do Primicord.", ex);
         }
 
         _capture.DataAvailable += OnData;

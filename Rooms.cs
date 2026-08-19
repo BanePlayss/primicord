@@ -116,6 +116,23 @@ public sealed class Config
     public bool CachedIsMod;
     public string CoordServerUrl = "http://primicord-server:8765";
     public bool HostMiniServer;
+
+    /// <summary>
+    /// Volume que ESTE PC aplica a cada participante. A chave e um hash estavel do
+    /// nick; o SenderId da rede muda a cada sessao e por isso nao pode ser salvo.
+    /// Nada disto vai para a sala ou muda o audio dos outros.
+    /// </summary>
+    public readonly Dictionary<uint, int> PeerVolumes = new();
+
+    private static uint PeerVolumeKey(string nick)
+        => RoomSession.HashId((nick ?? "").Trim().ToLowerInvariant());
+
+    public int PeerVolume(string nick)
+        => PeerVolumes.TryGetValue(PeerVolumeKey(nick), out int value)
+            ? Math.Clamp(value, 0, 200) : 100;
+
+    public void SetPeerVolume(string nick, int percent)
+        => PeerVolumes[PeerVolumeKey(nick)] = Math.Clamp(percent, 0, 200);
     public int MicDevice = 0;
     public string OutputDeviceId = "";
     public bool PushToTalk;
@@ -247,6 +264,17 @@ public sealed class Config
                 int eq = line.IndexOf('=');
                 if (eq <= 0) continue;
                 string k = line[..eq].Trim(), v = line[(eq + 1)..].Trim();
+                if (k.StartsWith("peervol-", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        uint senderId = Convert.ToUInt32(k[8..], 16);
+                        if (int.TryParse(v, out int volume))
+                            c.PeerVolumes[senderId] = Math.Clamp(volume, 0, 200);
+                    }
+                    catch { }
+                    continue;
+                }
                 switch (k)
                 {
                     case "nick": c.Nick = v; break;
@@ -334,6 +362,9 @@ public sealed class Config
             // e nao tem release nenhuma.
             if (!string.Equals(UpdateRepo, Updater.DefaultRepo, StringComparison.OrdinalIgnoreCase))
                 linhas.Add("updaterepo=" + UpdateRepo);
+
+            foreach (var (senderId, volume) in PeerVolumes.OrderBy(pair => pair.Key))
+                linhas.Add($"peervol-{senderId:X8}={Math.Clamp(volume, 0, 200)}");
 
             File.WriteAllLines(Path_, linhas);
         }

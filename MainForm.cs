@@ -1,4 +1,5 @@
 using System.Drawing.Drawing2D;
+using System.Runtime.InteropServices;
 
 namespace Primicord;
 
@@ -182,7 +183,7 @@ public sealed class MainForm : Form
         StopTimers();
 
         var host = new Panel { BackColor = Pv.Charcoal };
-        var card = new Panel { Size = new Size(410, 356), BackColor = Pv.Char2 };
+        var card = new Panel { Size = new Size(410, 412), BackColor = Pv.Char2 };
         card.Paint += (_, e) =>
         {
             var g = e.Graphics;
@@ -230,13 +231,25 @@ public sealed class MainForm : Form
             Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
         };
         _loginBtn.Click += async (_, _) => await DoLoginAsync();
+        var groupBtn = new PrimButton("ENTRAR NO GRUPO COM CÓDIGO", PrimButton.Style.Ghost)
+        {
+            Location = new Point(24, 344), Size = new Size(362, 44),
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+        };
+        groupBtn.Click += (_, _) =>
+        {
+            using var dialog = new GroupCodeDialog(_cfg);
+            if (dialog.ShowDialog(this) != DialogResult.OK || _loginErr == null) return;
+            _loginErr.ForeColor = Pv.Green;
+            _loginErr.Text = "Grupo conectado. Agora entre com sua conta.";
+        };
         _loginNick.Box.KeyDown += (_, e) =>
         { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; _loginPass!.Box.Focus(); } };
         _loginPass.Box.KeyDown += async (_, e) =>
         { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; await DoLoginAsync(); } };
 
         card.Controls.AddRange(new Control[]
-            { hint, lblNick, _loginNick, lblPass, _loginPass, _loginErr, _loginBtn });
+            { hint, lblNick, _loginNick, lblPass, _loginPass, _loginErr, _loginBtn, groupBtn });
         host.Controls.Add(card);
 
         void Center() => card.Location = new Point(
@@ -315,7 +328,11 @@ public sealed class MainForm : Form
         _loginBtn.Enabled = !busy;
         _loginBtn.Text = busy ? "ENTRANDO..." : "ENTRAR";
         _loginBtn.Invalidate();
-        if (_loginErr != null && !_loginErr.IsDisposed) _loginErr.Text = error;
+        if (_loginErr != null && !_loginErr.IsDisposed)
+        {
+            _loginErr.ForeColor = Pv.Red;
+            _loginErr.Text = error;
+        }
     }
 
     private void Logout()
@@ -1400,6 +1417,7 @@ public sealed class MainForm : Form
                 PreprocessMic = _cfg.EchoCancel,
                 MicAutoGain = _cfg.MicAutoGain,
             };
+                    ApplySavedPeerVolumes();
                     _voice.OutputMuted = _audioMuted;
                     _voice.Failed += ShowBanner;
                     _voice.AttachTransport((IVoiceTransport?)_webrtc ?? _session, _session);
@@ -1435,6 +1453,7 @@ public sealed class MainForm : Form
                 PreprocessMic = _cfg.EchoCancel,
                 MicAutoGain = _cfg.MicAutoGain,
             };
+        ApplySavedPeerVolumes();
         _voice.Failed += ShowBanner;
 
         // A malha UDP sobe SEMPRE — ela carrega tela, musica, cinema e presenca.
@@ -1529,6 +1548,8 @@ public sealed class MainForm : Form
         try { _screenSender?.Dispose(); } catch { }
         _screenSender = null;
         _iAmSharing = false;
+        _stage?.ClearSelfFrame();
+        SetCaptureExclusion(false);
         try { _music?.Dispose(); } catch { }
         _music = null;
         try { _clips?.Dispose(); } catch { }
@@ -1591,6 +1612,7 @@ public sealed class MainForm : Form
             if (!_peerTiles.TryGetValue(p.SenderId, out var tile))
             {
                 tile = new PeerTile { Margin = new Padding(6) };
+                AttachPeerVolumeMenu(tile, p.SenderId, p.Nick);
                 _peerTiles[p.SenderId] = tile;
                 _callGrid.SetParticipant(p.SenderId, tile);
             }
@@ -1606,7 +1628,7 @@ public sealed class MainForm : Form
                 tile.Tag = "clickable";
                 uint sid = p.SenderId;
                 tile.Cursor = Cursors.Hand;
-                tile.Click += (_, _) => { _focusedSharer = sid; };
+                tile.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) _focusedSharer = sid; };
             }
             tile.Invalidate();
         }
@@ -1629,6 +1651,64 @@ public sealed class MainForm : Form
             if (_focusedSharer == sid) _focusedSharer = 0;
         }
         UpdateRoomStatus();
+    }
+
+    /// <summary>
+    /// Menu no estilo Discord: botao direito no participante abre um slider local.
+    /// O valor fica neste PC e nao altera o microfone nem a experiencia de ninguem.
+    /// </summary>
+    private void AttachPeerVolumeMenu(PeerTile tile, uint senderId, string nick)
+    {
+        int initial = _cfg.PeerVolume(nick);
+        tile.LocalVolumePercent = initial;
+        _voice?.SetPeerVolume(senderId, initial / 100f);
+
+        var menu = new ContextMenuStrip
+        {
+            ShowImageMargin = false,
+            BackColor = Pv.Char2,
+            ForeColor = Pv.Bone,
+            Font = Pv.Body,
+        };
+        var header = new ToolStripLabel("VOLUME DE " + nick.ToUpperInvariant())
+        { ForeColor = Pv.Orange, Font = Pv.BodyBold, Margin = new Padding(8, 7, 8, 2) };
+        var value = new ToolStripLabel(initial + "%")
+        { ForeColor = Pv.Bone, Margin = new Padding(8, 2, 8, 2) };
+        var slider = new TrackBar
+        {
+            Minimum = 0, Maximum = 200, Value = initial,
+            TickFrequency = 25, SmallChange = 5, LargeChange = 25,
+            AutoSize = false, Size = new Size(224, 44), BackColor = Pv.Char2,
+        };
+        slider.ValueChanged += (_, _) =>
+        {
+            int percent = slider.Value;
+            value.Text = percent + "%";
+            tile.LocalVolumePercent = percent;
+            tile.Invalidate();
+            _cfg.SetPeerVolume(nick, percent);
+            _voice?.SetPeerVolume(senderId, percent / 100f);
+        };
+        var host = new ToolStripControlHost(slider)
+        { AutoSize = false, Size = new Size(240, 50), Margin = new Padding(4, 0, 4, 2) };
+        var reset = new ToolStripMenuItem("REDEFINIR PARA 100%")
+        { ForeColor = Pv.Bone, BackColor = Pv.Char2 };
+        reset.Click += (_, _) => slider.Value = 100;
+        menu.Items.Add(header);
+        menu.Items.Add(value);
+        menu.Items.Add(host);
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(reset);
+        menu.Closed += (_, _) => _cfg.Save();
+        tile.ContextMenuStrip = menu;
+    }
+
+    private void ApplySavedPeerVolumes()
+    {
+        if (_voice == null) return;
+        if (_session == null) return;
+        foreach (var peer in _session.Peers)
+            _voice.SetPeerVolume(peer.SenderId, _cfg.PeerVolume(peer.Nick) / 100f);
     }
 
     private int _stageTick;
@@ -1662,7 +1742,8 @@ public sealed class MainForm : Form
             tile.Invalidate();
         }
 
-        // Palco: mostra a tela de quem esta em foco (a minha ja chega por OnMyFrame).
+        // Palco: mostra a tela de quem esta em foco (a minha chega pelo canal de
+        // previa local do capturador, sem passar pela rede).
         if (_stage != null && !_stage.IsDisposed && _focusedSharer != 0)
         {
             _stage.SetFrame(_screens, _focusedSharer);
@@ -1675,8 +1756,8 @@ public sealed class MainForm : Form
             _stage.SetFrame(null);
         }
 
-        // Minha propria tela NAO e exibida aqui — ver a si mesmo criava espelho
-        // infinito e fazia todo bloco mudar a cada quadro, torrando a banda.
+        // Minha propria tela agora aparece no palco. A janela do Primicord fica
+        // excluida da captura para nao criar o espelho infinito.
         if (_stage != null && !_stage.IsDisposed)
         {
             bool self = _iAmSharing && _focusedSharer == 0;
@@ -1799,6 +1880,8 @@ public sealed class MainForm : Form
             _screenSender?.Dispose();
             _screenSender = null;
             _iAmSharing = false;
+            _stage?.ClearSelfFrame();
+            SetCaptureExclusion(false);
             _session.Sharing = false;
             SyncSystemAudio();      // sem tela, o som do sistema so segue se for DJ
             SyncRoomButtons();
@@ -1817,12 +1900,14 @@ public sealed class MainForm : Form
             _screenSender = new ScreenSender(_session, targets[pick])
             { TotalUploadBudget = Math.Clamp(_cfg.ScreenBudgetKb, 200, 6000) * 1000 };
             _screenSender.FullFrameProduced += OnMyFrame;
+            _screenSender.PreviewFrameProduced += OnMyPreviewFrame;
             _screenSender.TargetLost += () =>
             {
                 try { BeginInvoke(() => { if (_iAmSharing) ToggleScreenShare(); }); } catch { }
             };
             // Quadro inteiro custa um encode a mais — so quando o clipe precisa.
             _screenSender.NeedFullFrames = _cfg.AutoBuffer;
+            SetCaptureExclusion(true);
             _screenSender.Start();
             _iAmSharing = true;
             _session.Sharing = true;
@@ -1834,6 +1919,7 @@ public sealed class MainForm : Form
         }
         catch (Exception ex)
         {
+            SetCaptureExclusion(false);
             Log.Write("compartilhar tela falhou: " + ex.Message);
             ShowBanner("Nao consegui capturar a tela: " + ex.Message);
         }
@@ -1897,6 +1983,37 @@ public sealed class MainForm : Form
     {
         AutoStartBuffer();
         _clips?.PushFrame(jpeg, w, h);
+    }
+
+    private void OnMyPreviewFrame(byte[] jpeg, int w, int h)
+        => _stage?.SetSelfFrame(jpeg);
+
+    private const uint WdaNone = 0x00000000;
+    private const uint WdaExcludeFromCapture = 0x00000011;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetWindowDisplayAffinity(IntPtr window, uint affinity);
+
+    /// <summary>
+    /// O mesmo recurso usado por overlays de gravacao: a janela continua visivel
+    /// para o usuario, mas nao entra no quadro capturado. E melhor-esforco porque
+    /// drivers antigos de duplicacao de desktop podem ignorar a afinidade.
+    /// </summary>
+    private void SetCaptureExclusion(bool exclude)
+    {
+        if (!IsHandleCreated) return;
+        if (InvokeRequired)
+        {
+            try { BeginInvoke(() => SetCaptureExclusion(exclude)); } catch { }
+            return;
+        }
+        try
+        {
+            if (!SetWindowDisplayAffinity(Handle, exclude ? WdaExcludeFromCapture : WdaNone))
+                Log.Write("excluir janela da captura falhou: win32="
+                        + Marshal.GetLastWin32Error());
+        }
+        catch (Exception ex) { Log.Write("afinidade de captura falhou: " + ex.Message); }
     }
 
     private void OnPeerFrame(uint senderId, byte[] payload, int w, int h)
@@ -1994,8 +2111,14 @@ public sealed class MainForm : Form
         {
             _music = new MusicShare(_session!);
             _music.Start();
-            if (_music.EchoRisk)
-                ShowBanner("Windows sem process loopback: o audio das vozes vai voltar junto (eco).");
+        }
+        catch (ProcessLoopbackUnavailableException ex)
+        {
+            Log.Write("som do sistema isolado indisponivel: " + ex.InnerException?.Message);
+            _music = null;
+            _screenAudio = false;
+            _djMode = false;
+            Toast("TELA SEM AUDIO", "Isolamento falhou; o eco foi bloqueado.");
         }
         catch (Exception ex)
         {
@@ -2260,6 +2383,7 @@ public sealed class MainForm : Form
 
         try { _tray?.Dispose(); } catch { }
         _tray = null;
+        SetCaptureExclusion(false);
         _clipHotkey.Unregister();
         try { _toast?.Dispose(); } catch { }
         StopTimers();

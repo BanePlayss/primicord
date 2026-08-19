@@ -4,13 +4,12 @@ using System.Threading;
 using System.Threading.Tasks;
 using NAudio.CoreAudioApi;
 using NAudio.CoreAudioApi.Interfaces;
-using NAudio.Wasapi.CoreAudioApi.Interfaces;
 using NAudio.Wave;
 
 namespace Primicord;
 
 /// <summary>
-/// WASAPI process loopback (Win10 19041+): captura o audio do sistema EXCLUINDO a
+/// WASAPI process loopback (Windows build 20348+): captura o audio do sistema EXCLUINDO a
 /// arvore de processos alvo. Com ExcludingSelf() o "modo DJ" NUNCA
 /// recaptura a voz dos outros tocada pelo proprio Primicord (mata o eco por construcao).
 /// Drop-in de WasapiLoopbackCapture via IWaveIn. Reusa os tipos publicos do NAudio;
@@ -40,7 +39,10 @@ public sealed class ProcessLoopbackCapture : IWaveIn
     public event EventHandler<WaveInEventArgs>? DataAvailable;
     public event EventHandler<StoppedEventArgs>? RecordingStopped;
 
-    public static bool IsSupported => OperatingSystem.IsWindowsVersionAtLeast(10, 0, 19041);
+    // O process-loopback apareceu no SDK 20348. O TFM 19041 continua valido para
+    // o restante do app, mas tentar esta ativacao antes do 20348 so produz um erro
+    // generico do COM.
+    public static bool IsSupported => OperatingSystem.IsWindowsVersionAtLeast(10, 0, 20348);
 
     public ProcessLoopbackCapture(uint targetProcessId, Mode mode)
     {
@@ -56,7 +58,7 @@ public sealed class ProcessLoopbackCapture : IWaveIn
     public void Prepare()
     {
         if (_client != null) return;
-        if (!IsSupported) throw new PlatformNotSupportedException("requer Windows 10 build 19041+");
+        if (!IsSupported) throw new PlatformNotSupportedException("requer Windows build 20348+");
         _client = Activate(_targetPid, _mode);
         // 2_000_000 = 200 ms em unidades de 100 ns; flags LOOPBACK|EVENTCALLBACK.
         _client.Initialize(AudioClientShareMode.Shared,
@@ -156,18 +158,26 @@ public sealed class ProcessLoopbackCapture : IWaveIn
             // interface tardia, soltamos o COM object p/ nao vazar handle nativo.
             handler.Completion.ContinueWith(t =>
             {
-                if (t.Status == TaskStatus.RanToCompletion && t.Result is object late)
-                {
-                    try { Marshal.FinalReleaseComObject(late); } catch { }
-                }
+                if (t.Status == TaskStatus.RanToCompletion && t.Result != IntPtr.Zero)
+                    try { Marshal.Release(t.Result); } catch { }
                 Marshal.FreeHGlobal(pPars);
             }, TaskScheduler.Default);
             throw new TimeoutException("ActivateAudioInterfaceAsync nao completou");
         }
         try
         {
-            object itf = handler.Completion.GetAwaiter().GetResult(); // relanca erro do callback
-            return new AudioClient((IAudioClient)itf); // ctor publico do NAudio 2.3.0
+            IntPtr itf = handler.Completion.GetAwaiter().GetResult(); // relanca erro do callback
+            try
+            {
+                // NAudio 2.3 declara GetActivateResult como "out object". Nessa
+                // interface virtual o marshaler criava um RCW sem IAudioClient e o
+                // cast falhava com E_NOINTERFACE, apesar de a ativacao ter dado OK.
+                // Receber o IUnknown cru preserva exatamente o ponteiro devolvido
+                // pelo Windows; so depois criamos o wrapper tipado do NAudio.
+                var typed = (IAudioClient)Marshal.GetTypedObjectForIUnknown(itf, typeof(IAudioClient));
+                return new AudioClient(typed);
+            }
+            finally { Marshal.Release(itf); }
         }
         finally
         {
@@ -195,29 +205,50 @@ public sealed class ProcessLoopbackCapture : IWaveIn
         [MarshalAs(UnmanagedType.LPWStr)] string deviceInterfacePath,
         ref Guid riid,
         ref PropVariantBlob activationParams,
-        IActivateAudioInterfaceCompletionHandler completionHandler, // interface PUBLICA do NAudio
-        out IActivateAudioInterfaceAsyncOperation activationOperation);
+        IActivateAudioInterfaceCompletionHandlerRaw completionHandler,
+        out IActivateAudioInterfaceAsyncOperationRaw activationOperation);
+
+    [ComImport, Guid("72A22D78-CDE4-431D-B8CC-843A71199B6D"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IActivateAudioInterfaceAsyncOperationRaw
+    {
+        [PreserveSig]
+        int GetActivateResult(out int activateResult, out IntPtr activatedInterface);
+    }
+
+    [ComVisible(true), Guid("41D949AB-9862-444A-80F6-C261334DA5EB"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IActivateAudioInterfaceCompletionHandlerRaw
+    {
+        [PreserveSig]
+        int ActivateCompleted(IActivateAudioInterfaceAsyncOperationRaw operation);
+    }
 
     [ComImport, Guid("94EA2B94-E9CC-49E0-C0FF-EE64CA8F5B90"),
      InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IAgileObject { }
 
-    private sealed class Handler : IActivateAudioInterfaceCompletionHandler, IAgileObject
+    [ComVisible(true)]
+    private sealed class Handler : IActivateAudioInterfaceCompletionHandlerRaw, IAgileObject
     {
-        private readonly TaskCompletionSource<object> _tcs =
+        private readonly TaskCompletionSource<IntPtr> _tcs =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public Task<object> Completion => _tcs.Task;
+        public Task<IntPtr> Completion => _tcs.Task;
 
-        public void ActivateCompleted(IActivateAudioInterfaceAsyncOperation op)
+        public int ActivateCompleted(IActivateAudioInterfaceAsyncOperationRaw op)
         {
             try
             {
-                op.GetActivateResult(out int hr, out object itf);
+                int callHr = op.GetActivateResult(out int hr, out IntPtr itf);
+                if (callHr < 0) hr = callHr;
                 if (hr < 0) _tcs.TrySetException(
                     Marshal.GetExceptionForHR(hr) ?? new COMException("GetActivateResult", hr));
+                else if (itf == IntPtr.Zero) _tcs.TrySetException(
+                    new COMException("GetActivateResult devolveu uma interface nula"));
                 else _tcs.TrySetResult(itf);
             }
             catch (Exception ex) { _tcs.TrySetException(ex); }
+            return 0;
         }
     }
 }

@@ -101,6 +101,7 @@ public sealed class ConfigTests : IDisposable
             CachedTeamName = "Caco", CachedThemeId = "oceano", CachedIsMod = true,
             CoordServerUrl = "http://100.90.80.70:8765", HostMiniServer = true,
         };
+        original.SetPeerVolume("mohamed", 45);
         original.Save();
 
         var lido = Config.Load();
@@ -123,6 +124,8 @@ public sealed class ConfigTests : IDisposable
         Assert.True(lido.CachedIsMod);
         Assert.Equal("http://100.90.80.70:8765", lido.CoordServerUrl);
         Assert.True(lido.HostMiniServer);
+        Assert.Equal(45, lido.PeerVolume("MOHAMED"));
+        Assert.Equal(100, lido.PeerVolume("vitinho"));
     }
 
     [Fact]
