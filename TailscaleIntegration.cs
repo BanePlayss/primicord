@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Text.Json.Nodes;
+using Primicord.SetupShared;
 
 namespace Primicord;
 
@@ -290,56 +291,12 @@ public static class TailscaleIntegration
         }
     }
 
-    /// <summary>Libera somente a porta das replicas e somente para a faixa Tailscale.</summary>
-    public static async Task EnsureReplicaFirewallAsync(CancellationToken ct = default)
-    {
-        const string name = "Primicord Mini Server (Tailscale)";
-        using (var check = Process.Start(new ProcessStartInfo("netsh.exe")
-        {
-            Arguments = $"advfirewall firewall show rule name=\"{name}\"",
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        }))
-        {
-            if (check != null)
-            {
-                string output = await check.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
-                await check.WaitForExitAsync(ct).ConfigureAwait(false);
-                if (check.ExitCode == 0 && output.Contains(name, StringComparison.OrdinalIgnoreCase))
-                    return;
-            }
-        }
-
-        Process? firewall;
-        try
-        {
-            firewall = Process.Start(new ProcessStartInfo("netsh.exe")
-            {
-                Arguments = "advfirewall firewall add rule "
-                          + $"name=\"{name}\" dir=in action=allow enable=yes "
-                          + "protocol=TCP localport=8765 remoteip=100.64.0.0/10",
-                UseShellExecute = true,
-                Verb = "runas",
-                WindowStyle = ProcessWindowStyle.Hidden,
-            });
-        }
-        catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 1223)
-        {
-            throw new InvalidOperationException(
-                "A permissao da rede de replicas foi cancelada.", ex);
-        }
-        using (firewall)
-        {
-            if (firewall == null)
-                throw new InvalidOperationException("O Windows nao abriu o firewall.");
-            await firewall.WaitForExitAsync(ct).ConfigureAwait(false);
-            if (firewall.ExitCode != 0)
-                throw new InvalidOperationException(
-                    "O firewall terminou com codigo " + firewall.ExitCode + ".");
-        }
-    }
+    /// <summary>Libera replica TCP e voz UDP somente para a faixa Tailscale.</summary>
+    public static Task EnsureNetworkFirewallAsync(CancellationToken ct = default)
+        => NetworkFirewall.EnsureAsync(
+            Environment.ProcessPath
+                ?? throw new InvalidOperationException("O Windows nao informou o executavel do Primicord."),
+            ct);
 
     public static void OpenClient()
     {

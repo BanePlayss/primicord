@@ -41,7 +41,7 @@ internal static class Program
               + "2. conectar este PC a rede privada do grupo;\n"
               + "3. configurar as salas e a replica automaticamente.\n\n"
               + "O Windows pode pedir permissao de administrador.",
-                "PRIMICORD 0.6.20 — GRUPO", Ok | IconInfo);
+                "PRIMICORD 0.6.21 — GRUPO", Ok | IconInfo);
         }
         else
         {
@@ -60,7 +60,7 @@ internal static class Program
                   + "2. conectar este PC a rede privada do grupo;\n"
                   + "3. configurar as salas e a replica automaticamente.\n\n"
                   + "O Windows pode pedir permissao de administrador.",
-                    "PRIMICORD 0.6.20 — GRUPO", Ok | IconInfo);
+                    "PRIMICORD 0.6.21 — GRUPO", Ok | IconInfo);
             }
         }
 
@@ -92,15 +92,6 @@ internal static class Program
                 WritePrimicordConfig(invite.ServerUrl);
             }
 
-            try { await EnsureReplicaFirewallAsync(); }
-            catch when (invite == null)
-            {
-                MessageBoxW(IntPtr.Zero,
-                    "A regra de rede das replicas nao foi criada. O Primicord sera instalado, "
-                  + "mas este PC pode nao assumir as salas ate a permissao ser aceita nas configuracoes.",
-                    "PRIMICORD — FIREWALL", Ok | IconWarning);
-            }
-
             string setup = Path.Combine(tempDir, "Primicord-win-Setup.exe");
             await ExtractResourceAsync("Primicord.Velopack.Setup.exe", setup);
             using var process = Process.Start(new ProcessStartInfo(setup)
@@ -109,7 +100,24 @@ internal static class Program
                 WorkingDirectory = tempDir,
             }) ?? throw new InvalidOperationException("O Windows nao abriu o instalador do Primicord.");
             await process.WaitForExitAsync();
-            return process.ExitCode;
+            if (process.ExitCode != 0) return process.ExitCode;
+
+            // O executavel ja existe no caminho definitivo. Uma unica elevacao
+            // cria tanto a regra do mini servidor quanto a rota UDP dinamica da
+            // voz, que antes ficava esquecida e produzia o estado "SEM ROTA".
+            string appPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Primicord", "current", "Primicord.exe");
+            try { await NetworkFirewall.EnsureAsync(appPath); }
+            catch (Exception ex)
+            {
+                MessageBoxW(IntPtr.Zero,
+                    "O Primicord foi instalado, mas as regras de rede nao foram criadas:\n\n"
+                  + ex.Message
+                  + "\n\nExecute o instalador novamente e aceite a permissao de administrador.",
+                    "PRIMICORD — FIREWALL", Ok | IconWarning);
+            }
+            return 0;
         }
         catch (Exception ex)
         {
@@ -291,53 +299,6 @@ internal static class Program
                 ? value.TrimEnd('/') : null;
         }
         catch { return null; }
-    }
-
-    private static async Task EnsureReplicaFirewallAsync()
-    {
-        const string name = "Primicord Mini Server (Tailscale)";
-        using (var check = Process.Start(new ProcessStartInfo("netsh.exe")
-        {
-            Arguments = $"advfirewall firewall show rule name=\"{name}\"",
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        }))
-        {
-            if (check != null)
-            {
-                string output = await check.StandardOutput.ReadToEndAsync();
-                await check.WaitForExitAsync();
-                if (check.ExitCode == 0 && output.Contains(name, StringComparison.OrdinalIgnoreCase))
-                    return;
-            }
-        }
-
-        Process? firewall;
-        try
-        {
-            firewall = Process.Start(new ProcessStartInfo("netsh.exe")
-            {
-                Arguments = "advfirewall firewall add rule "
-                          + $"name=\"{name}\" dir=in action=allow enable=yes "
-                          + "protocol=TCP localport=8765 remoteip=100.64.0.0/10",
-                UseShellExecute = true,
-                Verb = "runas",
-                WindowStyle = ProcessWindowStyle.Hidden,
-            });
-        }
-        catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
-        {
-            throw new InvalidOperationException("A permissao da rede de replicas foi cancelada.", ex);
-        }
-        using (firewall)
-        {
-            if (firewall == null) throw new InvalidOperationException("O Windows nao abriu o firewall.");
-            await firewall.WaitForExitAsync();
-            if (firewall.ExitCode != 0)
-                throw new InvalidOperationException("O firewall terminou com codigo " + firewall.ExitCode + ".");
-        }
     }
 
     private static bool TailscaleInstalled() => FindTailscaleCli() != null

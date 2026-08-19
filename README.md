@@ -3,6 +3,17 @@
 O Discord dos primitivos — app nativo de Windows pra sala de voz em grupo,
 compartilhar tela e tirar clipe dos últimos segundos.
 
+## 0.6.21 — rota de voz no Firewall
+
+- O instalador cria a regra `Primicord Voice (Tailscale)` para UDP dinâmico,
+  restrita à rede `100.64.0.0/10` do Tailscale.
+- A regra do mini servidor (`TCP 8765`) e a regra da voz são criadas em uma única
+  solicitação de administrador.
+- A configuração acontece depois da instalação, quando o caminho definitivo do
+  executável já existe, e corrige o estado `SEM ROTA` entre PCs alcançáveis pelo Tailscale.
+- Se a permissão for cancelada, a instalação permanece válida e explica como repetir
+  o reparo executando o instalador novamente.
+
 ## 0.6.20 — login local e cota isolada
 
 - Um perfil já validado neste PC entra primeiro pelo cache local, sem gastar uma

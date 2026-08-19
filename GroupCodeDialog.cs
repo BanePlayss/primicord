@@ -119,14 +119,20 @@ public sealed class GroupCodeDialog : Form
             _cfg.Save();
             MiniServerProcess.Configure(enabled: true);
 
-            SetStatus("Liberando as réplicas somente na rede privada...");
-            try { await TailscaleIntegration.EnsureReplicaFirewallAsync(); }
+            SetStatus("Liberando servidor e voz somente na rede privada...");
+            try { await TailscaleIntegration.EnsureNetworkFirewallAsync(); }
             catch (Exception ex)
             {
-                // Entrar na tailnet e encontrar salas continuam funcionando. Sem a
-                // regra, apenas este PC pode nao assumir a replica ate o usuario
-                // aceitar a permissao depois.
+                // A adesao ao grupo continua valida, mas servidor e voz podem ficar
+                // sem rota ate a permissao ser aceita pelo instalador completo.
                 Log.Write("firewall apos codigo: " + ex.Message);
+                MessageBox.Show(this,
+                    "Este PC entrou no grupo, mas o Firewall do Windows nao foi configurado.\n\n"
+                  + ex.Message
+                  + "\n\nExecute o instalador completo e aceite a permissao de administrador.",
+                    "PRIMICORD — FIREWALL",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
             }
 
             _status.ForeColor = Pv.Green;

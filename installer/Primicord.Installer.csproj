@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Primicord.Setup</AssemblyName>
     <RootNamespace>Primicord.Installer</RootNamespace>
-    <Version>0.6.20</Version>
+    <Version>0.6.21</Version>
     <ApplicationIcon>..\Primicord.ico</ApplicationIcon>
     <PublishAot>true</PublishAot>
     <SelfContained>true</SelfContained>
@@ -20,5 +20,6 @@
   <ItemGroup>
     <Compile Include="..\GroupInvitePackage.cs" Link="GroupInvitePackage.cs" />
     <Compile Include="..\GroupActivation.cs" Link="GroupActivation.cs" />
+    <Compile Include="..\NetworkFirewall.cs" Link="NetworkFirewall.cs" />
   </ItemGroup>
 </Project>
