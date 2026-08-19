@@ -10,6 +10,10 @@ namespace Primicord.Installer;
 
 internal static class Program
 {
+    // Substituido pelo endpoint real antes da publicacao. Ele e publico; os
+    // segredos ficam nas variaveis cifradas do ativador, nunca neste binario.
+    private const string ActivationEndpoint =
+        "https://primicord-activation.primicord-primitivos-bane.workers.dev";
     private const string TailscaleMsi =
         "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi";
     private const uint Ok = 0x00000000;
@@ -41,16 +45,27 @@ internal static class Program
               + "2. conectar este PC a rede privada do grupo;\n"
               + "3. configurar as salas e a replica automaticamente.\n\n"
               + "O Windows pode pedir permissao de administrador.",
-                "PRIMICORD 0.6.14 — GRUPO", Ok | IconInfo);
+                "PRIMICORD 0.6.15 — GRUPO", Ok | IconInfo);
         }
         else
         {
-            MessageBoxW(IntPtr.Zero,
-                "O Primicord 0.6.14 usa o Tailscale para criar a rede privada do grupo.\n\n"
-              + "Este e o instalador publico. Ele instala o Tailscale, mas nao entra "
-              + "em nenhuma tailnet. Para configuracao automatica, use o instalador "
-              + "privado gerado pelo administrador do grupo.",
-                "PRIMICORD 0.6.14", Ok | IconInfo);
+            string? configured = ReadConfiguredServerUrl();
+            if (configured != null && await ServerReachableAsync(configured))
+            {
+                invite = new GroupInvite(configured, "");
+            }
+            else
+            {
+                invite = await AskAndActivateAsync();
+                if (invite == null) return 2;
+                MessageBoxW(IntPtr.Zero,
+                    "Codigo aceito. Agora o Primicord vai:\n\n"
+                  + "1. instalar o Tailscale, se necessario;\n"
+                  + "2. conectar este PC a rede privada do grupo;\n"
+                  + "3. configurar as salas e a replica automaticamente.\n\n"
+                  + "O Windows pode pedir permissao de administrador.",
+                    "PRIMICORD 0.6.15 — GRUPO", Ok | IconInfo);
+            }
         }
 
         string tempDir = Path.Combine(Path.GetTempPath(), "PrimicordSetup-" + Guid.NewGuid().ToString("N"));
@@ -76,7 +91,8 @@ internal static class Program
 
             if (invite != null)
             {
-                await ConnectTailscaleAsync(invite, tempDir);
+                if (!string.IsNullOrEmpty(invite.AuthKey))
+                    await ConnectTailscaleAsync(invite, tempDir);
                 WritePrimicordConfig(invite.ServerUrl);
             }
 
@@ -109,6 +125,37 @@ internal static class Program
             invite = null;
             try { Directory.Delete(tempDir, recursive: true); } catch { }
         }
+    }
+
+    private static async Task<GroupInvite?> AskAndActivateAsync()
+    {
+        string installId = Guid.NewGuid().ToString();
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            if (!PromptGroupCode(attempt > 0, out string code)) return null;
+            try
+            {
+                var activation = await GroupActivationClient.ActivateAsync(
+                    http, ActivationEndpoint, code, installId);
+                return new GroupInvite(activation.ServerUrl, activation.AuthKey);
+            }
+            catch (GroupActivationException ex) when (ex.ErrorCode == "invalid_code")
+            {
+                // Repete o prompt sem mostrar detalhes internos do ativador.
+            }
+            catch (GroupActivationException ex)
+            {
+                MessageBoxW(IntPtr.Zero, ex.Message,
+                    "PRIMICORD — ATIVACAO", Ok | IconWarning);
+                return null;
+            }
+            finally { code = ""; }
+        }
+        MessageBoxW(IntPtr.Zero,
+            "O codigo foi recusado cinco vezes. Peca o codigo novamente ao administrador do grupo.",
+            "PRIMICORD — CODIGO", Ok | IconWarning);
+        return null;
     }
 
     private static GroupInvite? AskAndUnlockInvite(string ownPath)
@@ -230,6 +277,24 @@ internal static class Program
         string temp = path + ".new";
         File.WriteAllLines(temp, lines);
         File.Move(temp, path, overwrite: true);
+    }
+
+    private static string? ReadConfiguredServerUrl()
+    {
+        try
+        {
+            string path = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "Primicord", "config.txt");
+            if (!File.Exists(path)) return null;
+            string? line = File.ReadLines(path).LastOrDefault(value =>
+                value.StartsWith("coordserver=", StringComparison.OrdinalIgnoreCase));
+            string value = line?[(line.IndexOf('=') + 1)..].Trim() ?? "";
+            return Uri.TryCreate(value, UriKind.Absolute, out var uri)
+                   && uri.Scheme == Uri.UriSchemeHttp && uri.Port == 8765
+                ? value.TrimEnd('/') : null;
+        }
+        catch { return null; }
     }
 
     private static async Task EnsureReplicaFirewallAsync()
@@ -369,6 +434,30 @@ internal static class Program
             0x00000002 /* DO_NOT_PERSIST */ |
             0x00100000 /* KEEP_USERNAME */);
         password = result == 0 ? secret.ToString() : "";
+        secret.Clear();
+        return result == 0;
+    }
+
+    private static bool PromptGroupCode(bool wrongCode, out string code)
+    {
+        var info = new CredUiInfo
+        {
+            Size = Marshal.SizeOf<CredUiInfo>(),
+            Caption = "PRIMICORD — ENTRAR NO GRUPO",
+            Message = wrongCode
+                ? "Codigo incorreto. Digite novamente o codigo enviado pelo administrador."
+                : "Digite o codigo do grupo. O mesmo Setup funciona para todos os participantes.",
+        };
+        var user = new StringBuilder("Grupo Primicord", 128);
+        var secret = new StringBuilder(128);
+        bool save = false;
+        uint result = CredUIPromptForCredentialsW(ref info, "PrimicordActivation", IntPtr.Zero, 0,
+            user, user.Capacity, secret, secret.Capacity, ref save,
+            0x00040000 /* GENERIC_CREDENTIALS */ |
+            0x00000080 /* ALWAYS_SHOW_UI */ |
+            0x00000002 /* DO_NOT_PERSIST */ |
+            0x00100000 /* KEEP_USERNAME */);
+        code = result == 0 ? secret.ToString() : "";
         secret.Clear();
         return result == 0;
     }

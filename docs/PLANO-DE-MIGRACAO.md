@@ -326,6 +326,14 @@ consegue fazer.
 - A mídia continua na malha ponto a ponto, portanto a troca de coordenador não
   reinicia o áudio entre os participantes restantes.
 
+**Ativação por código curto entregue na 0.6.15:**
+
+- Um único Setup público atende o grupo inteiro e pede o código durante a instalação.
+- O código é validado por um Worker independente do site, com limite de tentativas.
+- OAuth do Tailscale fica somente no cofre do Worker e gera auth keys de uso único.
+- Firestore não guarda código, chave, configuração de instalação nem credencial.
+- O Setup não persiste o código e apaga o arquivo temporário da auth key.
+
 **Escopo original preservado como referência:**
 - `IPrivateNetwork` com **duas** implementações: `TailscaleNetwork` e
   `DirectStunNetwork` (o código atual, extraído). Contrato mínimo:

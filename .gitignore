@@ -12,3 +12,7 @@ vpk-publish/
 Releases/
 tests/**/bin/
 tests/**/obj/
+activation-worker/node_modules/
+activation-worker/.wrangler/
+activation-worker/.dev.vars*
+activation-worker/.env*

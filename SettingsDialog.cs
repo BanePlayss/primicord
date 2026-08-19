@@ -254,25 +254,28 @@ public sealed class SettingsDialog : Form
             _ = RefreshTailscaleStatusAsync();
         };
 
-        // ── CONVITE PRIVADO ──
+        // ── SETUP UNIVERSAL ──
         var titleInvite = new Label
         {
-            Text = "INSTALADOR DO GRUPO", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
+            Text = "CONVIDAR PARA O GRUPO", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
             Location = new Point(24, 1184), AutoSize = true,
         };
         var inviteHint = new Label
         {
-            Text = "Gera um unico Setup com senha para o grupo. Nos outros PCs ele\n"
-                 + "entra na tailnet e configura a rede Primicord automaticamente.",
+            Text = "Envie o mesmo Setup publico para todos e passe o codigo do grupo\n"
+                 + "em separado. O instalador configura Tailscale, salas e replicas.",
             Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(24, 1222),
             Size = new Size(412, 44),
         };
-        var inviteBtn = new PrimButton("GERAR INSTALADOR PRIVADO")
+        var inviteBtn = new PrimButton("BAIXAR SETUP UNIVERSAL")
         { Location = new Point(24, 1272), Size = new Size(260, 38) };
         inviteBtn.Click += (_, _) =>
         {
-            using var dialog = new GroupInstallerBuilderDialog(_cfg);
-            dialog.ShowDialog(this);
+            string repo = string.IsNullOrWhiteSpace(_cfg.UpdateRepo)
+                ? Updater.DefaultRepo : _cfg.UpdateRepo;
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                $"https://github.com/{repo}/releases/latest/download/Primicord-win-Setup.exe")
+            { UseShellExecute = true });
         };
 
         // ── ATUALIZAR ──

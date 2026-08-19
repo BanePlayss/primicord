@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Primicord.Setup</AssemblyName>
     <RootNamespace>Primicord.Installer</RootNamespace>
-    <Version>0.6.14</Version>
+    <Version>0.6.15</Version>
     <ApplicationIcon>..\Primicord.ico</ApplicationIcon>
     <PublishAot>true</PublishAot>
     <SelfContained>true</SelfContained>
@@ -19,5 +19,6 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="..\GroupInvitePackage.cs" Link="GroupInvitePackage.cs" />
+    <Compile Include="..\GroupActivation.cs" Link="GroupActivation.cs" />
   </ItemGroup>
 </Project>

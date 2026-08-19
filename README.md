@@ -3,6 +3,18 @@
 O Discord dos primitivos — app nativo de Windows pra sala de voz em grupo,
 compartilhar tela e tirar clipe dos últimos segundos.
 
+## 0.6.15 — um Setup e um código curto
+
+- Todos baixam o mesmo `Primicord-win-Setup.exe`; não existe mais um executável
+  diferente para cada grupo.
+- O Setup pede o código compartilhado e configura Tailscale, salas e réplicas
+  sem abrir cadastro ou painel de rede.
+- Um ativador público independente do site troca o código por uma credencial do
+  Tailscale. Firestore não participa da instalação.
+- O modo recomendado cria uma auth key de uso único, válida por 10 minutos; os
+  segredos OAuth ficam cifrados no provedor e não entram no app ou no GitHub.
+- Cinco tentativas por minuto e respostas sem cache reduzem abuso do código curto.
+
 ## 0.6.14 — salas sem dono físico
 
 - Todo PC com Primicord mantém uma réplica SQLite das salas, presença e chat.
@@ -86,17 +98,16 @@ LAN). O Primicord é feito pra **N pessoas pela internet**.
 
 ### Configurar o grupo
 
-1. Em **Instalador do grupo**, abra a página de chaves do Tailscale e gere uma
-   chave `Reusable`, não efêmera. Se houver aprovação de dispositivos, use
-   também `Pre-approved`.
-2. Informe a chave e uma senha compartilhada e gere `Primicord-Grupo-Setup.exe`.
-3. Os participantes executam esse mesmo arquivo e digitam a senha. Tailscale,
-   tailnet e a descoberta das réplicas são configurados sem passos adicionais.
-4. Depois que todos instalarem, revogue a auth key. Os PCs já conectados continuam
-   autorizados; para removê-los, use a tela Machines do Tailscale.
+1. O administrador configura uma vez o ativador descrito em
+   [`activation-worker/README.md`](activation-worker/README.md). Ele fica separado
+   do site e guarda o segredo do Tailscale no cofre do provedor.
+2. Todos baixam o mesmo `Primicord-win-Setup.exe` da release mais recente.
+3. Cada participante executa o Setup e cola o código recebido do administrador.
+4. O instalador baixa o Tailscale, entra na tailnet e liga a réplica local sozinho.
 
-O instalador público continua sem credenciais. A senha e a auth key do grupo
-existem somente na cópia privada gerada localmente.
+O código não fica salvo no PC. A credencial do Tailscale passa por arquivo
+temporário apagado ao fim da instalação. Setups privados da 0.6.13 continuam
+aceitos somente para compatibilidade.
 
 Cada PC guarda sua réplica em `%LOCALAPPDATA%\PrimicordServer\primicord.db`.
 Áudio, câmera e tela não passam por ela: continuam ponto a ponto.
