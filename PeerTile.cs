@@ -13,6 +13,7 @@ public sealed class PeerTile : Control
     public bool Muted;
     public bool Sharing;
     public bool Connected = true;
+    public bool ViaRelay;
     public bool Punching;
     public int SilentSeconds;
     public float Level;
@@ -79,6 +80,7 @@ public sealed class PeerTile : Control
                          footer.Top + (footer.Height - Pv.BodyBold.Height) / 2f);
 
         string status = !Connected ? "SEM ROTA" : Muted ? "MUTADO" : Speaking ? "FALANDO"
+                      : ViaRelay ? "RELAY"
                       : LocalVolumePercent != 100 ? $"VOL {LocalVolumePercent}%" : "MIC";
         Color statusColor = !Connected ? Pv.Red : Muted ? Pv.BoneDim : Speaking ? Pv.Green : Pv.BoneDim;
         float statusWidth = Pv.TrackedWidth(g, status, Pv.Label, .7f);

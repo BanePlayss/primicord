@@ -17,6 +17,7 @@ var store = new SqliteDocumentStore(Path.Combine(dataDir, "primicord.db"));
 await store.InitializeAsync();
 
 var app = builder.Build();
+app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(10) });
 
 // O servidor nao e publico: so aceita o proprio PC ou enderecos da tailnet.
 app.Use(async (context, next) =>
@@ -38,9 +39,33 @@ app.MapGet("/health", async context =>
     await ServerJson.WriteAsync(context, new JsonObject
     {
         ["ok"] = true,
-        ["version"] = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.6.23",
+        ["version"] = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.6.24",
         ["storage"] = "sqlite",
     });
+});
+
+// Voz de contingencia: todos abrem um WebSocket de saida para a mesma replica.
+// O relay e somente memoria e nao grava/decodifica o audio.
+app.Map("/v1/voice/{roomId}", async context =>
+{
+    if (!context.WebSockets.IsWebSocketRequest)
+    {
+        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await context.Response.WriteAsync("Este endpoint exige WebSocket.");
+        return;
+    }
+
+    string roomId = (context.Request.RouteValues["roomId"]?.ToString() ?? "").Trim();
+    string peerId = context.Request.Query["peer"].ToString().Trim();
+    if (roomId.Length is < 1 or > 96 || peerId.Length is < 1 or > 96
+        || !uint.TryParse(context.Request.Query["sender"], out uint senderId) || senderId == 0)
+    {
+        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+
+    using var socket = await context.WebSockets.AcceptWebSocketAsync();
+    await VoiceRelayHub.RunAsync(roomId, peerId, senderId, socket, context.RequestAborted);
 });
 
 app.MapGet("/v1/doc", async context =>

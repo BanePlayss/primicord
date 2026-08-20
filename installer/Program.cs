@@ -41,7 +41,7 @@ internal static class Program
               + "2. conectar este PC a rede privada do grupo;\n"
               + "3. configurar as salas e a replica automaticamente.\n\n"
               + "O Windows pode pedir permissao de administrador.",
-                "PRIMICORD 0.6.23 — GRUPO", Ok | IconInfo);
+                "PRIMICORD 0.6.24 — GRUPO", Ok | IconInfo);
         }
         else
         {
@@ -60,7 +60,7 @@ internal static class Program
                   + "2. conectar este PC a rede privada do grupo;\n"
                   + "3. configurar as salas e a replica automaticamente.\n\n"
                   + "O Windows pode pedir permissao de administrador.",
-                    "PRIMICORD 0.6.23 — GRUPO", Ok | IconInfo);
+                    "PRIMICORD 0.6.24 — GRUPO", Ok | IconInfo);
             }
         }
 

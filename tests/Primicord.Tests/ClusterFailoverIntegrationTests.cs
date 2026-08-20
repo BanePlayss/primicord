@@ -54,6 +54,54 @@ public sealed class ClusterFailoverIntegrationTests : IDisposable
         Assert.NotNull(await second.GetAsync("pc_rooms/sala-ao-vivo/peers/vitinho"));
     }
 
+    [Fact]
+    public async Task Voz_opus_atravessa_relay_sem_porta_udp_no_cliente()
+    {
+        int port = FreePort();
+        Process server = StartServer("voice-relay", port);
+        var store = new MiniServerStore($"http://127.0.0.1:{port}");
+        await WaitUntilReady(store, server);
+        int deadPort = FreePort();
+        var endpoints = new FixedEndpoints(new[]
+        {
+            new ClusterEndpoint("dead", $"http://127.0.0.1:{deadPort}"),
+            new ClusterEndpoint("relay", store.BaseUrl),
+        });
+
+        using var a = new RelayVoiceTransport(endpoints, "war-room", "bane-aaa", "bane");
+        using var b = new RelayVoiceTransport(endpoints, "war-room", "kentaroz-bbb", "kentaroz");
+        int frames = 0;
+        uint sender = 0;
+        b.VoiceReceived += (id, _, _, count) =>
+        {
+            sender = id;
+            if (count > 0) Interlocked.Increment(ref frames);
+        };
+        a.Start();
+        b.Start();
+
+        Assert.True(await Wait.UntilAsync(
+            () => a.HasPeer(RoomSession.HashId("kentaroz-bbb"))
+               && b.HasPeer(RoomSession.HashId("bane-aaa")), 8_000));
+
+        var pcm = new byte[VoiceEngine.FrameBytes];
+        double phase = 0;
+        for (int frame = 0; frame < 60; frame++)
+        {
+            for (int i = 0; i < pcm.Length / 2; i++, phase++)
+            {
+                short sample = (short)(Math.Sin(phase * 2 * Math.PI * 440 / 48000) * 9000);
+                pcm[i * 2] = (byte)sample;
+                pcm[i * 2 + 1] = (byte)(sample >> 8);
+            }
+            a.SendVoice(pcm, 0, pcm.Length);
+            await Task.Delay(10);
+        }
+
+        Assert.True(await Wait.UntilAsync(() => Volatile.Read(ref frames) >= 10, 5_000));
+        Assert.Equal(RoomSession.HashId("bane-aaa"), sender);
+    }
+
     private Process StartServer(string name, int port)
     {
         string dll = Path.Combine(AppContext.BaseDirectory, "Primicord.Server.dll");

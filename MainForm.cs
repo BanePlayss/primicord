@@ -15,6 +15,7 @@ public sealed class MainForm : Form
 {
     private readonly Firestore _fs = new();
     private readonly IDocumentStore _coord;
+    private readonly IClusterEndpointProvider _clusterEndpoints;
     private readonly RoomDirectory _dir;
     private readonly Config _cfg;
 
@@ -27,6 +28,7 @@ public sealed class MainForm : Form
     private VoiceEngine? _voice;
     /// <summary>Malha WebRTC quando cfg.UseWebRtc esta ligado; null = voz pela malha UDP.</summary>
     private WebRtcVoiceMesh? _webrtc;
+    private ResilientVoiceTransport? _voiceRoute;
     private string _voiceRoomId = "";
     private string _voiceRoomName = "";
 
@@ -110,8 +112,8 @@ public sealed class MainForm : Form
         // Desde a 0.6.14 todo PC e uma replica. O primeiro IP online e o lider de
         // leitura; escritas sao espelhadas e outro assume se ele cair.
         MiniServerProcess.Configure(enabled: true);
-        _coord = new ClusterDocumentStore(
-            new TailscaleClusterEndpointProvider(_cfg.CoordServerUrl), _fs);
+        _clusterEndpoints = new TailscaleClusterEndpointProvider(_cfg.CoordServerUrl);
+        _coord = new ClusterDocumentStore(_clusterEndpoints, _fs);
         _dir = new RoomDirectory(_coord);
 
         Text = "PRIMICORD";
@@ -609,7 +611,7 @@ public sealed class MainForm : Form
                 _voice.Failed += ShowBanner;
                 // Reata no transporte que ja estava valendo — trocar de microfone
                 // nao pode renegociar as conexoes WebRTC.
-                _voice.AttachTransport((IVoiceTransport?)_webrtc ?? _session, _session);
+                _voice.AttachTransport(_voiceRoute ?? (IVoiceTransport?)_webrtc ?? _session, _session);
                 _voice.Start(_cfg.MicDevice,
                     string.IsNullOrEmpty(_cfg.OutputDeviceId) ? null : _cfg.OutputDeviceId);
                 Log.Write("audio reaberto com os dispositivos novos");
@@ -1363,7 +1365,7 @@ public sealed class MainForm : Form
                     ApplySavedPeerVolumes();
                     _voice.OutputMuted = _audioMuted;
                     _voice.Failed += ShowBanner;
-                    _voice.AttachTransport((IVoiceTransport?)_webrtc ?? _session, _session);
+                    _voice.AttachTransport(_voiceRoute ?? (IVoiceTransport?)_webrtc ?? _session, _session);
                     _voice.HeardPcm += (b, o, c) => _clips?.PushHeard(b, o, c);
                     _voice.MicPcm += (b, o, c) => _clips?.PushMic(b, o, c);
                     _voice.Start(_cfg.MicDevice,
@@ -1399,8 +1401,10 @@ public sealed class MainForm : Form
         ApplySavedPeerVolumes();
         _voice.Failed += ShowBanner;
 
-        // A malha UDP sobe SEMPRE — ela carrega tela, musica, cinema e presenca.
-        // A chave decide so quem leva a VOZ.
+        // A malha UDP continua levando tela/musica/cinema e funciona como fallback
+        // pra clientes antigos. A voz principal usa WebSocket de saida: Firewall e
+        // NAT do outro PC deixam de ser requisito pra conversar.
+        IVoiceTransport fallback = _session;
         if (_cfg.UseWebRtc)
         {
             _webrtc = new WebRtcVoiceMesh(_coord, roomId, peerId, _session);
@@ -1409,12 +1413,15 @@ public sealed class MainForm : Form
             {
                 if (!IsDisposed) try { BeginInvoke(UpdateRoomStatus); } catch { }
             };
-            _voice.AttachTransport(_webrtc, _session);
+            fallback = _webrtc;
         }
-        else
+        var relay = new RelayVoiceTransport(_clusterEndpoints, roomId, peerId, Nick);
+        _voiceRoute = new ResilientVoiceTransport(relay, fallback, _session);
+        _voiceRoute.StateChanged += () =>
         {
-            _voice.AttachTransport(_session, _session);
-        }
+            if (!IsDisposed) try { BeginInvoke(() => { OnPeersChanged(); UpdateRoomStatus(); }); } catch { }
+        };
+        _voice.AttachTransport(_voiceRoute, _session);
 
         // Buffer rolante de clipe: recebe o que eu ouço e o meu microfone.
         _clips = new ClipRecorder(60);
@@ -1451,6 +1458,7 @@ public sealed class MainForm : Form
             // Depois da malha: a negociacao WebRTC usa a presenca dela pra saber
             // com quem falar.
             _webrtc?.Start();
+            _voiceRoute?.Start();
             UpdateRoomStatus();
         }
         catch (DocumentStoreException ex) when (ex.IsPermissionDenied)
@@ -1501,10 +1509,12 @@ public sealed class MainForm : Form
         _nowPlaying = "";
 
         try { _voice?.Dispose(); } catch { }
+        try { _voiceRoute?.Dispose(); } catch { }
         // Antes da sessao: a malha WebRTC le a presenca dela pra saber quem saiu.
         try { _webrtc?.Dispose(); } catch { }
         try { _session?.Dispose(); } catch { }
         _voice = null;
+        _voiceRoute = null;
         _webrtc = null;
         _session = null;
         var leavingRoom = _rooms.FirstOrDefault(r => r.Id == _voiceRoomId);
@@ -1566,8 +1576,10 @@ public sealed class MainForm : Form
             tile.Nick = p.Nick;
             tile.Muted = p.Muted;
             tile.Sharing = p.Sharing;
-            tile.Connected = p.Connected;
-            tile.Punching = p.Locked == null;
+            bool relayed = _voiceRoute?.HasRelayPeer(p.SenderId) == true;
+            tile.Connected = p.Connected || relayed;
+            tile.ViaRelay = !p.Connected && relayed;
+            tile.Punching = !tile.Connected;
             tile.SilentSeconds = p.SilentSeconds;
             // Clicar no tile de quem compartilha joga a tela dele no palco.
             if (p.Sharing && (string?)tile.Tag != "clickable")
@@ -1748,10 +1760,12 @@ public sealed class MainForm : Form
         {
             if (!_peerTiles.TryGetValue(p.SenderId, out var tile) || tile.IsDisposed) continue;
             tile.Level = _voice.PeakOf(p.SenderId);
-            bool conn = p.Connected, punch = p.Locked == null;
-            if (tile.Connected != conn || tile.Punching != punch)
+            bool relayed = _voiceRoute?.HasRelayPeer(p.SenderId) == true;
+            bool conn = p.Connected || relayed, punch = !conn;
+            if (tile.Connected != conn || tile.Punching != punch || tile.ViaRelay != (!p.Connected && relayed))
             {
                 tile.Connected = conn;
+                tile.ViaRelay = !p.Connected && relayed;
                 tile.Punching = punch;
                 UpdateRoomStatus();
             }
@@ -1763,27 +1777,31 @@ public sealed class MainForm : Form
     {
         if (_roomStatus == null || _roomStatus.IsDisposed || _session == null) return;
         var peers = _session.Peers;
-        int connected = peers.Count(p => p.Connected);
-        int punching = peers.Count(p => !p.Connected);
+        bool HasRoute(RemotePeer peer) => peer.Connected || _voiceRoute?.HasRelayPeer(peer.SenderId) == true;
+        int connected = peers.Count(HasRoute);
+        int punching = peers.Count(p => !HasRoute(p));
 
         // Quem ja passou do prazo nao esta "conectando": nao vai conectar. Dizer o
         // que aconteceu, com o que fazer, em vez de girar pra sempre — o README
         // sempre prometeu esse aviso, e ate agora ele nao existia.
         const int DesisteSegundos = 25;
-        int semRota = peers.Count(p => p.Locked == null && p.SilentSeconds >= DesisteSegundos);
+        int semRota = peers.Count(p => !HasRoute(p) && p.SilentSeconds >= DesisteSegundos);
+        bool relayConnected = _voiceRoute?.Connected == true;
+        int relayPeers = _voiceRoute?.ConnectedPeerCount ?? 0;
 
         string s = peers.Count == 0 ? "voce esta sozinho na sala — chama a galera"
                  : semRota > 0
-                     ? $"{semRota} sem rota — o furo de NAT nao fechou. Provavel NAT simetrico "
-                       + "(4G/CGNAT) ou firewall do Windows bloqueando o Primicord."
+                      ? $"{semRota} sem rota de voz — relay reconectando automaticamente"
+                 : relayConnected ? $"{connected + 1} na call · voz relay Opus ({relayPeers}/{peers.Count})"
                  : punching == 0 ? $"{connected + 1} na call · conectado direto (P2P)"
                  : $"{connected + 1} na call · {punching} conectando...";
 
-        if (_session.PublicEndpoint == null) s += " · sem STUN (so conecta na mesma rede)";
+        if (!relayConnected && _session.PublicEndpoint == null)
+            s += " · sem STUN (so conecta na mesma rede)";
 
         // Com WebRTC a voz tem estado PROPRIO: a malha pode estar conectada (tela
         // passando) e a voz ainda negociando. Mostrar so o da malha esconderia isso.
-        if (_webrtc != null)
+        if (!relayConnected && _webrtc != null)
         {
             int ok = _webrtc.ConnectedCount, total = _webrtc.LinkCount;
             s += total == 0 ? " · voz WebRTC"
@@ -1799,7 +1817,8 @@ public sealed class MainForm : Form
         }
         if (_roomActivity != null)
         {
-            string connection = semRota > 0 ? $"{semRota} conexao sem rota"
+            string connection = semRota > 0 ? $"{semRota} relay reconectando"
+                : relayConnected ? "Voz relay · Opus"
                 : punching > 0 ? $"{punching} conexao conectando"
                 : _webrtc != null ? "Voz WebRTC · Opus" : "Voz direta · P2P";
             _roomActivity.UpdateSnapshot(peers.Count + 1, connection);
@@ -1813,7 +1832,8 @@ public sealed class MainForm : Form
         // A malha sempre sabe: e ela que publica o estado de mudo na presenca do
         // Firestore, que e o que os outros veem no tile.
         _session.Muted = muted;
-        if (_webrtc != null) _webrtc.Muted = muted;
+        if (_voiceRoute != null) _voiceRoute.Muted = muted;
+        else if (_webrtc != null) _webrtc.Muted = muted;
     }
 
     // ─── TELA ────────────────────────────────────────────────────────────────

@@ -3,6 +3,20 @@
 O Discord dos primitivos — app nativo de Windows pra sala de voz em grupo,
 compartilhar tela e tirar clipe dos últimos segundos.
 
+## 0.6.24 — voz sem "SEM ROTA"
+
+- A voz principal passa a usar Opus por WebSocket através de uma réplica Primicord:
+  cada cliente abre somente uma conexão de saída, sem depender de porta UDP aleatória
+  liberada no Firewall do outro participante.
+- O relay apenas encaminha pacotes em memória, não decodifica nem grava áudio, e o
+  tráfego continua protegido pela rede WireGuard do Tailscale.
+- As réplicas são escolhidas na mesma ordem determinística do cluster; se a primeira
+  cair, os clientes tentam automaticamente a seguinte.
+- O caminho P2P antigo permanece como fallback durante atualização mista e é cortado
+  quando todos os participantes já aparecem no relay, evitando áudio duplicado.
+- Os cards passam a mostrar `RELAY` quando a voz está conectada por contingência,
+  sem confundir falha de tela compartilhada P2P com falha da chamada de voz.
+
 ## 0.6.23 — shell persistente estilo Discord
 
 - Entrar numa sala não troca mais para um segundo layout: marca, canais, salas,
