@@ -39,7 +39,7 @@ app.MapGet("/health", async context =>
     await ServerJson.WriteAsync(context, new JsonObject
     {
         ["ok"] = true,
-        ["version"] = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.6.24",
+        ["version"] = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.6.25",
         ["storage"] = "sqlite",
     });
 });
@@ -65,7 +65,11 @@ app.Map("/v1/voice/{roomId}", async context =>
     }
 
     using var socket = await context.WebSockets.AcceptWebSocketAsync();
-    await VoiceRelayHub.RunAsync(roomId, peerId, senderId, socket, context.RequestAborted);
+    // RequestAborted pode ser sinalizado pelo servidor logo depois do upgrade
+    // HTTP no Windows. O WebSocket tem ciclo proprio; so o encerramento do app
+    // deve cancelar a espera. O fechamento do cliente ja termina ReceiveAsync.
+    await VoiceRelayHub.RunAsync(roomId, peerId, senderId, socket,
+                                 app.Lifetime.ApplicationStopping);
 });
 
 app.MapGet("/v1/doc", async context =>

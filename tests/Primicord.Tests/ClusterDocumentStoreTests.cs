@@ -68,6 +68,22 @@ public sealed class ClusterDocumentStoreTests
         Assert.NotNull(await current.GetAsync("pc_rooms/mista"));
     }
 
+    [Fact]
+    public async Task Sem_replica_e_sem_fallback_falha_localmente_sem_tocar_na_cloud()
+    {
+        var local = new FakeReplica("http://127.0.0.1:8765/") { Available = false };
+        var cluster = new ClusterDocumentStore(
+            new FixedEndpoints(new[] { new ClusterEndpoint("local", local.BaseUrl) }),
+            fallback: null, _ => local);
+
+        var error = await Assert.ThrowsAsync<ClusterUnavailableException>(
+            () => cluster.ListAsync("pc_presence"));
+
+        Assert.True(error.IsUnavailable);
+        Assert.Equal("mini servidor indisponivel", cluster.ActiveName);
+        Assert.Equal(0, local.Reads);
+    }
+
     private sealed class FixedEndpoints(IReadOnlyList<ClusterEndpoint> endpoints)
         : IClusterEndpointProvider
     {

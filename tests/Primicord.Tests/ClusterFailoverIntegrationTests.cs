@@ -84,6 +84,14 @@ public sealed class ClusterFailoverIntegrationTests : IDisposable
             () => a.HasPeer(RoomSession.HashId("kentaroz-bbb"))
                && b.HasPeer(RoomSession.HashId("bane-aaa")), 8_000));
 
+        // Regressao 0.6.24: RequestAborted encerrava o socket logo apos o
+        // upgrade e os clientes reconectavam centenas de vezes por minuto.
+        await Task.Delay(1_500);
+        Assert.True(a.Connected);
+        Assert.True(b.Connected);
+        Assert.True(a.HasPeer(RoomSession.HashId("kentaroz-bbb")));
+        Assert.True(b.HasPeer(RoomSession.HashId("bane-aaa")));
+
         var pcm = new byte[VoiceEngine.FrameBytes];
         double phase = 0;
         for (int frame = 0; frame < 60; frame++)

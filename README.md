@@ -3,6 +3,19 @@
 O Discord dos primitivos — app nativo de Windows pra sala de voz em grupo,
 compartilhar tela e tirar clipe dos últimos segundos.
 
+## 0.6.25 — cota protegida e relay estável
+
+- Salas, presença, chat e sinalização deixam de usar o Firestore até como fallback:
+  se o mini servidor estiver iniciando, o app recua e tenta de novo localmente.
+- O Firestore fica restrito a login novo e dados opcionais do site; a classificação
+  passa de cinco para quinze minutos entre atualizações.
+- Corrige o relay que aceitava o WebSocket e o encerrava imediatamente no Windows,
+  provocando centenas de reconexões por minuto.
+- Reconexões do relay ganham recuo exponencial para que uma falha futura não gere
+  tempestade de processos, sockets ou logs.
+- Testes de regressão verificam tanto o bloqueio do fallback cloud quanto a
+  permanência de dois participantes conectados ao relay.
+
 ## 0.6.24 — voz sem "SEM ROTA"
 
 - A voz principal passa a usar Opus por WebSocket através de uma réplica Primicord:
@@ -180,16 +193,17 @@ LAN). O Primicord é feito pra **N pessoas pela internet**.
 
 ## Como funciona
 
-- **Voz**: malha UDP ponto-a-ponto — cada um manda direto pra cada outro. Não tem
-  servidor no meio, ninguém paga hospedagem e nenhum áudio passa por terceiros.
+- **Voz**: Opus por WebSocket através de uma réplica Primicord escolhida
+  automaticamente. O relay só encaminha pacotes em memória dentro do Tailscale;
+  não decodifica nem grava áudio. A malha P2P continua como fallback de migração.
 - **Encontro**: cada Primicord guarda uma réplica de salas, presença, chat e
   sinalização em SQLite. O primeiro PC saudável coordena leituras; escritas vão
   para todos e outro assume automaticamente se ele cair.
 - **NAT**: o endereço da tailnet é o primeiro candidato. O Tailscale escolhe a rota
   direta ou relay; STUN e hole punching continuam como plano B.
-- **Áudio**: 48kHz mono, frames de 10ms, jitter buffer por pessoa, mixados com
-  NAudio. Na malha vai PCM cru (798 kbps por par); com `webrtc=1` vai Opus por
-  RTP/SRTP (49 kbps por par, e criptografado).
+- **Áudio**: 48kHz mono, Opus de 32 kbps em frames de 20ms, jitter buffer por
+  pessoa e mixagem com NAudio. O tráfego do relay é protegido pelo WireGuard do
+  Tailscale; WebRTC/UDP permanecem disponíveis como caminhos de compatibilidade.
 
 ### Configurar o grupo
 

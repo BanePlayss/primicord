@@ -43,7 +43,7 @@ public sealed class TailscaleClusterEndpointProvider : IClusterEndpointProvider
 public sealed class ClusterDocumentStore : IDocumentStore
 {
     private readonly IClusterEndpointProvider _endpoints;
-    private readonly IDocumentStore _fallback;
+    private readonly IDocumentStore? _fallback;
     private readonly Func<ClusterEndpoint, IClusterReplica> _factory;
     private readonly Dictionary<string, IClusterReplica> _stores =
         new(StringComparer.OrdinalIgnoreCase);
@@ -54,7 +54,7 @@ public sealed class ClusterDocumentStore : IDocumentStore
     private string _healthySignature = "";
     private string _activeName = "procurando replicas";
 
-    public ClusterDocumentStore(IClusterEndpointProvider endpoints, IDocumentStore fallback,
+    public ClusterDocumentStore(IClusterEndpointProvider endpoints, IDocumentStore? fallback,
                                 Func<ClusterEndpoint, IClusterReplica>? factory = null)
     {
         _endpoints = endpoints;
@@ -95,7 +95,8 @@ public sealed class ClusterDocumentStore : IDocumentStore
             _refreshAt = DateTimeOffset.UtcNow.AddSeconds(_healthy.Count > 0 ? 10 : 3);
             _activeName = _healthy.Count switch
             {
-                0 => "Firestore (compatibilidade)",
+                0 when _fallback == null => "mini servidor indisponivel",
+                0 => "servidor de compatibilidade",
                 1 => "1 replica Primicord",
                 _ => $"{_healthy.Count} replicas Primicord",
             };
@@ -135,7 +136,8 @@ public sealed class ClusterDocumentStore : IDocumentStore
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex) when (IsUnavailable(ex)) { Invalidate(); }
         }
-        return await action(_fallback).ConfigureAwait(false);
+        if (_fallback != null) return await action(_fallback).ConfigureAwait(false);
+        throw new ClusterUnavailableException();
     }
 
     private async Task WriteAsync(Func<IDocumentStore, Task> action, CancellationToken ct)
@@ -143,6 +145,7 @@ public sealed class ClusterDocumentStore : IDocumentStore
         IReadOnlyList<IClusterReplica> replicas = await GetHealthyAsync(ct).ConfigureAwait(false);
         if (replicas.Count == 0)
         {
+            if (_fallback == null) throw new ClusterUnavailableException();
             await action(_fallback).ConfigureAwait(false);
             return;
         }
@@ -161,6 +164,7 @@ public sealed class ClusterDocumentStore : IDocumentStore
         foreach (IClusterReplica replica in refreshed)
             if (await TryWriteAsync(replica, action, ct).ConfigureAwait(false)) return;
 
+        if (_fallback == null) throw new ClusterUnavailableException();
         await action(_fallback).ConfigureAwait(false);
     }
 
@@ -263,4 +267,16 @@ public sealed class ClusterDocumentStore : IDocumentStore
 
     public Task DeleteAsync(string docPath, CancellationToken ct = default)
         => WriteAsync(store => store.DeleteAsync(docPath, ct), ct);
+}
+
+/// <summary>
+/// A malha local ainda nao tem uma replica pronta. O chamador recua e tenta de
+/// novo; nunca transforma indisponibilidade local em milhares de leituras cloud.
+/// </summary>
+public sealed class ClusterUnavailableException : DocumentStoreException
+{
+    public ClusterUnavailableException()
+        : base("O mini servidor do Primicord ainda nao esta disponivel.") { }
+
+    public override bool IsUnavailable => true;
 }

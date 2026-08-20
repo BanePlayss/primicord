@@ -67,7 +67,7 @@ public sealed class RemotePeer
 /// tranquilo em qualquer banda larga.
 ///
 /// COMO DOIS ROTEADORES SE ATRAVESSAM (hole punching): cada lado descobre seu IP:porta
-/// publico via STUN e publica no Firestore. Ai os dois passam a mandar pacotinhos um
+/// publico via STUN e publica na malha SQLite. Ai os dois passam a mandar pacotinhos um
 /// pro outro ao mesmo tempo. O primeiro pacote de A morre no roteador de B — mas ele
 /// abre no roteador de A a "porta de volta" pra B. Como B faz o mesmo, em uma ou duas
 /// tentativas os dois lados ja tem o buraco aberto e os pacotes comecam a passar.
@@ -163,7 +163,7 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
     /// <summary>A lista de participantes mudou (entrou, saiu, mutou, conectou).</summary>
     public event Action? PeersChanged;
 
-    /// <summary>Erro que o usuario precisa ver (ex.: rules do Firestore faltando).</summary>
+    /// <summary>Erro de rede que o usuario precisa ver.</summary>
     public event Action<string>? Failed;
 
     public RoomSession(IDocumentStore fs, string roomId, string peerId, string nick)
@@ -183,7 +183,7 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
     }
 
     /// <summary>
-    /// Registra um par manualmente, pulando o Firestore. Existe pro harness de teste
+    /// Registra um par manualmente, pulando a presenca distribuida. Existe pro harness de teste
     /// conseguir exercitar o protocolo (punch/ack/voz) em loopback — o caminho normal
     /// e o SyncPeersAsync descobrir os pares sozinho.
     /// </summary>
@@ -209,7 +209,7 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
         PeersChanged?.Invoke();
     }
 
-    /// <summary>Sobe so a rede (socket + STUN + punch), sem publicar no Firestore.</summary>
+    /// <summary>Sobe so a rede (socket + STUN + punch), sem publicar presenca.</summary>
     public async Task StartNetworkOnlyAsync(bool useStun = true, CancellationToken ct = default)
     {
         _firestoreBacked = false;
@@ -311,7 +311,7 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
         Log.Write($"sala {_roomId}: encerrada");
     }
 
-    // ─── PRESENCA (mini servidor; Firestore durante a migracao) ─────────────
+    // ─── PRESENCA (replicas SQLite dos mini servidores) ────────────────────
 
     private async Task PresenceLoopAsync(CancellationToken ct)
     {
@@ -428,7 +428,7 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
             }
         }
 
-        // Quem sumiu do Firestore saiu da sala.
+        // Quem sumiu da presenca distribuida saiu da sala.
         lock (_peersLock)
         {
             foreach (var sid in _peers.Keys.Where(k => !alive.Contains(k)).ToList())
@@ -656,7 +656,7 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
             var src = (IPEndPoint)from;
             RemotePeer? peer;
             lock (_peersLock) _peers.TryGetValue(senderId, out peer);
-            if (peer == null) continue;   // ainda nao apareceu no Firestore
+            if (peer == null) continue;   // ainda nao apareceu na presenca
 
             Interlocked.Exchange(ref peer.LastRecvTicks, DateTime.UtcNow.Ticks);
 

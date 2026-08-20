@@ -46,6 +46,7 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
     private bool _running;
     private volatile bool _connected;
     private ushort _sequence;
+    private int _reconnectFailures;
 
     public RelayVoiceTransport(IClusterEndpointProvider endpoints, string roomId,
                                string peerId, string nick)
@@ -113,7 +114,6 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
     {
         while (!ct.IsCancellationRequested)
         {
-            bool opened = false;
             try
             {
                 IReadOnlyList<ClusterEndpoint> endpoints =
@@ -124,7 +124,6 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
                     try
                     {
                         await RunConnectionAsync(endpoint.Url, ct).ConfigureAwait(false);
-                        opened = true;
                         break;
                     }
                     catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
@@ -138,7 +137,12 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
             catch (Exception ex) { Log.Write("relay voz: descoberta: " + ex.Message); }
 
             SetConnected(false, null);
-            try { await Task.Delay(opened ? 350 : 1000, ct).ConfigureAwait(false); }
+            // Mesmo se um servidor aceitar e fechar imediatamente, nao cria um
+            // loop de centenas de conexoes por minuto. Conexao estavel zera o
+            // recuo dentro de RunConnectionAsync.
+            int failures = Interlocked.Increment(ref _reconnectFailures);
+            int delay = Math.Min(10_000, 750 * (1 << Math.Min(failures - 1, 4)));
+            try { await Task.Delay(delay, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
         }
     }
@@ -154,10 +158,15 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
 
         Log.Write("relay voz conectado: " + uri.GetLeftPart(UriPartial.Authority));
         SetConnected(true, Array.Empty<uint>());
+        DateTimeOffset connectedAt = DateTimeOffset.UtcNow;
         using var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(outerCt);
         Task send = SendLoopAsync(socket, connectionCts.Token);
         Task receive = ReceiveLoopAsync(socket, connectionCts.Token);
         await Task.WhenAny(send, receive).ConfigureAwait(false);
+        // Depois de alguns segundos o servidor provou que a conexao e estavel;
+        // uma queda posterior volta ao primeiro nivel de reconexao.
+        if (DateTimeOffset.UtcNow - connectedAt >= TimeSpan.FromSeconds(5))
+            Interlocked.Exchange(ref _reconnectFailures, 0);
         connectionCts.Cancel();
         try { await Task.WhenAll(send, receive).ConfigureAwait(false); } catch { }
         SetConnected(false, null);

@@ -24,16 +24,14 @@ public sealed class MemberPresence
 /// Chat geral, mensagens diretas e presenca global (quem esta com o app aberto).
 /// </summary>
 /// <remarks>
-/// Tudo no Firestore, por POLLING (o REST nao tem listener em tempo real). Ids de
+/// Tudo nas replicas SQLite do Primicord, por polling. Ids de
 /// mensagem sao `{timestamp:D13}-{aleatorio}`, entao a ordem alfabetica do id JA e a
 /// ordem cronologica — da pra pedir as 60 mais recentes com `orderBy=__name__ desc`
 /// em vez de baixar o historico inteiro.
 ///
-/// PRIVACIDADE — LEIA: as DMs NAO sao privadas de verdade. O app nao usa Firebase
-/// Auth (o login e nick+senha conferido no cliente), entao a rules nao tem como
-/// saber quem esta pedindo e a leitura precisa ficar publica. Qualquer um que saiba
-/// mexer no Firestore consegue ler as conversas. Serve pra combinar jogo, nao pra
-/// segredo. A UI avisa isso no topo da DM.
+/// PRIVACIDADE — LEIA: as DMs NAO sao privadas de verdade. Elas sao replicadas
+/// entre os PCs do grupo para sobreviver a quedas, sem criptografia ponta-a-ponta
+/// por conversa. Serve pra combinar jogo, nao pra segredo.
 /// </remarks>
 public sealed class ChatService
 {

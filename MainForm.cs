@@ -113,7 +113,10 @@ public sealed class MainForm : Form
         // leitura; escritas sao espelhadas e outro assume se ele cair.
         MiniServerProcess.Configure(enabled: true);
         _clusterEndpoints = new TailscaleClusterEndpointProvider(_cfg.CoordServerUrl);
-        _coord = new ClusterDocumentStore(_clusterEndpoints, _fs);
+        // Sala, presenca e chat pertencem a malha SQLite dos PCs. Firestore e
+        // somente a fonte de conta/campeonato do site: uma falha do mini servidor
+        // deve gerar recuo local, nunca uma tempestade silenciosa de leituras cloud.
+        _coord = new ClusterDocumentStore(_clusterEndpoints, fallback: null);
         _dir = new RoomDirectory(_coord);
 
         Text = "PRIMICORD";
@@ -478,7 +481,7 @@ public sealed class MainForm : Form
 
         // O shell nao precisa reler sala, presenca e chat a cada 2s. A voz tem seu
         // proprio ciclo enquanto esta numa call; aqui 10s e suficiente e preserva
-        // a cota compartilhada do Firestore.
+        // o trabalho das replicas locais.
         _pollTimer = new System.Windows.Forms.Timer { Interval = 10_000 };
         _pollTimer.Tick += async (_, _) => await PollAsync();
         _pollTimer.Start();
@@ -857,7 +860,7 @@ public sealed class MainForm : Form
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // POLL (Firestore nao tem listener no REST)
+    // POLL (replicas locais; Firestore so para os dados opcionais do site)
     // ═══════════════════════════════════════════════════════════════════════
 
     private async Task PollAsync()
@@ -893,9 +896,9 @@ public sealed class MainForm : Form
                     if (_members.Count == 0)
                         _members = await Primitivao.ListMembersAsync(_fs);
 
-                    // Classificacao: a cada ~5min. O primeiro tick busca na hora
+                    // Classificacao: a cada ~15min. O primeiro tick busca na hora
                     // para a tabela nao nascer vazia.
-                    if (first || _pollTick % 30 == 1)
+                    if (first || _pollTick % 90 == 1)
                         await RefreshCampeonatoAsync(propagateFirestore: true);
                 }
                 catch (FirestoreException ex)
@@ -1830,7 +1833,7 @@ public sealed class MainForm : Form
         if (_session == null) return;
         bool muted = !_session.Muted;
         // A malha sempre sabe: e ela que publica o estado de mudo na presenca do
-        // Firestore, que e o que os outros veem no tile.
+        // distribuida, que e o que os outros veem no tile.
         _session.Muted = muted;
         if (_voiceRoute != null) _voiceRoute.Muted = muted;
         else if (_webrtc != null) _webrtc.Muted = muted;

@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text;
-using System.Text.Json;
 
 namespace Primicord.Server;
 
@@ -92,11 +91,13 @@ public static class VoiceRelayHub
         public async Task BroadcastPeersAsync()
         {
             RelayClient[] clients = _clients.Values.ToArray();
-            byte[] snapshot = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
-            {
-                type = "peers",
-                ids = clients.Select(client => client.SenderId).OrderBy(id => id).ToArray(),
-            }));
+            // O mini servidor publicado e trimmed e desliga serializacao por
+            // reflection. Como o payload so contem inteiros, monta-lo diretamente
+            // evita metadata dinamica e mantem o executavel pequeno.
+            string ids = string.Join(',', clients.Select(client => client.SenderId)
+                                                  .OrderBy(id => id));
+            byte[] snapshot = Encoding.UTF8.GetBytes(
+                "{\"type\":\"peers\",\"ids\":[" + ids + "]}");
             await Task.WhenAll(clients.Select(client => client.TrySendAsync(
                 snapshot, WebSocketMessageType.Text, dropIfBusy: false))).ConfigureAwait(false);
         }
