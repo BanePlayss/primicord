@@ -91,6 +91,28 @@ public sealed class ClusterFailoverIntegrationTests : IDisposable
         Assert.True(b.Connected);
         Assert.True(a.HasPeer(RoomSession.HashId("kentaroz-bbb")));
         Assert.True(b.HasPeer(RoomSession.HashId("bane-aaa")));
+        Assert.True(a.ScreenRelaySupported);
+        Assert.True(b.ScreenRelaySupported);
+        Assert.Equal("kentaroz", a.Peers[RoomSession.HashId("kentaroz-bbb")]);
+        Assert.Equal("bane", b.Peers[RoomSession.HashId("bane-aaa")]);
+
+        byte[]? receivedScreen = null;
+        uint screenSender = 0;
+        int screenWidth = 0, screenHeight = 0;
+        b.ScreenFrameReceived += (id, payload, width, height) =>
+        {
+            screenSender = id;
+            receivedScreen = payload;
+            screenWidth = width;
+            screenHeight = height;
+        };
+        var screen = Enumerable.Repeat((byte)0x5a, 32 * 1024).ToArray();
+        a.SendScreenFrame(screen, screen.Length, 1280, 720);
+        Assert.True(await Wait.UntilAsync(() => receivedScreen != null, 5_000));
+        Assert.Equal(RoomSession.HashId("bane-aaa"), screenSender);
+        Assert.Equal(1280, screenWidth);
+        Assert.Equal(720, screenHeight);
+        Assert.Equal(screen, receivedScreen);
 
         var pcm = new byte[VoiceEngine.FrameBytes];
         double phase = 0;

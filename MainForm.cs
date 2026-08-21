@@ -1420,6 +1420,7 @@ public sealed class MainForm : Form
         }
         var relay = new RelayVoiceTransport(_clusterEndpoints, roomId, peerId, Nick);
         _voiceRoute = new ResilientVoiceTransport(relay, fallback, _session);
+        _voiceRoute.ScreenFrameReceived += OnPeerFrame;
         _voiceRoute.StateChanged += () =>
         {
             if (!IsDisposed) try { BeginInvoke(() => { OnPeersChanged(); UpdateRoomStatus(); }); } catch { }
@@ -1539,8 +1540,11 @@ public sealed class MainForm : Form
         if (_session == null || _callGrid == null || _callGrid.IsDisposed) return;
 
         var peers = _session.Peers;
-        var alive = peers.Select(p => p.SenderId).ToHashSet();
-        var currentNames = peers.Select(p => p.Nick).Where(n => n.Length > 0)
+        IReadOnlyDictionary<uint, string> relayPeers = _voiceRoute?.RelayPeers
+            ?? new Dictionary<uint, string>();
+        var alive = peers.Select(p => p.SenderId).Concat(relayPeers.Keys).ToHashSet();
+        var currentNames = peers.Select(p => p.Nick).Concat(relayPeers.Values)
+                                .Where(n => n.Length > 0)
                                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
         // joinedAt vem no mesmo documento de presenca que ja era lido. O painel
         // guarda o maior horario em memoria, entao a saida de alguem nao apaga quem
@@ -1592,6 +1596,30 @@ public sealed class MainForm : Form
                 tile.Cursor = Cursors.Hand;
                 tile.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) _focusedSharer = sid; };
             }
+            tile.Invalidate();
+        }
+
+        // O relay e a fonte de verdade da chamada. Se a presenca UDP/SQLite ainda
+        // nao descobriu alguem, ele mesmo assim aparece na grade e nos contadores.
+        var directIds = peers.Select(peer => peer.SenderId).ToHashSet();
+        foreach (var (senderId, rosterNick) in relayPeers)
+        {
+            if (directIds.Contains(senderId)) continue;
+            string displayNick = string.IsNullOrWhiteSpace(rosterNick)
+                ? "Participante" : rosterNick;
+            if (!_peerTiles.TryGetValue(senderId, out var tile))
+            {
+                tile = new PeerTile { Margin = new Padding(6) };
+                AttachPeerVolumeMenu(tile, senderId, displayNick);
+                _peerTiles[senderId] = tile;
+                _callGrid.SetParticipant(senderId, tile);
+            }
+            tile.Nick = displayNick;
+            tile.Muted = false;
+            tile.Connected = true;
+            tile.ViaRelay = true;
+            tile.Punching = false;
+            tile.SilentSeconds = 0;
             tile.Invalidate();
         }
 
@@ -1683,7 +1711,8 @@ public sealed class MainForm : Form
         // palco cresce e os mesmos cards viram miniaturas na parte inferior.
         if (_stage != null && !_stage.IsDisposed)
         {
-            bool showStage = _iAmSharing || _session.Peers.Any(p => p.Sharing);
+            bool showStage = _iAmSharing || _session.Peers.Any(p => p.Sharing)
+                || _peerTiles.Keys.Any(senderId => _screens.IsActive(senderId));
             _callGrid?.SetStageVisible(showStage);
         }
 
@@ -1699,6 +1728,13 @@ public sealed class MainForm : Form
         foreach (var (sid, tile) in _peerTiles)
         {
             var frame = _cams.FrameOf(sid);
+            bool sharing = _session.Peers.FirstOrDefault(peer => peer.SenderId == sid)?.Sharing == true
+                || _screens.IsActive(sid);
+            if (tile.Sharing != sharing)
+            {
+                tile.Sharing = sharing;
+                tile.Invalidate();
+            }
             if (ReferenceEquals(tile.Cam, frame) && frame == null) continue;
             tile.Cam = frame;
             tile.Invalidate();
@@ -1710,7 +1746,10 @@ public sealed class MainForm : Form
         {
             _stage.SetFrame(_screens, _focusedSharer);
             var who = _session.Peers.FirstOrDefault(p => p.SenderId == _focusedSharer);
-            _stage.SharerNick = who?.Nick ?? "";
+            string relayNick = "";
+            if (_voiceRoute?.RelayPeers.TryGetValue(_focusedSharer, out string? found) == true)
+                relayNick = found;
+            _stage.SharerNick = who?.Nick ?? relayNick;
         }
         else if (_stage != null && !_stage.IsDisposed && _focusedSharer == 0)
         {
@@ -1780,8 +1819,12 @@ public sealed class MainForm : Form
     {
         if (_roomStatus == null || _roomStatus.IsDisposed || _session == null) return;
         var peers = _session.Peers;
+        IReadOnlyDictionary<uint, string> relayRoster = _voiceRoute?.RelayPeers
+            ?? new Dictionary<uint, string>();
         bool HasRoute(RemotePeer peer) => peer.Connected || _voiceRoute?.HasRelayPeer(peer.SenderId) == true;
-        int connected = peers.Count(HasRoute);
+        int remoteCount = peers.Select(peer => peer.SenderId).Concat(relayRoster.Keys).Distinct().Count();
+        int connected = peers.Where(HasRoute).Select(peer => peer.SenderId)
+                             .Concat(relayRoster.Keys).Distinct().Count();
         int punching = peers.Count(p => !HasRoute(p));
 
         // Quem ja passou do prazo nao esta "conectando": nao vai conectar. Dizer o
@@ -1790,12 +1833,12 @@ public sealed class MainForm : Form
         const int DesisteSegundos = 25;
         int semRota = peers.Count(p => !HasRoute(p) && p.SilentSeconds >= DesisteSegundos);
         bool relayConnected = _voiceRoute?.Connected == true;
-        int relayPeers = _voiceRoute?.ConnectedPeerCount ?? 0;
+        int relayPeers = relayRoster.Count;
 
-        string s = peers.Count == 0 ? "voce esta sozinho na sala — chama a galera"
+        string s = remoteCount == 0 ? "voce esta sozinho na sala — chama a galera"
                  : semRota > 0
                       ? $"{semRota} sem rota de voz — relay reconectando automaticamente"
-                 : relayConnected ? $"{connected + 1} na call · voz relay Opus ({relayPeers}/{peers.Count})"
+                 : relayConnected ? $"{connected + 1} na call · voz relay Opus ({relayPeers}/{remoteCount})"
                  : punching == 0 ? $"{connected + 1} na call · conectado direto (P2P)"
                  : $"{connected + 1} na call · {punching} conectando...";
 
@@ -1816,7 +1859,7 @@ public sealed class MainForm : Form
         if (_roomHeader != null)
         {
             _roomHeader.RoomName = _voiceRoomName;
-            _roomHeader.Participants = peers.Count + 1;
+            _roomHeader.Participants = remoteCount + 1;
         }
         if (_roomActivity != null)
         {
@@ -1824,7 +1867,7 @@ public sealed class MainForm : Form
                 : relayConnected ? "Voz relay · Opus"
                 : punching > 0 ? $"{punching} conexao conectando"
                 : _webrtc != null ? "Voz WebRTC · Opus" : "Voz direta · P2P";
-            _roomActivity.UpdateSnapshot(peers.Count + 1, connection);
+            _roomActivity.UpdateSnapshot(remoteCount + 1, connection);
         }
     }
 
@@ -1866,7 +1909,7 @@ public sealed class MainForm : Form
 
         try
         {
-            _screenSender = new ScreenSender(_session, targets[pick])
+            _screenSender = new ScreenSender(_session, targets[pick], _voiceRoute)
             { TotalUploadBudget = Math.Clamp(_cfg.ScreenBudgetKb, 200, 6000) * 1000 };
             _screenSender.FullFrameProduced += OnMyFrame;
             _screenSender.PreviewFrameProduced += OnMyPreviewFrame;
@@ -1958,6 +2001,14 @@ public sealed class MainForm : Form
     private void OnPeerFrame(uint senderId, byte[] payload, int w, int h)
     {
         if (!_screens.OnUpdate(senderId, payload, w, h)) return;
+        if (!IsDisposed) try { BeginInvoke(() =>
+        {
+            if (_peerTiles.TryGetValue(senderId, out var tile) && !tile.IsDisposed)
+            {
+                tile.Sharing = true;
+                tile.Invalidate();
+            }
+        }); } catch { }
         // Ninguem em foco ainda? A primeira tela que aparecer vira o palco.
         if (_focusedSharer == 0 && !_iAmSharing) _focusedSharer = senderId;
         if (_focusedSharer != senderId) return;

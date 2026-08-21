@@ -16,7 +16,10 @@ namespace Primicord;
 public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
 {
     private const byte AudioPacket = 1;
-    private const int HeaderBytes = 7; // tipo + senderId + sequencia
+    private const byte ScreenPacket = 2;
+    private const int HeaderBytes = 7; // audio: tipo + senderId + sequencia
+    private const int ScreenHeaderBytes = 9; // tipo + senderId + largura + altura
+    private const int MaxRelayMessageBytes = 512 * 1024;
     private const int SamplesPerFrame = 960; // 20ms @ 48kHz
     private const int PcmBytesPerFrame = SamplesPerFrame * 2;
     private const int MaxOpusPacket = 1275;
@@ -38,13 +41,21 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
             SingleReader = true,
             SingleWriter = false,
             FullMode = BoundedChannelFullMode.DropOldest,
+         });
+    private readonly Channel<byte[]> _screenOutgoing = Channel.CreateBounded<byte[]>(
+        new BoundedChannelOptions(2)
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            FullMode = BoundedChannelFullMode.DropOldest,
         });
     private readonly object _peerLock = new();
-    private readonly HashSet<uint> _relayPeers = new();
+    private readonly Dictionary<uint, string> _relayPeers = new();
     private readonly Dictionary<uint, DecoderState> _decoders = new();
     private CancellationTokenSource? _cts;
     private bool _running;
     private volatile bool _connected;
+    private volatile bool _screenRelaySupported;
     private ushort _sequence;
     private int _reconnectFailures;
 
@@ -67,13 +78,19 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
 
     public bool Muted { get; set; }
     public bool Connected => _connected;
+    public bool ScreenRelaySupported => _connected && _screenRelaySupported;
     public int ConnectedPeerCount { get { lock (_peerLock) return _relayPeers.Count; } }
+    public IReadOnlyDictionary<uint, string> Peers
+    {
+        get { lock (_peerLock) return new Dictionary<uint, string>(_relayPeers); }
+    }
     public event Action<uint, byte[], int, int>? VoiceReceived;
+    public event Action<uint, byte[], int, int>? ScreenFrameReceived;
     public event Action? StateChanged;
 
     public bool HasPeer(uint senderId)
     {
-        lock (_peerLock) return _connected && _relayPeers.Contains(senderId);
+        lock (_peerLock) return _connected && _relayPeers.ContainsKey(senderId);
     }
 
     public void Start()
@@ -108,6 +125,23 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
             }
             _outgoing.Writer.TryWrite(packet);
         }
+    }
+
+    /// <summary>Envia o pacote de blocos da tela pelo mesmo relay da voz.</summary>
+    public void SendScreenFrame(byte[] payload, int length, int width, int height)
+    {
+        if (!_running || !ScreenRelaySupported || length <= 0
+            || length > MaxRelayMessageBytes - ScreenHeaderBytes)
+            return;
+        if (width is <= 0 or > ushort.MaxValue || height is <= 0 or > ushort.MaxValue) return;
+
+        var packet = new byte[ScreenHeaderBytes + length];
+        packet[0] = ScreenPacket;
+        BinaryPrimitives.WriteUInt32LittleEndian(packet.AsSpan(1, 4), _senderId);
+        BinaryPrimitives.WriteUInt16LittleEndian(packet.AsSpan(5, 2), (ushort)width);
+        BinaryPrimitives.WriteUInt16LittleEndian(packet.AsSpan(7, 2), (ushort)height);
+        Buffer.BlockCopy(payload, 0, packet, ScreenHeaderBytes, length);
+        _screenOutgoing.Writer.TryWrite(packet);
     }
 
     private async Task RunAsync(CancellationToken ct)
@@ -157,7 +191,7 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
         await socket.ConnectAsync(uri, connectCts.Token).ConfigureAwait(false);
 
         Log.Write("relay voz conectado: " + uri.GetLeftPart(UriPartial.Authority));
-        SetConnected(true, Array.Empty<uint>());
+        SetConnected(true, new Dictionary<uint, string>());
         DateTimeOffset connectedAt = DateTimeOffset.UtcNow;
         using var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(outerCt);
         Task send = SendLoopAsync(socket, connectionCts.Token);
@@ -188,13 +222,37 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
 
     private async Task SendLoopAsync(ClientWebSocket socket, CancellationToken ct)
     {
-        await foreach (byte[] packet in _outgoing.Reader.ReadAllAsync(ct).ConfigureAwait(false))
-            await socket.SendAsync(packet, WebSocketMessageType.Binary, true, ct).ConfigureAwait(false);
+        while (!ct.IsCancellationRequested)
+        {
+            bool sent = false;
+            while (_outgoing.Reader.TryRead(out byte[]? voice))
+            {
+                await socket.SendAsync(voice, WebSocketMessageType.Binary, true, ct).ConfigureAwait(false);
+                sent = true;
+            }
+            // No maximo um quadro antes de verificar voz novamente. Tela atrasada
+            // ja foi descartada pelo canal de capacidade 2.
+            if (_screenOutgoing.Reader.TryRead(out byte[]? screen))
+            {
+                await socket.SendAsync(screen, WebSocketMessageType.Binary, true, ct).ConfigureAwait(false);
+                sent = true;
+            }
+            if (sent) continue;
+
+            using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            Task<bool> voiceReady = _outgoing.Reader.WaitToReadAsync(waitCts.Token).AsTask();
+            Task<bool> screenReady = _screenOutgoing.Reader.WaitToReadAsync(waitCts.Token).AsTask();
+            Task<bool> winner = await Task.WhenAny(voiceReady, screenReady).ConfigureAwait(false);
+            bool ready = await winner.ConfigureAwait(false);
+            waitCts.Cancel();
+            try { await Task.WhenAll(voiceReady, screenReady).ConfigureAwait(false); } catch { }
+            if (!ready) return;
+        }
     }
 
     private async Task ReceiveLoopAsync(ClientWebSocket socket, CancellationToken ct)
     {
-        byte[] buffer = new byte[4096];
+        byte[] buffer = new byte[16 * 1024];
         while (!ct.IsCancellationRequested && socket.State == WebSocketState.Open)
         {
             using var message = new MemoryStream();
@@ -203,14 +261,14 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
             {
                 result = await socket.ReceiveAsync(buffer, ct).ConfigureAwait(false);
                 if (result.MessageType == WebSocketMessageType.Close) return;
-                if (message.Length + result.Count > buffer.Length) return;
+                if (message.Length + result.Count > MaxRelayMessageBytes) return;
                 message.Write(buffer, 0, result.Count);
             }
             while (!result.EndOfMessage);
 
             byte[] payload = message.ToArray();
             if (result.MessageType == WebSocketMessageType.Text) ReadPeerSnapshot(payload);
-            else if (result.MessageType == WebSocketMessageType.Binary) ReadAudio(payload);
+            else if (result.MessageType == WebSocketMessageType.Binary) ReadBinary(payload);
         }
     }
 
@@ -219,13 +277,33 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
         try
         {
             JsonNode? root = JsonNode.Parse(Encoding.UTF8.GetString(payload));
-            if (root?["type"]?.GetValue<string>() != "peers" || root["ids"] is not JsonArray ids)
-                return;
-            var peers = ids.Select(node => node?.GetValue<uint>() ?? 0)
-                           .Where(id => id != 0 && id != _senderId).ToArray();
+            if (root?["type"]?.GetValue<string>() != "peers") return;
+            _screenRelaySupported = root["screen"]?.GetValue<bool>() == true;
+            var peers = new Dictionary<uint, string>();
+            if (root["members"] is JsonArray members)
+                foreach (JsonNode? node in members)
+                {
+                    uint id = node?["id"]?.GetValue<uint>() ?? 0;
+                    if (id == 0 || id == _senderId) continue;
+                    peers[id] = node?["nick"]?.GetValue<string>()?.Trim() ?? "";
+                }
+            // Compatibilidade com o servidor 0.6.25, que enviava apenas ids.
+            if (root["ids"] is JsonArray ids)
+                foreach (JsonNode? node in ids)
+                {
+                    uint id = node?.GetValue<uint>() ?? 0;
+                    if (id != 0 && id != _senderId) peers.TryAdd(id, "");
+                }
             SetConnected(true, peers);
         }
         catch (Exception ex) { Log.Write("relay voz: snapshot: " + ex.Message); }
+    }
+
+    private void ReadBinary(byte[] packet)
+    {
+        if (packet.Length < 1) return;
+        if (packet[0] == AudioPacket) ReadAudio(packet);
+        else if (packet[0] == ScreenPacket) ReadScreen(packet);
     }
 
     private void ReadAudio(byte[] packet)
@@ -234,7 +312,11 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
         uint sender = BinaryPrimitives.ReadUInt32LittleEndian(packet.AsSpan(1, 4));
         if (sender == 0 || sender == _senderId) return;
         bool discovered;
-        lock (_peerLock) discovered = _relayPeers.Add(sender);
+        lock (_peerLock)
+        {
+            discovered = !_relayPeers.ContainsKey(sender);
+            _relayPeers.TryAdd(sender, "");
+        }
         if (discovered) StateChanged?.Invoke();
         ushort sequence = BinaryPrimitives.ReadUInt16LittleEndian(packet.AsSpan(5, 2));
 
@@ -260,6 +342,17 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
         catch (Exception ex) { Log.Write("relay voz: decode: " + ex.Message); }
     }
 
+    private void ReadScreen(byte[] packet)
+    {
+        if (packet.Length <= ScreenHeaderBytes) return;
+        uint sender = BinaryPrimitives.ReadUInt32LittleEndian(packet.AsSpan(1, 4));
+        if (sender == 0 || sender == _senderId) return;
+        int width = BinaryPrimitives.ReadUInt16LittleEndian(packet.AsSpan(5, 2));
+        int height = BinaryPrimitives.ReadUInt16LittleEndian(packet.AsSpan(7, 2));
+        byte[] payload = packet.AsSpan(ScreenHeaderBytes).ToArray();
+        ScreenFrameReceived?.Invoke(sender, payload, width, height);
+    }
+
     private void Emit(uint sender, DecoderState state, int samples)
     {
         if (samples <= 0 || samples * 2 > state.Bytes.Length) return;
@@ -272,7 +365,7 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
         VoiceReceived?.Invoke(sender, state.Bytes, 0, samples * 2);
     }
 
-    private void SetConnected(bool connected, IReadOnlyCollection<uint>? peers)
+    private void SetConnected(bool connected, IReadOnlyDictionary<uint, string>? peers)
     {
         bool changed;
         lock (_peerLock)
@@ -281,9 +374,11 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
             _connected = connected;
             if (peers != null)
             {
-                changed |= !_relayPeers.SetEquals(peers);
+                changed |= _relayPeers.Count != peers.Count
+                    || peers.Any(pair => !_relayPeers.TryGetValue(pair.Key, out string? nick)
+                                      || !string.Equals(nick, pair.Value, StringComparison.Ordinal));
                 _relayPeers.Clear();
-                _relayPeers.UnionWith(peers);
+                foreach (var pair in peers) _relayPeers[pair.Key] = pair.Value;
             }
             else if (_relayPeers.Count > 0)
             {
@@ -293,7 +388,9 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
         }
         if (!connected)
         {
+            _screenRelaySupported = false;
             while (_outgoing.Reader.TryRead(out _)) { }
+            while (_screenOutgoing.Reader.TryRead(out _)) { }
             _mic.Reset();
         }
         if (changed) StateChanged?.Invoke();
@@ -305,6 +402,7 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
         _running = false;
         try { _cts?.Cancel(); } catch { }
         _outgoing.Writer.TryComplete();
+        _screenOutgoing.Writer.TryComplete();
         SetConnected(false, null);
     }
 
@@ -348,8 +446,15 @@ public sealed class ResilientVoiceTransport : IVoiceTransport, IDisposable
     }
 
     public bool Connected => _relay.Connected;
+    public bool ScreenRelaySupported => _relay.ScreenRelaySupported;
     public int ConnectedPeerCount => _relay.ConnectedPeerCount;
+    public IReadOnlyDictionary<uint, string> RelayPeers => _relay.Peers;
     public event Action<uint, byte[], int, int>? VoiceReceived;
+    public event Action<uint, byte[], int, int>? ScreenFrameReceived
+    {
+        add => _relay.ScreenFrameReceived += value;
+        remove => _relay.ScreenFrameReceived -= value;
+    }
     public event Action? StateChanged
     {
         add => _relay.StateChanged += value;
@@ -358,6 +463,18 @@ public sealed class ResilientVoiceTransport : IVoiceTransport, IDisposable
 
     public bool HasRelayPeer(uint senderId) => _relay.HasPeer(senderId);
     public void Start() => _relay.Start();
+
+    public void SendScreenFrame(byte[] payload, int length, int width, int height)
+    {
+        if (_relay.ScreenRelaySupported)
+            _relay.SendScreenFrame(payload, length, width, height);
+        // Cliente antigo ou participante ainda ausente do relay continua recebendo
+        // pela malha direta durante a atualizacao mista.
+        var peers = _presence.Peers;
+        if (!_relay.ScreenRelaySupported
+            || peers.Any(peer => !_relay.HasPeer(peer.SenderId)))
+            _presence.SendScreenFrame(payload, length, width, height);
+    }
 
     public void SendVoice(byte[] payload, int offset, int count)
     {

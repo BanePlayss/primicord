@@ -91,10 +91,11 @@ public sealed class RoomUxTests
             new() { Id = "4", Nick = "celin", Text = "gg demais 🔥", At = now },
         }, "bane");
         var activity = new RoomActivityView();
-        activity.UpdateSnapshot(6, "Voz WebRTC · Opus");
         var baneJoined = new DateTimeOffset(2026, 8, 19, 21, 40, 0, TimeSpan.FromHours(-3));
         var mohamedJoined = baneJoined.AddMinutes(5);
         activity.Reset("bane", baneJoined);
+        activity.UpdateSnapshot(6, "Voz WebRTC · Opus");
+        Assert.Equal(6, activity.Participants);
         activity.RecordJoin("mohamed", mohamedJoined);
         // Um snapshot atrasado nao pode apagar quem entrou depois.
         activity.RecordJoin("ricle", baneJoined.AddMinutes(2));

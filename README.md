@@ -3,6 +3,20 @@
 O Discord dos primitivos — app nativo de Windows pra sala de voz em grupo,
 compartilhar tela e tirar clipe dos últimos segundos.
 
+## 0.6.26 — participantes e tela pelo relay
+
+- A lista de participantes do relay passa a levar `id + nick`; cards, cabeçalho e
+  atividade da sala usam essa chamada real mesmo quando a presença P2P não chega.
+- Corrige a sala mostrando `1/8` e “1 participante” enquanto duas pessoas já estão
+  juntas e aparecem na coluna de voz.
+- O compartilhamento de tela passa pelo mesmo WebSocket do relay, sem depender de
+  rota UDP, porta de entrada ou hole punching entre os dois PCs.
+- Voz tem prioridade na fila; quadros de tela atrasados são descartados para não
+  acumular latência nem prejudicar a conversa.
+- O palco abre ao receber tela pelo relay e fecha sozinho quando os quadros param.
+- Voz e contagem continuam compatíveis com a 0.6.25 durante a atualização gradual;
+  para receber a tela pelo relay, os dois participantes precisam atualizar.
+
 ## 0.6.25 — cota protegida e relay estável
 
 - Salas, presença, chat e sinalização deixam de usar o Firestore até como fallback:

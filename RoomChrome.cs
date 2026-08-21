@@ -87,6 +87,9 @@ public sealed class RoomActivityView : Control
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public DateTimeOffset? LastJoinedAt { get; private set; }
 
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public int Participants => _participants;
+
     public RoomActivityView()
     {
         Dock = DockStyle.Bottom;

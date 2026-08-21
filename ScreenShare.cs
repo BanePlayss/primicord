@@ -69,6 +69,7 @@ public sealed class ScreenSender : IDisposable
     public bool LanSession { get; private set; }
 
     private readonly RoomSession _session;
+    private readonly ResilientVoiceTransport? _relay;
     private readonly CaptureTarget _target;
     private Thread? _thread;
     private volatile bool _running;
@@ -107,9 +108,11 @@ public sealed class ScreenSender : IDisposable
     /// <summary>Avisa quando o alvo sumiu (janela fechada) pra UI parar sozinha.</summary>
     public event Action? TargetLost;
 
-    public ScreenSender(RoomSession session, CaptureTarget target)
+    public ScreenSender(RoomSession session, CaptureTarget target,
+                        ResilientVoiceTransport? relay = null)
     {
         _session = session;
+        _relay = relay;
         _target = target;
         _jpegCodec = ImageCodecInfo.GetImageEncoders().First(c => c.FormatID == ImageFormat.Jpeg.Guid);
     }
@@ -241,9 +244,12 @@ public sealed class ScreenSender : IDisposable
                 tScale.Stop();
                 MsScale = (int)tScale.ElapsedMilliseconds;
 
-                int viewers = Math.Max(1, _session.Peers.Count(p => p.Locked != null));
-                bool newViewer = viewers > lastViewers;
-                lastViewers = viewers;
+                int directViewers = _session.Peers.Count(p => p.Locked != null);
+                int relayViewers = _relay?.ScreenRelaySupported == true
+                    ? _relay.ConnectedPeerCount : 0;
+                int audience = Math.Max(directViewers, relayViewers);
+                bool newViewer = audience > lastViewers;
+                lastViewers = audience;
 
                 if (prev.Length < total) { prev = new byte[total]; primed = false; }
                 // Entrou gente nova (ou mudou a resolucao): tudo precisa ir de novo.
@@ -254,10 +260,12 @@ public sealed class ScreenSender : IDisposable
                 // entao o movimento continua fluido em vez de travar esperando.
                 // Sessao em LAN: todos os espectadores conectaram por endereco privado.
                 var conectados = _session.Peers.Where(p => p.Locked != null).ToList();
-                LanSession = conectados.Count > 0 && conectados.All(p => p.OnLan);
+                LanSession = relayViewers == 0 && conectados.Count > 0 && conectados.All(p => p.OnLan);
 
                 int budget = LanSession ? LanBudget : TotalUploadBudget;
-                int perViewer = budget / Math.Max(1, viewers);
+                // Pelo relay o remetente sobe uma copia e o mini servidor distribui;
+                // o numero de espectadores nao multiplica o upload deste PC.
+                int perViewer = relayViewers > 0 ? budget : budget / Math.Max(1, directViewers);
                 int frameBudget = Math.Max(12_000, perViewer / Math.Max(1, TargetFps));
 
                 var tCmp = System.Diagnostics.Stopwatch.StartNew();
@@ -341,7 +349,8 @@ public sealed class ScreenSender : IDisposable
                     buf[6] = (byte)outH; buf[7] = (byte)(outH >> 8);
 
                     int plen = (int)payload.Length;
-                    _session.SendScreenFrame(buf, plen, outW, outH);
+                    if (_relay != null) _relay.SendScreenFrame(buf, plen, outW, outH);
+                    else _session.SendScreenFrame(buf, plen, outW, outH);
                     bytesSec += plen;
                 }
 
@@ -501,6 +510,15 @@ public sealed class ScreenReceiver : IDisposable
     private readonly Dictionary<uint, Canvas> _canvases = new();
 
     public event Action<uint>? FrameUpdated;
+
+    /// <summary>true enquanto esta pessoa continua entregando blocos de tela.</summary>
+    public bool IsActive(uint senderId, int staleAfterMs = 3_000)
+    {
+        lock (_lock)
+            return _canvases.TryGetValue(senderId, out Canvas? canvas)
+                && DateTime.UtcNow.Ticks - canvas.LastTicks
+                   < TimeSpan.TicksPerMillisecond * staleAfterMs;
+    }
 
     /// <summary>Aplica um pacote de blocos. Devolve false se o pacote veio estranho.</summary>
     public bool OnUpdate(uint senderId, byte[] payload, int w, int h)
