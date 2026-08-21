@@ -17,33 +17,40 @@ public sealed class MemberPresence
     public string Nick = "";
     public long LastSeen;
     public string Room = "";          // sala de voz em que esta, "" se nenhuma
-    public bool Online => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - LastSeen < 60_000;
+    public bool Online => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - LastSeen < 150_000;
 }
 
 /// <summary>
 /// Chat geral, mensagens diretas e presenca global (quem esta com o app aberto).
 /// </summary>
 /// <remarks>
-/// Tudo no Firestore, por POLLING (o REST nao tem listener em tempo real). Ids de
+/// Tudo nas replicas SQLite do Primicord, por polling. Ids de
 /// mensagem sao `{timestamp:D13}-{aleatorio}`, entao a ordem alfabetica do id JA e a
 /// ordem cronologica — da pra pedir as 60 mais recentes com `orderBy=__name__ desc`
 /// em vez de baixar o historico inteiro.
 ///
-/// PRIVACIDADE — LEIA: as DMs NAO sao privadas de verdade. O app nao usa Firebase
-/// Auth (o login e nick+senha conferido no cliente), entao a rules nao tem como
-/// saber quem esta pedindo e a leitura precisa ficar publica. Qualquer um que saiba
-/// mexer no Firestore consegue ler as conversas. Serve pra combinar jogo, nao pra
-/// segredo. A UI avisa isso no topo da DM.
+/// PRIVACIDADE — LEIA: as DMs NAO sao privadas de verdade. Elas sao replicadas
+/// entre os PCs do grupo para sobreviver a quedas, sem criptografia ponta-a-ponta
+/// por conversa. Serve pra combinar jogo, nao pra segredo.
 /// </remarks>
 public sealed class ChatService
 {
     public const string GeneralChannel = "geral";
     private const int RecentCount = 60;
 
-    private readonly Firestore _fs;
+    private readonly IDocumentStore _fs;
     private readonly string _myNick;
+    private readonly SemaphoreSlim _readGate = new(1, 1);
+    private readonly Dictionary<string, ChatCache> _cache = new(StringComparer.Ordinal);
 
-    public ChatService(Firestore fs, string myNick)
+    private sealed class ChatCache
+    {
+        public bool Loaded;
+        public long LatestAt;
+        public readonly List<ChatMessage> Messages = new();
+    }
+
+    public ChatService(IDocumentStore fs, string myNick)
     {
         _fs = fs;
         _myNick = myNick.ToLowerInvariant();
@@ -52,6 +59,12 @@ public sealed class ChatService
     // ─── CAMINHOS ────────────────────────────────────────────────────────────
 
     private static string ChannelMsgs(string channel) => $"pc_chat/{channel}/msgs";
+
+    /// <summary>Canal textual isolado da sala, dentro do sistema de chat existente.</summary>
+    public static string RoomChannel(string roomId)
+        => "sala-" + Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(roomId))
+        ).AsSpan(0, 10).ToString().ToLowerInvariant();
 
     /// <summary>
     /// Caminho da DM. A chave e o par de nicks em ordem alfabetica, pros dois lados
@@ -80,33 +93,42 @@ public sealed class ChatService
     /// <summary>Le as mensagens mais recentes; a ordenacao e o limite vao no servidor.</summary>
     private async Task<List<ChatMessage>> ReadAsync(string parentPath, CancellationToken ct)
     {
-        List<(string Id, Dictionary<string, object?> Fields)> docs;
+        await _readGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            docs = await _fs.QueryAsync(parentPath, "msgs", "at", descending: true, RecentCount, ct)
-                            .ConfigureAwait(false);
-        }
-        catch (FirestoreException ex) when (!ex.IsPermissionDenied)
-        {
-            // Conversa nova ainda nao tem a colecao — listar devolve vazio sem erro.
-            Log.Write("chat: consulta falhou, tentando listagem simples: " + ex.Message);
-            docs = await _fs.ListAsync(parentPath + "/msgs", RecentCount, ct).ConfigureAwait(false);
-        }
-        var msgs = new List<ChatMessage>(docs.Count);
-        foreach (var (id, f) in docs)
-        {
-            msgs.Add(new ChatMessage
+            if (!_cache.TryGetValue(parentPath, out var cache))
             {
-                Id = id,
-                Nick = Firestore.Str(f, "nick", "?"),
-                Text = Firestore.Str(f, "text"),
-                At = Firestore.Num(f, "at"),
-            });
+                cache = new ChatCache();
+                _cache[parentPath] = cache;
+            }
+
+            List<(string Id, Dictionary<string, object?> Fields)> docs = cache.Loaded
+                ? await _fs.QuerySinceAsync(parentPath, "msgs", "at", cache.LatestAt,
+                                            RecentCount, ct).ConfigureAwait(false)
+                : await _fs.QueryAsync(parentPath, "msgs", "at", descending: true,
+                                       RecentCount, ct).ConfigureAwait(false);
+
+            var byId = cache.Messages.ToDictionary(m => m.Id, StringComparer.Ordinal);
+            foreach (var (id, f) in docs)
+            {
+                byId[id] = new ChatMessage
+                {
+                    Id = id,
+                    Nick = Firestore.Str(f, "nick", "?"),
+                    Text = Firestore.Str(f, "text"),
+                    At = Firestore.Num(f, "at"),
+                };
+            }
+
+            cache.Messages.Clear();
+            cache.Messages.AddRange(byId.Values.OrderBy(m => m.At).ThenBy(m => m.Id));
+            if (cache.Messages.Count > RecentCount)
+                cache.Messages.RemoveRange(0, cache.Messages.Count - RecentCount);
+            cache.LatestAt = cache.Messages.Count > 0 ? cache.Messages[^1].At : 0;
+            cache.Loaded = true;
+            return cache.Messages.ToList();
         }
-        // Veio do mais novo pro mais velho (ou sem ordem, no fallback): normaliza.
-        msgs.Sort((x, y) => x.At != y.At ? x.At.CompareTo(y.At) : string.CompareOrdinal(x.Id, y.Id));
-        if (msgs.Count > RecentCount) msgs.RemoveRange(0, msgs.Count - RecentCount);
-        return msgs;
+        finally { _readGate.Release(); }
     }
 
     // ─── ESCREVER ────────────────────────────────────────────────────────────

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Primicord.Setup</AssemblyName>
+    <RootNamespace>Primicord.Installer</RootNamespace>
+    <Version>0.7.1</Version>
+    <ApplicationIcon>..\Primicord.ico</ApplicationIcon>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <IlcOptimizationPreference>Size</IlcOptimizationPreference>
+  </PropertyGroup>
+  <ItemGroup Condition="Exists('$(PrimicordSetupPath)')">
+    <EmbeddedResource Include="$(PrimicordSetupPath)" LogicalName="Primicord.Velopack.Setup.exe" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\GroupInvitePackage.cs" Link="GroupInvitePackage.cs" />
+    <Compile Include="..\GroupActivation.cs" Link="GroupActivation.cs" />
+    <Compile Include="..\NetworkFirewall.cs" Link="NetworkFirewall.cs" />
+  </ItemGroup>
+</Project>

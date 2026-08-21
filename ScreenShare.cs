@@ -69,6 +69,7 @@ public sealed class ScreenSender : IDisposable
     public bool LanSession { get; private set; }
 
     private readonly RoomSession _session;
+    private readonly ResilientVoiceTransport? _relay;
     private readonly CaptureTarget _target;
     private Thread? _thread;
     private volatile bool _running;
@@ -81,6 +82,13 @@ public sealed class ScreenSender : IDisposable
     public bool NeedFullFrames { get; set; }
 
     public event Action<byte[], int, int>? FullFrameProduced;
+
+    /// <summary>
+    /// Previa local em baixa frequencia. E separada do buffer de clipe para quem
+    /// desligou clips ainda enxergar o que esta transmitindo sem pagar um JPEG
+    /// completo extra nos 30 quadros de cada segundo.
+    /// </summary>
+    public event Action<byte[], int, int>? PreviewFrameProduced;
 
     public int Fps { get; private set; }
     public int KbPerSecond { get; private set; }
@@ -100,9 +108,11 @@ public sealed class ScreenSender : IDisposable
     /// <summary>Avisa quando o alvo sumiu (janela fechada) pra UI parar sozinha.</summary>
     public event Action? TargetLost;
 
-    public ScreenSender(RoomSession session, CaptureTarget target)
+    public ScreenSender(RoomSession session, CaptureTarget target,
+                        ResilientVoiceTransport? relay = null)
     {
         _session = session;
+        _relay = relay;
         _target = target;
         _jpegCodec = ImageCodecInfo.GetImageEncoders().First(c => c.FormatID == ImageFormat.Jpeg.Guid);
     }
@@ -151,6 +161,7 @@ public sealed class ScreenSender : IDisposable
         long lastStat = Environment.TickCount64;
         int framesSec = 0, bytesSec = 0;
         int overBudgetStreak = 0, underBudgetStreak = 0;
+        long nextPreview = 0;
 
         void Rebuild(int targetW, int targetH, int ladderIdx)
         {
@@ -233,9 +244,12 @@ public sealed class ScreenSender : IDisposable
                 tScale.Stop();
                 MsScale = (int)tScale.ElapsedMilliseconds;
 
-                int viewers = Math.Max(1, _session.Peers.Count(p => p.Locked != null));
-                bool newViewer = viewers > lastViewers;
-                lastViewers = viewers;
+                int directViewers = _session.Peers.Count(p => p.Locked != null);
+                int relayViewers = _relay?.ScreenRelaySupported == true
+                    ? _relay.ConnectedPeerCount : 0;
+                int audience = Math.Max(directViewers, relayViewers);
+                bool newViewer = audience > lastViewers;
+                lastViewers = audience;
 
                 if (prev.Length < total) { prev = new byte[total]; primed = false; }
                 // Entrou gente nova (ou mudou a resolucao): tudo precisa ir de novo.
@@ -246,10 +260,12 @@ public sealed class ScreenSender : IDisposable
                 // entao o movimento continua fluido em vez de travar esperando.
                 // Sessao em LAN: todos os espectadores conectaram por endereco privado.
                 var conectados = _session.Peers.Where(p => p.Locked != null).ToList();
-                LanSession = conectados.Count > 0 && conectados.All(p => p.OnLan);
+                LanSession = relayViewers == 0 && conectados.Count > 0 && conectados.All(p => p.OnLan);
 
                 int budget = LanSession ? LanBudget : TotalUploadBudget;
-                int perViewer = budget / Math.Max(1, viewers);
+                // Pelo relay o remetente sobe uma copia e o mini servidor distribui;
+                // o numero de espectadores nao multiplica o upload deste PC.
+                int perViewer = relayViewers > 0 ? budget : budget / Math.Max(1, directViewers);
                 int frameBudget = Math.Max(12_000, perViewer / Math.Max(1, TargetFps));
 
                 var tCmp = System.Diagnostics.Stopwatch.StartNew();
@@ -333,7 +349,8 @@ public sealed class ScreenSender : IDisposable
                     buf[6] = (byte)outH; buf[7] = (byte)(outH >> 8);
 
                     int plen = (int)payload.Length;
-                    _session.SendScreenFrame(buf, plen, outW, outH);
+                    if (_relay != null) _relay.SendScreenFrame(buf, plen, outW, outH);
+                    else _session.SendScreenFrame(buf, plen, outW, outH);
                     bytesSec += plen;
                 }
 
@@ -379,12 +396,20 @@ public sealed class ScreenSender : IDisposable
                     }
                 }
 
-                if (NeedFullFrames)
+                long now = Environment.TickCount64;
+                bool previewDue = PreviewFrameProduced != null && now >= nextPreview;
+                if (NeedFullFrames || previewDue)
                 {
                     tileMs.SetLength(0);
                     ep.Param[0] = new EncoderParameter(Encoder.Quality, 70L);
                     scaled.Save(tileMs, _jpegCodec, ep);
-                    FullFrameProduced?.Invoke(tileMs.ToArray(), outW, outH);
+                    byte[] full = tileMs.ToArray();
+                    if (NeedFullFrames) FullFrameProduced?.Invoke(full, outW, outH);
+                    if (previewDue)
+                    {
+                        nextPreview = now + 125; // 8 fps: fluido sem roubar CPU da transmissao
+                        PreviewFrameProduced?.Invoke(full, outW, outH);
+                    }
                 }
 
                 framesSec++;
@@ -486,6 +511,15 @@ public sealed class ScreenReceiver : IDisposable
 
     public event Action<uint>? FrameUpdated;
 
+    /// <summary>true enquanto esta pessoa continua entregando blocos de tela.</summary>
+    public bool IsActive(uint senderId, int staleAfterMs = 3_000)
+    {
+        lock (_lock)
+            return _canvases.TryGetValue(senderId, out Canvas? canvas)
+                && DateTime.UtcNow.Ticks - canvas.LastTicks
+                   < TimeSpan.TicksPerMillisecond * staleAfterMs;
+    }
+
     /// <summary>Aplica um pacote de blocos. Devolve false se o pacote veio estranho.</summary>
     public bool OnUpdate(uint senderId, byte[] payload, int w, int h)
     {
@@ -544,14 +578,19 @@ public sealed class ScreenReceiver : IDisposable
         return true;
     }
 
-    /// <summary>Tela de alguem, ou null se parou de mandar ha mais de 4s.</summary>
-    public Bitmap? FrameOf(uint senderId)
+    /// <summary>
+    /// Usa a tela de alguem sob o mesmo bloqueio que aplica os blocos recebidos.
+    /// O GDI+ nao permite desenhar um Bitmap enquanto outro Graphics o altera;
+    /// manter a pintura dentro deste callback evita o X vermelho do WinForms.
+    /// </summary>
+    public bool UseFrame(uint senderId, Action<Bitmap> use)
     {
         lock (_lock)
         {
-            if (!_canvases.TryGetValue(senderId, out var c)) return null;
-            if (DateTime.UtcNow.Ticks - c.LastTicks > TimeSpan.TicksPerSecond * 4) return null;
-            return c.Bmp;
+            if (!_canvases.TryGetValue(senderId, out var c)) return false;
+            if (DateTime.UtcNow.Ticks - c.LastTicks > TimeSpan.TicksPerSecond * 4) return false;
+            use(c.Bmp);
+            return true;
         }
     }
 

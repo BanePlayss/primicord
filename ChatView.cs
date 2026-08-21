@@ -14,47 +14,72 @@ namespace Primicord;
 /// </remarks>
 public sealed class ChatView : Panel
 {
-    private readonly MessageCanvas _canvas = new();
+    private readonly MessageCanvas _canvas;
     private readonly PrimInput _composer;
     private readonly Label _header = new();
     private readonly Label _subheader = new();
 
     public event Func<string, Task>? Send;
 
-    public ChatView()
+    public ChatView(bool compact = false)
     {
         BackColor = Pv.Charcoal;
 
-        var head = new Panel { Dock = DockStyle.Top, Height = 56, BackColor = Pv.Charcoal };
+        var head = new Panel
+        {
+            Dock = DockStyle.Top, Height = compact ? 44 : 56,
+            BackColor = compact ? Pv.Char2 : Pv.Charcoal,
+        };
         head.Paint += (_, e) =>
         {
             using var p = new Pen(Pv.Char3, 2);
             e.Graphics.DrawLine(p, 0, head.Height - 1, head.Width, head.Height - 1);
         };
-        _header.Font = Pv.DisplaySm;
-        _header.ForeColor = Pv.Bone;
+        _header.Font = compact ? Pv.Label : Pv.DisplaySm;
+        _header.ForeColor = compact ? Pv.Red : Pv.Bone;
         _header.AutoSize = true;
-        _header.Location = new Point(20, 10);
+        _header.Location = compact ? new Point(14, 16) : new Point(20, 10);
         _subheader.Font = Pv.Body;
         _subheader.ForeColor = Pv.BoneDim;
         _subheader.AutoSize = true;
         _subheader.Location = new Point(20, 33);
+        _subheader.Visible = !compact;
         head.Controls.AddRange(new Control[] { _header, _subheader });
 
-        var bottom = new Panel { Dock = DockStyle.Bottom, Height = 62, BackColor = Pv.Charcoal,
-                                 Padding = new Padding(16, 8, 16, 16) };
-        _composer = new PrimInput("Manda a braba...") { Dock = DockStyle.Fill };
-        _composer.Box.KeyDown += async (_, e) =>
+        var bottom = new Panel
         {
-            if (e.KeyCode != Keys.Enter || e.Shift) return;
-            e.SuppressKeyPress = true;
+            Dock = DockStyle.Bottom, Height = compact ? 56 : 62,
+            BackColor = compact ? Pv.Char2 : Pv.Charcoal,
+            Padding = compact ? new Padding(10, 8, 10, 10) : new Padding(16, 8, 16, 16),
+        };
+        _composer = new PrimInput("Manda a braba...") { Dock = DockStyle.Fill };
+        async Task SendCurrentAsync()
+        {
             string text = _composer.Value;
             if (text.Trim().Length == 0) return;
             _composer.Value = "";
             if (Send != null) await Send(text);
+        }
+        _composer.Box.KeyDown += async (_, e) =>
+        {
+            if (e.KeyCode != Keys.Enter || e.Shift) return;
+            e.SuppressKeyPress = true;
+            await SendCurrentAsync();
         };
+        PrimButton? sendButton = null;
+        if (compact)
+        {
+            sendButton = new PrimButton("›", PrimButton.Style.Ghost)
+            {
+                Dock = DockStyle.Right, Width = 34, Height = 38,
+                Margin = Padding.Empty,
+            };
+            sendButton.Click += async (_, _) => await SendCurrentAsync();
+        }
         bottom.Controls.Add(_composer);
+        if (sendButton != null) bottom.Controls.Add(sendButton);
 
+        _canvas = new MessageCanvas(compact);
         _canvas.Dock = DockStyle.Fill;
 
         Controls.Add(_canvas);
@@ -87,15 +112,20 @@ public sealed class ChatView : Panel
         private bool _stickToBottom = true;
         private string _lastSignature = "";
 
-        private const int AvatarSize = 38;
-        private const int LeftPad = 20;
-        private const int TextLeft = LeftPad + AvatarSize + 14;
+        private readonly int _avatarSize;
+        private readonly int _leftPad;
+        private readonly int _textLeft;
+        private readonly int _groupGap;
         private const int GroupGapMs = 5 * 60 * 1000;
 
-        public MessageCanvas()
+        public MessageCanvas(bool compact)
         {
+            _avatarSize = compact ? 28 : 38;
+            _leftPad = compact ? 12 : 20;
+            _textLeft = _leftPad + _avatarSize + (compact ? 9 : 14);
+            _groupGap = compact ? 6 : 10;
             AutoScroll = true;
-            BackColor = Pv.Charcoal;
+            BackColor = compact ? Pv.Char2 : Pv.Charcoal;
             DoubleBuffered = true;
             SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
         }
@@ -130,12 +160,12 @@ public sealed class ChatView : Panel
         {
             using var g = CreateGraphics();
             int y = 12;
-            int wrapWidth = Math.Max(120, ClientSize.Width - TextLeft - 24);
+            int wrapWidth = Math.Max(100, ClientSize.Width - _textLeft - 14);
 
             for (int i = 0; i < _msgs.Count; i++)
             {
                 bool grouped = IsGrouped(i);
-                if (!grouped && i > 0) y += 10;
+                if (!grouped && i > 0) y += _groupGap;
                 if (!grouped) y += 22;                      // linha do nome
                 var sz = g.MeasureString(_msgs[i].Text, Pv.Body, wrapWidth);
                 y += (int)Math.Ceiling(sz.Height) + 4;
@@ -168,18 +198,18 @@ public sealed class ChatView : Panel
             if (_msgs.Count == 0)
             {
                 using var b = new SolidBrush(Pv.BoneDim);
-                g.DrawString("Ninguem falou nada ainda. Quebra o gelo.", Pv.Body, b, LeftPad, 20);
+                g.DrawString("Ninguem falou nada ainda. Quebra o gelo.", Pv.Body, b, _leftPad, 20);
                 return;
             }
 
             int y = 12 + AutoScrollPosition.Y;
-            int wrapWidth = Math.Max(120, ClientSize.Width - TextLeft - 24);
+            int wrapWidth = Math.Max(100, ClientSize.Width - _textLeft - 14);
 
             for (int i = 0; i < _msgs.Count; i++)
             {
                 var m = _msgs[i];
                 bool grouped = IsGrouped(i);
-                if (!grouped && i > 0) y += 10;
+                if (!grouped && i > 0) y += _groupGap;
 
                 var sz = g.MeasureString(m.Text, Pv.Body, wrapWidth);
                 int blockH = (int)Math.Ceiling(sz.Height) + 4 + (grouped ? 0 : 22);
@@ -191,7 +221,7 @@ public sealed class ChatView : Panel
                 if (!grouped)
                 {
                     var photo = Primitivao.AvatarFor(m.Nick);
-                    var ac = new Rectangle(LeftPad, y, AvatarSize, AvatarSize);
+                    var ac = new Rectangle(_leftPad, y, _avatarSize, _avatarSize);
                     if (photo != null)
                     {
                         using var clip = new GraphicsPath();
@@ -208,27 +238,27 @@ public sealed class ChatView : Panel
                     {
                         using var b = new SolidBrush(Pv.Orange);
                         g.FillEllipse(b, ac);
-                        using var f = new Font("Bahnschrift", 15f, FontStyle.Bold);
+                        using var f = new Font("Bahnschrift", Math.Max(11f, _avatarSize * .4f), FontStyle.Bold);
                         using var tb = new SolidBrush(Pv.Charcoal);
                         string ini = m.Nick.Length > 0 ? m.Nick[..1].ToUpperInvariant() : "?";
                         var isz = g.MeasureString(ini, f);
-                        g.DrawString(ini, f, tb, ac.X + (AvatarSize - isz.Width) / 2,
-                                     ac.Y + (AvatarSize - isz.Height) / 2);
+                        g.DrawString(ini, f, tb, ac.X + (_avatarSize - isz.Width) / 2,
+                                     ac.Y + (_avatarSize - isz.Height) / 2);
                     }
 
                     bool isMe = string.Equals(m.Nick, _myNick, StringComparison.OrdinalIgnoreCase);
                     using (var b = new SolidBrush(isMe ? Pv.Orange : Pv.Bone))
-                        g.DrawString(m.Nick.ToUpperInvariant(), Pv.BodyBold, b, TextLeft, y - 2);
+                        g.DrawString(m.Nick, Pv.BodyBold, b, _textLeft, y - 2);
 
-                    float nameW = g.MeasureString(m.Nick.ToUpperInvariant(), Pv.BodyBold).Width;
+                    float nameW = g.MeasureString(m.Nick, Pv.BodyBold).Width;
                     using (var b = new SolidBrush(Pv.BoneDim))
-                        g.DrawString(m.Local.ToString("HH:mm"), Pv.Label, b, TextLeft + nameW + 6, y + 3);
+                        g.DrawString(m.Local.ToString("HH:mm"), Pv.Label, b, _textLeft + nameW + 6, y + 3);
 
                     y += 22;
                 }
 
                 using (var b = new SolidBrush(Pv.Bone))
-                    g.DrawString(m.Text, Pv.Body, b, new RectangleF(TextLeft, y, wrapWidth, sz.Height + 4));
+                    g.DrawString(m.Text, Pv.Body, b, new RectangleF(_textLeft, y, wrapWidth, sz.Height + 4));
                 y += (int)Math.Ceiling(sz.Height) + 4;
             }
         }

@@ -41,11 +41,39 @@ public sealed class VoiceEngine : IDisposable
     private readonly FrameAccumulator _micAcc = new();
     private readonly byte[] _sendBuf = new byte[FrameBytes];
 
-    private RoomSession? _session;
+    /// <summary>Tira eco e ruido do microfone. null = tratamento desligado no config.</summary>
+    private MicPreprocessor? _preproc;
+
+    /// <summary>Ligar o tratamento do microfone (cancelar eco, tirar ruido).</summary>
+    public bool PreprocessMic { get; init; } = true;
+
+    /// <summary>
+    /// Nivelar o volume do microfone. Desligado por padrao porque atrapalha o
+    /// cancelamento de eco — ver <see cref="MicPreprocessor.AutoGain"/>.
+    /// </summary>
+    public bool MicAutoGain { get; init; }
+
+    /// <summary>true se o tratamento subiu de verdade (a nativa do Speex carregou).</summary>
+    public bool MicPreprocessActive => _preproc?.Active == true;
+
+    /// <summary>
+    /// Por onde a voz vai e vem. Pode ser a malha UDP (<see cref="RoomSession"/>) ou
+    /// o WebRTC (<see cref="WebRtcVoiceMesh"/>) — daqui os dois sao a mesma coisa.
+    /// </summary>
+    private IVoiceTransport? _voiceTx;
+
+    /// <summary>
+    /// A musica do DJ continua vindo pela malha UDP mesmo quando a voz migrou pro
+    /// WebRTC: e um fluxo separado, com volume proprio, e a malha segue de pe pra
+    /// carregar tela e cinema de qualquer jeito.
+    /// </summary>
+    private ISharedAudioTransport? _musicSource;
+
     private volatile bool _running;
 
     private readonly object _streamsLock = new();
     private readonly Dictionary<uint, PeerStream> _streams = new();
+    private readonly Dictionary<uint, float> _peerVolumes = new();
 
     /// <summary>Nivel do meu microfone (0..1) — pra barrinha e "estou falando".</summary>
     public float MyPeak { get; private set; }
@@ -68,10 +96,28 @@ public sealed class VoiceEngine : IDisposable
             _musicVolume = Math.Clamp(value, 0f, 2f);
             lock (_streamsLock)
                 foreach (var (key, st) in _streams)
-                    if ((key & MusicFlag) != 0) st.Volume.Volume = _musicVolume;
+                    if ((key & MusicFlag) != 0)
+                    {
+                        st.TargetVolume = _musicVolume;
+                        st.Volume.Volume = _outputMuted ? 0f : st.TargetVolume;
+                    }
         }
     }
     private float _musicVolume = 0.7f;
+    private bool _outputMuted;
+
+    /// <summary>Silencia/restaura tudo que vem da sala sem mexer no microfone.</summary>
+    public bool OutputMuted
+    {
+        get => _outputMuted;
+        set
+        {
+            _outputMuted = value;
+            lock (_streamsLock)
+                foreach (var st in _streams.Values)
+                    st.Volume.Volume = value ? 0f : st.TargetVolume;
+        }
+    }
 
     /// <summary>
     /// Bit que separa a musica da voz da MESMA pessoa. O DJ manda dois fluxos ao
@@ -83,6 +129,7 @@ public sealed class VoiceEngine : IDisposable
     {
         public BufferedWaveProvider Jitter = null!;
         public VolumeSampleProvider Volume = null!;
+        public float TargetVolume = 1f;
         public bool Primed;
         public float Peak;
         public long LastAudioTicks;
@@ -125,9 +172,16 @@ public sealed class VoiceEngine : IDisposable
 
         _mixer = new MixingSampleProvider(Float48Mono) { ReadFully = true };
 
-        // Deriva o que sai pro fone, convertido pra PCM 16-bit — e exatamente isso
-        // que o clipe precisa gravar ("o que eu ouvi"), sem mexer no que e tocado.
-        var tap = new TapProvider(_mixer, (buf, count) => HeardPcm?.Invoke(buf, 0, count));
+        if (PreprocessMic) _preproc = new MicPreprocessor { AutoGain = MicAutoGain };
+
+        // Deriva o que sai pro fone, convertido pra PCM 16-bit. Serve pra duas coisas:
+        // o clipe grava "o que eu ouvi", e o cancelador de eco usa como REFERENCIA —
+        // ele so consegue tirar do microfone aquilo que sabe que foi tocado.
+        var tap = new TapProvider(_mixer, (buf, count) =>
+        {
+            _preproc?.PushPlayback(buf, 0, count);
+            HeardPcm?.Invoke(buf, 0, count);
+        });
 
         _out = OpenOutput(outputDeviceId);
         _out.Init(tap);
@@ -172,21 +226,25 @@ public sealed class VoiceEngine : IDisposable
         return new WaveOutEvent { DesiredLatency = 100 };
     }
 
-    public void AttachSession(RoomSession session)
+    /// <summary>
+    /// Liga o motor de audio na rede: <paramref name="voice"/> carrega a voz,
+    /// <paramref name="musicSource"/> entrega o audio do DJ. Normalmente sao o
+    /// mesmo objeto (a malha UDP); com o WebRTC ligado, a voz vem de outro lugar.
+    /// </summary>
+    public void AttachTransport(IVoiceTransport voice, ISharedAudioTransport musicSource)
     {
-        _session = session;
-        session.VoiceReceived += OnVoiceReceived;
-        session.MusicReceived += OnMusicReceived;
+        _voiceTx = voice;
+        voice.VoiceReceived += OnVoiceReceived;
+
+        _musicSource = musicSource;
+        musicSource.SharedAudioReceived += OnMusicReceived;
     }
 
     public void Dispose()
     {
         _running = false;
-        if (_session != null)
-        {
-            _session.VoiceReceived -= OnVoiceReceived;
-            _session.MusicReceived -= OnMusicReceived;
-        }
+        if (_voiceTx != null) _voiceTx.VoiceReceived -= OnVoiceReceived;
+        if (_musicSource != null) _musicSource.SharedAudioReceived -= OnMusicReceived;
 
         try { if (_mic != null) { _mic.DataAvailable -= OnMicData; _mic.StopRecording(); _mic.Dispose(); } }
         catch { }
@@ -194,6 +252,11 @@ public sealed class VoiceEngine : IDisposable
 
         try { _out?.Stop(); _out?.Dispose(); } catch { }
         _out = null;
+
+        // Depois do microfone e da saida pararem: e de la que o Process e o
+        // PushPlayback sao chamados.
+        try { _preproc?.Dispose(); } catch { }
+        _preproc = null;
 
         lock (_streamsLock) _streams.Clear();
         _mixer = null;
@@ -205,17 +268,29 @@ public sealed class VoiceEngine : IDisposable
     private void OnMicData(object? sender, WaveInEventArgs a)
     {
         if (!_running) return;
-        var session = _session;
-        if (session == null) return;
+        var transport = _voiceTx;
+        if (transport == null) return;
 
+        // Nivel do microfone CRU de proposito: a barrinha responde ao que o
+        // dispositivo esta captando. Se ela lesse depois do tratamento, o AGC
+        // nivelaria tudo e ela pararia de servir pra "meu mic esta pegando?".
         MyPeak = ComputePeak(a.Buffer, 0, a.BytesRecorded);
-        if (!session.Muted) MicPcm?.Invoke(a.Buffer, 0, a.BytesRecorded);
 
         // O driver entrega blocos de tamanho arbitrario; o acumulador recorta em
-        // frames exatos de 10ms pra rede receber sempre o mesmo tamanho.
+        // frames exatos de 10ms pra rede receber sempre o mesmo tamanho — que por
+        // sorte e tambem o quadro que o Speex quer.
         _micAcc.Append(a.Buffer, 0, a.BytesRecorded);
         while (_micAcc.TryDequeueFrame(_sendBuf, 0, FrameBytes))
-            session.SendVoice(_sendBuf, 0, FrameBytes);
+        {
+            _preproc?.Process(_sendBuf, 0, FrameBytes);
+
+            // O clipe grava o microfone JA LIMPO: e o que os outros ouviram. Gravar
+            // o cru colocaria no clipe o eco que acabamos de tirar da sala — e pior,
+            // somado ao HeardPcm ele apareceria duas vezes.
+            if (!transport.Muted) MicPcm?.Invoke(_sendBuf, 0, FrameBytes);
+
+            transport.SendVoice(_sendBuf, 0, FrameBytes);
+        }
     }
 
     // ─── REDE -> ALTO-FALANTE ────────────────────────────────────────────────
@@ -243,9 +318,11 @@ public sealed class VoiceEngine : IDisposable
                     BufferDuration = TimeSpan.FromMilliseconds(JitterMaxMs),
                     DiscardOnBufferOverflow = true,
                 };
+                float targetVolume = music ? _musicVolume
+                    : _peerVolumes.TryGetValue(key, out float saved) ? saved : 1.0f;
                 var vol = new VolumeSampleProvider(jitter.ToSampleProvider())
-                { Volume = music ? _musicVolume : 1.0f };
-                st = new PeerStream { Jitter = jitter, Volume = vol };
+                { Volume = _outputMuted ? 0f : targetVolume };
+                st = new PeerStream { Jitter = jitter, Volume = vol, TargetVolume = targetVolume };
                 _streams[key] = st;
                 mixer.AddMixerInput(vol);
                 Log.Write($"stream de {(music ? "musica" : "voz")} criada p/ {key:X8}");
@@ -297,7 +374,21 @@ public sealed class VoiceEngine : IDisposable
     public void SetPeerVolume(uint senderId, float volume)
     {
         lock (_streamsLock)
-            if (_streams.TryGetValue(senderId, out var st)) st.Volume.Volume = Math.Clamp(volume, 0f, 2f);
+        {
+            float clamped = Math.Clamp(volume, 0f, 2f);
+            _peerVolumes[senderId] = clamped;
+            if (_streams.TryGetValue(senderId, out var st))
+            {
+                st.TargetVolume = clamped;
+                st.Volume.Volume = _outputMuted ? 0f : st.TargetVolume;
+            }
+        }
+    }
+
+    public float GetPeerVolume(uint senderId)
+    {
+        lock (_streamsLock)
+            return _peerVolumes.TryGetValue(senderId, out float volume) ? volume : 1f;
     }
 
     /// <summary>

@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "primicord-activation",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-19",
+  "observability": {
+    "enabled": true
+  },
+  "ratelimits": [
+    {
+      "name": "ACTIVATION_RATE_LIMITER",
+      "namespace_id": "61501",
+      "simple": {
+        "limit": 5,
+        "period": 60
+      }
+    }
+  ]
+}

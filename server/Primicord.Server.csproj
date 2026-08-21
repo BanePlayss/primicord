@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Primicord.Server</AssemblyName>
+    <RootNamespace>Primicord.Server</RootNamespace>
+    <Version>0.7.1</Version>
+    <!-- Single-file/self-contained/trimming sao propriedades de PUBLICACAO e
+         ficam no build.ps1. Assim o build normal continua executavel nos testes. -->
+    <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
+    <!-- 10.0.10 ainda declara 2.1.11 como minimo; 2.1.12 corrige o binario
+         nativo sinalizado por GHSA-2m69-gcr7-jv3q sem trocar a API. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
+  </ItemGroup>
+</Project>

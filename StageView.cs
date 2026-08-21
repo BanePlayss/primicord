@@ -9,7 +9,11 @@ namespace Primicord;
 /// </summary>
 public sealed class StageView : Control
 {
-    private Bitmap? _frame;
+    private ScreenReceiver? _frames;
+    private uint _senderId;
+    private bool _paintErrorLogged;
+    private readonly object _selfFrameLock = new();
+    private Bitmap? _selfFrame;
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public string SharerNick { get; set; } = "";
@@ -22,10 +26,9 @@ public sealed class StageView : Control
     public bool Recording { get; set; }
 
     /// <summary>
-    /// Ligado quando EU sou quem compartilha: em vez do video ao vivo, mostra um
-    /// cartao. Ver a propria tela aqui criava espelho infinito (o Primicord aparecia
-    /// dentro da propria captura), e como o espelho muda a cada quadro, TODOS os
-    /// blocos ficavam sujos sempre — a tela gastava a banda inteira se filmando.
+    /// Ligado quando EU sou quem compartilha: mostra a previa local recebida do
+    /// capturador. Se o Primicord estiver visivel na area escolhida, ele aparece
+    /// normalmente no quadro, como qualquer outra janela.
     /// </summary>
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public bool SelfPreview { get; set; }
@@ -41,11 +44,58 @@ public sealed class StageView : Control
         BackColor = Color.Black;
     }
 
-    /// <summary>Troca o quadro exibido. O bitmap pertence ao ScreenReceiver — nao dispomos.</summary>
-    public void SetFrame(Bitmap? frame)
+    /// <summary>Aponta o palco para a tela remontada de uma pessoa.</summary>
+    public void SetFrame(ScreenReceiver? frames, uint senderId = 0)
     {
-        _frame = frame;
+        _frames = frames;
+        _senderId = senderId;
         Invalidate();
+    }
+
+    /// <summary>Troca a previa local de forma segura entre a thread de captura e a UI.</summary>
+    public void SetSelfFrame(byte[] jpeg)
+    {
+        Bitmap next;
+        try
+        {
+            using var ms = new MemoryStream(jpeg, writable: false);
+            using var decoded = Image.FromStream(ms);
+            next = new Bitmap(decoded);
+        }
+        catch (Exception ex)
+        {
+            Log.Write("previa local nao decodificou: " + ex.Message);
+            return;
+        }
+
+        lock (_selfFrameLock)
+        {
+            var old = _selfFrame;
+            _selfFrame = next;
+            try { old?.Dispose(); } catch { }
+        }
+        RequestInvalidate();
+    }
+
+    public void ClearSelfFrame()
+    {
+        lock (_selfFrameLock)
+        {
+            try { _selfFrame?.Dispose(); } catch { }
+            _selfFrame = null;
+        }
+        RequestInvalidate();
+    }
+
+    private void RequestInvalidate()
+    {
+        if (IsDisposed || !IsHandleCreated) return;
+        try
+        {
+            if (InvokeRequired) BeginInvoke(Invalidate);
+            else Invalidate();
+        }
+        catch { }
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -53,10 +103,42 @@ public sealed class StageView : Control
         var g = e.Graphics;
         g.Clear(Color.Black);
 
-        if (SelfPreview) { DrawSelfCard(g); return; }
+        if (SelfPreview)
+        {
+            bool drewSelf = false;
+            lock (_selfFrameLock)
+                if (_selfFrame != null)
+                {
+                    DrawFrame(g, _selfFrame);
+                    drewSelf = true;
+                }
+            if (!drewSelf) DrawSelfCard(g);
+            else
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+                DrawTag(g, "SUA TELA · AO VIVO", true);
+                if (StatusRight.Length > 0) DrawTag(g, StatusRight, false);
+            }
+            return;
+        }
 
-        var f = _frame;
-        if (f == null)
+        bool drewFrame = false;
+        try
+        {
+            drewFrame = _frames?.UseFrame(_senderId, f => DrawFrame(g, f)) == true;
+            _paintErrorLogged = false;
+        }
+        catch (Exception ex)
+        {
+            if (!_paintErrorLogged)
+            {
+                Log.Write("palco: quadro nao desenhou: " + ex.Message);
+                _paintErrorLogged = true;
+            }
+        }
+
+        if (!drewFrame)
         {
             using var b = new SolidBrush(Pv.BoneDim);
             const string msg = "Ninguem compartilhando tela";
@@ -65,15 +147,6 @@ public sealed class StageView : Control
             return;
         }
 
-        // Encaixa mantendo proporcao (letterbox).
-        double scale = Math.Min(Width / (double)f.Width, Height / (double)f.Height);
-        int w = (int)(f.Width * scale), h = (int)(f.Height * scale);
-        var dest = new Rectangle((Width - w) / 2, (Height - h) / 2, w, h);
-
-        g.InterpolationMode = InterpolationMode.HighQualityBilinear;
-        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-        try { g.DrawImage(f, dest); } catch { /* bitmap trocado no meio do paint */ }
-
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
@@ -81,7 +154,40 @@ public sealed class StageView : Control
         if (StatusRight.Length > 0) DrawTag(g, StatusRight, false);
     }
 
-    /// <summary>Cartao de "voce esta transmitindo" — sem video, sem espelho.</summary>
+    private void DrawFrame(Graphics g, Bitmap frame)
+    {
+        // Encaixa mantendo proporcao (letterbox). O ScreenReceiver segura o mesmo
+        // lock usado para escrever os blocos durante toda esta chamada.
+        var dest = FitFrame(new Size(frame.Width, frame.Height), ClientRectangle);
+        if (dest.Width <= 0 || dest.Height <= 0) return;
+
+        g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+        g.DrawImage(frame, dest);
+    }
+
+    /// <summary>
+    /// Retangulo de exibicao sem crop nem ampliacao desproporcional. Publico para
+    /// o contrato poder ser testado sem depender de uma tela fisica.
+    /// </summary>
+    public static Rectangle FitFrame(Size frame, Rectangle viewport)
+    {
+        if (frame.Width <= 0 || frame.Height <= 0 ||
+            viewport.Width <= 0 || viewport.Height <= 0) return Rectangle.Empty;
+
+        double scale = Math.Min(
+            viewport.Width / (double)frame.Width,
+            viewport.Height / (double)frame.Height);
+        int width = Math.Max(1, (int)Math.Round(frame.Width * scale));
+        int height = Math.Max(1, (int)Math.Round(frame.Height * scale));
+        return new Rectangle(
+            viewport.X + (viewport.Width - width) / 2,
+            viewport.Y + (viewport.Height - height) / 2,
+            width,
+            height);
+    }
+
+    /// <summary>Cartao temporario enquanto o primeiro quadro local ainda nao chegou.</summary>
     private void DrawSelfCard(Graphics g)
     {
         g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -108,7 +214,7 @@ public sealed class StageView : Control
         }
         using (var b = new SolidBrush(Pv.BoneDim))
         {
-            const string t = "a galera esta vendo — sua propria tela nao aparece aqui";
+            const string t = "preparando sua prévia local...";
             var sz = g.MeasureString(t, Pv.Body);
             g.DrawString(t, Pv.Body, b, card.X + (cw - sz.Width) / 2, card.Y + 128);
         }
@@ -120,6 +226,19 @@ public sealed class StageView : Control
             }
 
         if (StatusRight.Length > 0) DrawTag(g, StatusRight, false);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            lock (_selfFrameLock)
+            {
+                try { _selfFrame?.Dispose(); } catch { }
+                _selfFrame = null;
+            }
+        }
+        base.Dispose(disposing);
     }
 
     private void DrawTag(Graphics g, string text, bool left)

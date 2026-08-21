@@ -3,8 +3,8 @@ using System.Drawing.Drawing2D;
 namespace Primicord;
 
 /// <summary>
-/// O cartao de um participante: inicial, nick, se esta mudo e se ja conectou.
-/// A borda acende em verde quando a pessoa esta falando.
+/// Card de um participante na chamada. Camera ocupa o fundo; sem camera, avatar e
+/// estado de voz seguem o padrao visual de uma chamada em grade.
 /// </summary>
 public sealed class PeerTile : Control
 {
@@ -13,20 +13,28 @@ public sealed class PeerTile : Control
     public bool Muted;
     public bool Sharing;
     public bool Connected = true;
-    public bool Punching;      // ainda furando o NAT
-    public float Level;        // 0..1 nivel de voz agora
+    public bool ViaRelay;
+    public bool Punching;
+    public int SilentSeconds;
+    public float Level;
+    public int LocalVolumePercent = 100;
+
+    /// <summary>Ultimo quadro da camera; o tile nao e dono da imagem.</summary>
+    public Image? Cam;
 
     private const float SpeakThreshold = 0.045f;
+
+    public bool Speaking => Level > SpeakThreshold && !Muted && Connected;
 
     public PeerTile()
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
-                 ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-        Size = new Size(186, 124);
-        BackColor = Pv.Char2;
+                 ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw |
+                 ControlStyles.SupportsTransparentBackColor | ControlStyles.Selectable, true);
+        BackColor = Color.Transparent;
+        Cursor = Cursors.Hand;
+        TabStop = true;
     }
-
-    public bool Speaking => Level > SpeakThreshold && !Muted && Connected;
 
     protected override void OnPaint(PaintEventArgs e)
     {
@@ -34,82 +42,128 @@ public sealed class PeerTile : Control
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
-        var r = new Rectangle(0, 0, Width - 1, Height - 1);
-        using (var b = new SolidBrush(Pv.Char2)) g.FillRectangle(b, r);
+        DrawGridCard(g);
+    }
 
-        Color border = Speaking ? Pv.Green : (Punching ? Pv.OrangeDim : Pv.Char3);
-        using (var p = new Pen(border, 2)) g.DrawRectangle(p, r);
+    private void DrawGridCard(Graphics g)
+    {
+        var card = new Rectangle(1, 1, Math.Max(1, Width - 3), Math.Max(1, Height - 3));
+        Color accent = AccentFor(Nick);
+        if (!Connected) accent = Pv.BoneDim;
 
-        // Avatar: a MESMA foto que o jogador usa no site; sem foto, cai na inicial.
-        int av = 52;
-        var ac = new Rectangle((Width - av) / 2, 16, av, av);
-        var photo = Primitivao.AvatarFor(Nick);
+        using (var path = Pv.RoundRect(card, 9))
+        using (var fill = new SolidBrush(Color.FromArgb(35, 36, 40)))
+            g.FillPath(fill, path);
 
-        if (photo != null)
+        bool drewCam = Cam != null && TryDrawImageCover(g, Cam, card);
+        if (!drewCam)
         {
-            using var clip = new GraphicsPath();
-            clip.AddEllipse(ac);
-            var saved = g.Save();
+            int size = Math.Clamp((int)(Math.Min(Width, Height) * .44f), 52, 126);
+            var avatar = new Rectangle((Width - size) / 2, Math.Max(12, (Height - size) / 2 - 7),
+                                       size, size);
+            var photo = Primitivao.AvatarFor(Nick);
+            if (photo != null) DrawImageCircle(g, photo, avatar);
+            else DrawInitial(g, avatar, accent, Nick);
+            using var outline = new Pen(Color.FromArgb(120, accent), 2f);
+            g.DrawEllipse(outline, avatar);
+        }
+
+        int footerH = Math.Clamp(Height / 4, 30, 42);
+        var footer = new Rectangle(card.Left, card.Bottom - footerH, card.Width, footerH);
+        using (var path = Pv.RoundRect(footer, 8))
+        using (var shade = new SolidBrush(Color.FromArgb(218, 18, 19, 22)))
+            g.FillPath(shade, path);
+
+        string name = Nick.ToLowerInvariant() + (IsMe ? " (voce)" : "");
+        using (var nameBrush = new SolidBrush(Pv.Bone))
+            g.DrawString(name, Pv.BodyBold, nameBrush, footer.Left + 11,
+                         footer.Top + (footer.Height - Pv.BodyBold.Height) / 2f);
+
+        string status = !Connected ? "SEM ROTA" : Muted ? "MUTADO" : Speaking ? "FALANDO"
+                      : ViaRelay ? "RELAY"
+                      : LocalVolumePercent != 100 ? $"VOL {LocalVolumePercent}%" : "MIC";
+        Color statusColor = !Connected ? Pv.Red : Muted ? Pv.BoneDim : Speaking ? Pv.Green : Pv.BoneDim;
+        float statusWidth = Pv.TrackedWidth(g, status, Pv.Label, .7f);
+        using (var statusBrush = new SolidBrush(statusColor))
+            Pv.DrawTracked(g, status, Pv.Label, statusBrush,
+                           footer.Right - statusWidth - 10,
+                           footer.Top + (footer.Height - Pv.Label.Height) / 2f + 1, .7f);
+
+        if (Sharing)
+        {
+            const string live = "AO VIVO";
+            float liveWidth = Pv.TrackedWidth(g, live, Pv.Label, .8f);
+            var badge = new Rectangle(card.Right - (int)liveWidth - 23, card.Top + 10,
+                                      (int)liveWidth + 14, 22);
+            using (var path = Pv.RoundRect(badge, 4))
+            using (var fill = new SolidBrush(Pv.Red)) g.FillPath(fill, path);
+            using var text = new SolidBrush(Color.White);
+            Pv.DrawTracked(g, live, Pv.Label, text, badge.Left + 7, badge.Top + 5, .8f);
+        }
+
+        Color borderColor = Speaking ? Pv.Green : Color.FromArgb(80, Pv.Char3);
+        float borderWidth = Speaking ? 3f : 1f;
+        using (var path = Pv.RoundRect(card, 9))
+        using (var border = new Pen(borderColor, borderWidth))
+            g.DrawPath(border, path);
+    }
+
+    private static bool TryDrawImageCover(Graphics g, Image image, Rectangle box)
+    {
+        var saved = g.Save();
+        try
+        {
+            using var clip = Pv.RoundRect(box, 9);
             g.SetClip(clip);
-            // Recorte quadrado central da foto, pra nao distorcer retrato/paisagem.
-            int side = Math.Min(photo.Width, photo.Height);
-            var src = new Rectangle((photo.Width - side) / 2, (photo.Height - side) / 2, side, side);
-            g.DrawImage(photo, ac, src, GraphicsUnit.Pixel);
-            g.Restore(saved);
-            // Sem sinal / mutado: escurece a foto pra ficar claro que esta inativo.
-            if (Muted || !Connected)
-                using (var veil = new SolidBrush(Color.FromArgb(140, Pv.Charcoal)))
-                    g.FillEllipse(veil, ac);
-            using (var p = new Pen(Pv.Charcoal, 2)) g.DrawEllipse(p, ac);
+            double scale = Math.Max(box.Width / (double)image.Width, box.Height / (double)image.Height);
+            int sourceW = Math.Max(1, (int)(box.Width / scale));
+            int sourceH = Math.Max(1, (int)(box.Height / scale));
+            var source = new Rectangle((image.Width - sourceW) / 2, (image.Height - sourceH) / 2,
+                                       sourceW, sourceH);
+            g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+            g.DrawImage(image, box, source, GraphicsUnit.Pixel);
+            return true;
         }
-        else
-        {
-            using (var b = new SolidBrush(Muted || !Connected ? Pv.Char3 : Pv.Orange)) g.FillEllipse(b, ac);
-            string initial = string.IsNullOrEmpty(Nick) ? "?" : Nick[..1].ToUpperInvariant();
-            using var f = new Font("Bahnschrift", 22f, FontStyle.Bold);
-            using var tb = new SolidBrush(Muted || !Connected ? Pv.BoneDim : Pv.Charcoal);
-            var sz = g.MeasureString(initial, f);
-            g.DrawString(initial, f, tb, ac.X + (av - sz.Width) / 2, ac.Y + (av - sz.Height) / 2);
-        }
+        catch { return false; }
+        finally { g.Restore(saved); }
+    }
 
-        if (Speaking)
-            using (var p = new Pen(Pv.Green, 3))
-                g.DrawEllipse(p, Rectangle.Inflate(ac, 4, 4));
+    private static void DrawImageCircle(Graphics g, Image image, Rectangle box)
+    {
+        using var clip = new GraphicsPath();
+        clip.AddEllipse(box);
+        var saved = g.Save();
+        g.SetClip(clip);
+        int side = Math.Min(image.Width, image.Height);
+        var src = new Rectangle((image.Width - side) / 2, (image.Height - side) / 2, side, side);
+        g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+        g.DrawImage(image, box, src, GraphicsUnit.Pixel);
+        g.Restore(saved);
+    }
 
-        // Nick.
-        string name = (IsMe ? Nick + " (VOCE)" : Nick).ToUpperInvariant();
-        using (var b = new SolidBrush(Pv.Bone))
-        {
-            float w = Pv.TrackedWidth(g, name, Pv.Label, 1.2f);
-            if (w > Width - 12)   // corta nick gigante
-            {
-                while (name.Length > 3 && Pv.TrackedWidth(g, name + "...", Pv.Label, 1.2f) > Width - 12)
-                    name = name[..^1];
-                name += "...";
-                w = Pv.TrackedWidth(g, name, Pv.Label, 1.2f);
-            }
-            Pv.DrawTracked(g, name, Pv.Label, b, (Width - w) / 2f, 76, 1.2f);
-        }
+    private static void DrawInitial(Graphics g, Rectangle box, Color accent, string nick)
+    {
+        using (var b = new SolidBrush(accent)) g.FillEllipse(b, box);
+        string initial = string.IsNullOrWhiteSpace(nick) ? "?" : nick[..1].ToUpperInvariant();
+        using var f = new Font("Bahnschrift", Math.Max(12, box.Height * 0.40f), FontStyle.Bold);
+        using var tb = new SolidBrush(Pv.Charcoal);
+        var size = g.MeasureString(initial, f);
+        g.DrawString(initial, f, tb, box.X + (box.Width - size.Width) / 2,
+                     box.Y + (box.Height - size.Height) / 2);
+    }
 
-        // Estado embaixo.
-        string status = !Connected ? (Punching ? "CONECTANDO" : "SEM SINAL")
-                      : Muted ? "MUDO"
-                      : Sharing ? "NA TELA" : "";
-        if (status.Length > 0)
+    /// <summary>Cor social estavel por nick, sem persistir tema paralelo.</summary>
+    private static Color AccentFor(string nick)
+    {
+        Color[] palette =
         {
-            Color c = !Connected ? (Punching ? Pv.OrangeDim : Pv.Red)
-                    : Muted ? Pv.Red : Pv.Orange;
-            using var b = new SolidBrush(c);
-            float w = Pv.TrackedWidth(g, status, Pv.Label, 1.4f);
-            Pv.DrawTracked(g, status, Pv.Label, b, (Width - w) / 2f, 95, 1.4f);
-        }
-
-        // Barrinha de nivel (so quando conectado e sem mute).
-        if (Connected && !Muted && Level > 0.01f)
-        {
-            int bw = (int)(Math.Min(1f, Level * 3f) * (Width - 40));
-            using var b = new SolidBrush(Pv.Green);
-            g.FillRectangle(b, 20, Height - 12, bw, 3);
-        }
+            Color.FromArgb(65, 164, 232),
+            Color.FromArgb(211, 61, 62),
+            Color.FromArgb(210, 165, 33),
+            Color.FromArgb(151, 82, 188),
+            Color.FromArgb(100, 162, 70),
+            Pv.Orange,
+        };
+        return palette[(int)(RoomSession.HashId(nick) % (uint)palette.Length)];
     }
 }

@@ -20,6 +20,12 @@ public sealed class SettingsDialog : Form
 
     private readonly ComboBox _bw = new();
 
+    private PrimButton _updateBtn = null!;
+    private readonly Label _updateStatus = new();
+    /// <summary>Versao ja encontrada e ainda nao instalada — o botao vira "INSTALAR".</summary>
+    private UpdateInfoView? _pending;
+    private bool _updateBusy;
+
     /// <summary>Degraus de banda pro compartilhamento (KB/s, rotulo).</summary>
     /// <summary>
     /// Os rotulos mostram o que CADA degrau entregou de verdade numa medicao com a
@@ -50,6 +56,10 @@ public sealed class SettingsDialog : Form
     private readonly Label _musicLabel = new();
     private readonly PrimCheck _tray = new("Fechar minimiza pra bandeja (continua na call)");
     private readonly PrimCheck _joinSound = new("Bipe quando alguem entra ou sai da sala");
+    private readonly TextBox _server = new();
+    private readonly PrimCheck _hostServer = new("Este PC mantem uma replica das salas do grupo");
+    private readonly Label _tailscaleStatus = new();
+    private readonly Label _firewallStatus = new();
 
     private void UpdateMusicLabel()
         => _musicLabel.Text = _music.Value == 0
@@ -111,7 +121,8 @@ public sealed class SettingsDialog : Form
 
         var warn = new Label
         {
-            Text = "Usa fone. Sem cancelamento de eco, caixa de som devolve a voz dos outros.",
+            Text = "O eco e cancelado, entao da pra usar caixa de som. Fone ainda e melhor:\n"
+                 + "so cancelamos o que o Primicord toca, nao o som do jogo.",
             Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(24, 238),
             Size = new Size(412, 34),
         };
@@ -163,10 +174,10 @@ public sealed class SettingsDialog : Form
             Size = new Size(412, 40),
         };
 
-        // ── DO PRIMITIVAO / APP ──
+        // ── PERFIL / APP ──
         var titleApp = new Label
         {
-            Text = "PRIMITIVAO E APP", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
+            Text = "PERFIL E APP", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
             Location = new Point(24, 666), AutoSize = true,
         };
 
@@ -176,8 +187,8 @@ public sealed class SettingsDialog : Form
 
         var themeHint = new Label
         {
-            Text = "A cor vem do tema escolhido no site. Trocar de tema e la:\n"
-                 + "o Primicord so le, nunca escreve no doc de apostas.",
+            Text = "A cor vem do seu perfil do Primitivao. O Primicord usa apenas\n"
+                 + "login, avatar e dados publicos do usuario.",
             Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(48, 734),
             Size = new Size(400, 44),
         };
@@ -202,21 +213,218 @@ public sealed class SettingsDialog : Form
         _joinSound.Size = new Size(412, 26);
         _joinSound.Checked = cfg.JoinLeaveSound;
 
-        var save = new PrimButton("SALVAR") { Location = new Point(24, 930), Size = new Size(200, 40) };
+        // ── REDE PRIVADA ──
+        var titleNet = new Label
+        {
+            Text = "REDE PRIVADA", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
+            Location = new Point(24, 930), AutoSize = true,
+        };
+        var lblServer = Section("PONTO DE ENTRADA (PLANO B)", new Point(24, 968));
+        _server.Location = new Point(24, 988);
+        _server.Size = new Size(412, 34);
+        _server.Text = cfg.CoordServerUrl;
+        _server.BackColor = Pv.Charcoal;
+        _server.ForeColor = Pv.Bone;
+        _server.BorderStyle = BorderStyle.FixedSingle;
+        _server.Font = Pv.Body;
+
+        _hostServer.Location = new Point(24, 1030);
+        _hostServer.Size = new Size(412, 26);
+        _hostServer.Checked = true;
+        _hostServer.Enabled = false;
+        var serverHint = new Label
+        {
+            Text = "Os PCs com Primicord sao descobertos pelo Tailscale e replicam\n"
+                 + "salas, presenca e chat. Este endereco so entra se a descoberta\n"
+                 + "automatica estiver temporariamente indisponivel.",
+            Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(48, 1058),
+            Size = new Size(388, 58),
+        };
+
+        _tailscaleStatus.Location = new Point(24, 1124);
+        _tailscaleStatus.Size = new Size(250, 38);
+        _tailscaleStatus.Font = Pv.Body;
+        _tailscaleStatus.ForeColor = Pv.BoneDim;
+        _tailscaleStatus.Text = "Tailscale: verificando...";
+        var tailscaleBtn = new PrimButton("ABRIR TAILSCALE", PrimButton.Style.Ghost)
+        { Location = new Point(286, 1120), Size = new Size(150, 38) };
+        tailscaleBtn.Click += (_, _) =>
+        {
+            using var dialog = new TailscaleSetupDialog();
+            dialog.ShowDialog(this);
+            _ = RefreshTailscaleStatusAsync();
+        };
+
+        _firewallStatus.Location = new Point(24, 1168);
+        _firewallStatus.Size = new Size(250, 42);
+        _firewallStatus.Font = Pv.Body;
+        _firewallStatus.ForeColor = Pv.BoneDim;
+        _firewallStatus.Text = "Firewall: servidor e voz na rede privada";
+        var firewallBtn = new PrimButton("REPARAR FIREWALL", PrimButton.Style.Ghost)
+        {
+            Name = "repairFirewallButton",
+            AccessibleName = "Reparar regras do Firewall do Primicord",
+            Location = new Point(286, 1164), Size = new Size(150, 38),
+        };
+        firewallBtn.Click += async (_, _) =>
+        {
+            firewallBtn.Enabled = false;
+            _firewallStatus.ForeColor = Pv.Orange;
+            _firewallStatus.Text = "Firewall: aguardando permissao do Windows...";
+            try
+            {
+                await TailscaleIntegration.RepairNetworkFirewallAsync();
+                _firewallStatus.ForeColor = Pv.Green;
+                _firewallStatus.Text = "Firewall: servidor e voz liberados no Tailscale.";
+                MessageBox.Show(this,
+                    "As regras do Primicord foram recriadas para a rede privada do Tailscale.",
+                    "PRIMICORD — FIREWALL",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("reparo manual do firewall falhou: " + ex);
+                _firewallStatus.ForeColor = Pv.Red;
+                _firewallStatus.Text = "Firewall: " + ex.Message;
+                MessageBox.Show(this, ex.Message, "PRIMICORD — FIREWALL",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally { if (!IsDisposed) firewallBtn.Enabled = true; }
+        };
+
+        // ── SETUP UNIVERSAL ──
+        var titleInvite = new Label
+        {
+            Text = "CONVIDAR PARA O GRUPO", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
+            Location = new Point(24, 1248), AutoSize = true,
+        };
+        var inviteHint = new Label
+        {
+            Text = "Envie o mesmo Setup publico para todos e passe o codigo do grupo\n"
+                 + "em separado. O instalador configura Tailscale, salas e replicas.",
+            Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(24, 1286),
+            Size = new Size(412, 44),
+        };
+        var inviteBtn = new PrimButton("BAIXAR SETUP")
+        { Location = new Point(24, 1336), Size = new Size(198, 38) };
+        inviteBtn.Click += (_, _) =>
+        {
+            string repo = string.IsNullOrWhiteSpace(_cfg.UpdateRepo)
+                ? Updater.DefaultRepo : _cfg.UpdateRepo;
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                $"https://github.com/{repo}/releases/latest/download/Primicord-win-Setup.exe")
+            { UseShellExecute = true });
+        };
+        var groupCodeBtn = new PrimButton("USAR CÓDIGO", PrimButton.Style.Ghost)
+        { Location = new Point(234, 1336), Size = new Size(202, 38) };
+        groupCodeBtn.Click += (_, _) =>
+        {
+            using var dialog = new GroupCodeDialog(_cfg);
+            if (dialog.ShowDialog(this) != DialogResult.OK) return;
+            _server.Text = _cfg.CoordServerUrl;
+            _ = RefreshTailscaleStatusAsync();
+        };
+
+        // ── ATUALIZAR ──
+        var titleUpd = new Label
+        {
+            Text = "ATUALIZAR", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
+            Location = new Point(24, 1400), AutoSize = true,
+        };
+
+        var lblVersion = new Label
+        {
+            Text = $"voce esta na versao {Updater.CurrentVersion}",
+            Font = Pv.Body, ForeColor = Pv.BoneDim,
+            Location = new Point(24, 1438), AutoSize = true,
+        };
+
+        _updateBtn = new PrimButton("PROCURAR ATUALIZACAO")
+        { Location = new Point(24, 1464), Size = new Size(260, 38) };
+        _updateBtn.Click += async (_, _) => await CheckOrInstallAsync();
+
+        _updateStatus.Location = new Point(24, 1510);
+        _updateStatus.Size = new Size(412, 56);
+        _updateStatus.Font = Pv.Body;
+        _updateStatus.ForeColor = Pv.BoneDim;
+        _updateStatus.Text = Updater.CanSelfUpdate
+            ? $"procura em github.com/{cfg.UpdateRepo}"
+            : "rodando pelo dotnet run — a troca automatica so funciona no exe publicado";
+
+        var save = new PrimButton("SALVAR") { Location = new Point(24, 1578), Size = new Size(200, 40) };
         save.Click += (_, _) => Apply();
         var cancel = new PrimButton("CANCELAR", PrimButton.Style.Ghost)
-        { Location = new Point(236, 930), Size = new Size(200, 40) };
+        { Location = new Point(236, 1578), Size = new Size(200, 40) };
         cancel.Click += (_, _) => Close();
 
         Controls.AddRange(new Control[]
             { title, lblMic, _mic, lblTest, _level, lblOut, _out, warn,
               titleClip, lblKey, _hotkeyBox, lblSecs, _secs, _secsLabel, _autoBuf,
               titleScr, lblBw, _bw, bwHint,
-              titleApp, _siteTheme, themeHint, lblMusic, _music, _musicLabel, _tray, _joinSound,
+               titleApp, _siteTheme, themeHint, lblMusic, _music, _musicLabel, _tray, _joinSound,
+               titleNet, lblServer, _server, _hostServer, serverHint, _tailscaleStatus, tailscaleBtn,
+               _firewallStatus, firewallBtn,
+               titleInvite, inviteHint, inviteBtn, groupCodeBtn,
+               titleUpd, lblVersion, _updateBtn, _updateStatus,
               save, cancel });
 
-        Shown += (_, _) => RestartMonitor();
+        Shown += (_, _) =>
+        {
+            RestartMonitor();
+            _ = RefreshTailscaleStatusAsync();
+        };
         FormClosed += (_, _) => { _monitor?.Dispose(); _monitor = null; };
+    }
+
+    /// <summary>
+    /// Um botao so, em dois tempos: primeiro clique procura, segundo instala. Evita
+    /// baixar 56MB de surpresa — quem clicou "procurar" nao pediu pra trocar de versao.
+    /// </summary>
+    private async Task CheckOrInstallAsync()
+    {
+        if (_updateBusy) return;
+        _updateBusy = true;
+        _updateBtn.Enabled = false;
+        try
+        {
+            if (_pending == null)
+            {
+                _updateStatus.Text = "procurando...";
+                var found = await Updater.CheckAsync(_cfg.UpdateRepo).ConfigureAwait(true);
+                if (found == null)
+                {
+                    _updateStatus.Text = $"voce ja esta na versao mais recente ({Updater.CurrentVersion}).";
+                    return;
+                }
+                _pending = found;
+                string notes = found.Notes.Length > 120 ? found.Notes[..120] + "..." : found.Notes;
+                // Dizer que e delta importa: e a diferenca entre 2MB e 100MB, e quem
+                // esta numa internet ruim quer saber disso antes de clicar.
+                _updateStatus.Text = $"versao {found.Version} disponivel — "
+                                   + (found.IsDelta ? $"so o que mudou, {found.SizeLabel}"
+                                                    : $"pacote completo, {found.SizeLabel}")
+                                   + (notes.Length > 0 ? "\n" + notes.Replace("\r", "").Replace("\n", " ") : "");
+                _updateBtn.Text = "INSTALAR " + found.Version;
+                return;
+            }
+
+            var progress = new Progress<int>(p => _updateStatus.Text = $"baixando... {p}%");
+            // Nao volta: o Velopack aplica e reabre o app na versao nova.
+            await Updater.DownloadAndApplyAsync(_cfg.UpdateRepo, progress).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            Log.Write("update falhou: " + ex);
+            _updateStatus.Text = "nao deu: " + ex.Message;
+            _pending = null;
+            _updateBtn.Text = "PROCURAR ATUALIZACAO";
+        }
+        finally
+        {
+            _updateBusy = false;
+            if (!IsDisposed) _updateBtn.Enabled = true;
+        }
     }
 
     private int IndexOfMic(int deviceNumber)
@@ -272,9 +480,23 @@ public sealed class SettingsDialog : Form
         _cfg.MusicVolume = _music.Value;
         _cfg.TrayOnClose = _tray.Checked;
         _cfg.JoinLeaveSound = _joinSound.Checked;
+        _cfg.CoordServerUrl = Config.NormalizeCoordServerUrl(_server.Text);
+        _cfg.HostMiniServer = true; // chave legada; desde 0.6.14 todos replicam
         _cfg.Save();
+        MiniServerProcess.Configure(enabled: true);
         Applied?.Invoke();
         Close();
+    }
+
+    private async Task RefreshTailscaleStatusAsync(bool fillHostAddress = false)
+    {
+        var status = await TailscaleIntegration.GetStatusAsync();
+        if (!IsDisposed)
+        {
+            _tailscaleStatus.Text = "Tailscale: " + status.Description;
+            if (fillHostAddress && status.Connected && status.Address.Length > 0)
+                _server.Text = Config.NormalizeCoordServerUrl(status.Address);
+        }
     }
 
     /// <summary>

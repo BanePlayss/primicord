@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Mesmo TFM do app: ele e WinForms, entao o teste tem que ser -windows tambem. -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <!-- Testes de rede em loopback nao podem rodar em paralelo brigando por porta. -->
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <!-- Referencias diretas garantem que o runner copie o provider nativo. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Referencia o exe direto. As flags de self-contained/single-file moram no
+         build.ps1 justamente pra isso continuar possivel (NETSDK1151). -->
+    <ProjectReference Include="..\..\Primicord.csproj" />
+    <ProjectReference Include="..\..\server\Primicord.Server.csproj" />
+  </ItemGroup>
+
+</Project>

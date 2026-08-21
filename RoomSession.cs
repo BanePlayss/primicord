@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Buffers.Binary;
 
 namespace Primicord;
 
@@ -11,6 +12,13 @@ public sealed class RemotePeer
     public string Nick = "";
     public bool Muted;
     public bool Sharing;
+    private readonly object _socialLock = new();
+    private SocialPosition _social;
+    public SocialPosition Social
+    {
+        get { lock (_socialLock) return _social; }
+        set { lock (_socialLock) _social = value; }
+    }
 
     /// <summary>Enderecos onde ele PODE estar (publico + todos os locais).</summary>
     public readonly List<IPEndPoint> Candidates = new();
@@ -20,6 +28,23 @@ public sealed class RemotePeer
 
     public long LastRecvTicks;
     public long LastSeenMs;
+
+    /// <summary>Horario de entrada publicado junto da presenca existente.</summary>
+    public long JoinedAtMs;
+
+    /// <summary>Quando este par apareceu na sala.</summary>
+    public readonly long JoinedTicks = DateTime.UtcNow.Ticks;
+
+    /// <summary>
+    /// Ha quantos segundos tentamos furar sem UM pacote sequer ter chegado. Zero
+    /// quando ja conectou. O furo normal fecha em menos de 5s; passar muito disso
+    /// quer dizer que nao vai fechar — NAT simetrico dos dois lados, ou firewall.
+    /// </summary>
+    public int SilentSeconds => Locked != null ? 0
+        : (int)((DateTime.UtcNow.Ticks - JoinedTicks) / TimeSpan.TicksPerSecond);
+
+    /// <summary>Pra o aviso de "desisti" sair uma vez, e nao a cada 250ms.</summary>
+    public bool GaveUpLogged;
 
     public bool Connected => Locked != null &&
         (DateTime.UtcNow.Ticks - Interlocked.Read(ref LastRecvTicks)) < TimeSpan.TicksPerSecond * 6;
@@ -37,12 +62,12 @@ public sealed class RemotePeer
 /// </summary>
 /// <remarks>
 /// Cada um manda a propria voz DIRETO pra cada outro (malha). Sem servidor no meio:
-/// o Firestore so serve pra trocar enderecos; depois disso o audio nao passa por
+/// o coordenador so serve pra trocar enderecos; depois disso o audio nao passa por
 /// lugar nenhum alem dos dois PCs. Com 6 pessoas cada um sobe ~5x64kbps (~320kbps),
 /// tranquilo em qualquer banda larga.
 ///
 /// COMO DOIS ROTEADORES SE ATRAVESSAM (hole punching): cada lado descobre seu IP:porta
-/// publico via STUN e publica no Firestore. Ai os dois passam a mandar pacotinhos um
+/// publico via STUN e publica na malha SQLite. Ai os dois passam a mandar pacotinhos um
 /// pro outro ao mesmo tempo. O primeiro pacote de A morre no roteador de B — mas ele
 /// abre no roteador de A a "porta de volta" pra B. Como B faz o mesmo, em uma ou duas
 /// tentativas os dois lados ja tem o buraco aberto e os pacotes comecam a passar.
@@ -52,7 +77,7 @@ public sealed class RemotePeer
 /// caso so um servidor relay (TURN) resolve — nao temos um, entao o par nao conecta.
 /// O app avisa na UI em vez de ficar mudo sem explicacao.
 /// </remarks>
-public sealed class RoomSession : IDisposable
+public sealed class RoomSession : IVoiceTransport, ISharedAudioTransport, IDisposable
 {
     // ─── protocolo ───────────────────────────────────────────────────────────
     public const int HeaderBytes = 9;
@@ -64,6 +89,8 @@ public sealed class RoomSession : IDisposable
     public const byte TypeMusic = 5;   // audio do sistema do DJ
     public const byte TypeCinemaCtl = 6;   // controle do cinema (oferta, nack, play)
     public const byte TypeCinemaData = 7;   // pedaco do arquivo de video
+    public const byte TypeWebcam = 8;   // quadro da camera (fragmentado, igual a tela)
+    public const byte TypeSocial = 9;   // x/y/tamanho da bolinha (3 floats, 12 bytes)
 
     // Um quadro de tela nao cabe num datagrama, entao vai picado. Sub-cabecalho de
     // 10 bytes depois do cabecalho comum: frameId, indice, total, largura, altura.
@@ -72,13 +99,14 @@ public sealed class RoomSession : IDisposable
 
     private const int PunchIntervalMs = 250;   // enquanto nao conectou
     private const int KeepAliveMs = 1000;  // depois de conectado (mantem o NAT aberto)
-    private const int PresenceSyncMs = 2000;  // poll do Firestore
-    private const int PeerStaleMs = 15000; // sem heartbeat no Firestore = saiu
+    private const int PresenceSyncMs = 10_000;  // descoberta de pares; midia segue P2P
+    private const int PeerStaleMs = 45_000; // tolera tres ciclos perdidos sem expulsar
 
-    private readonly Firestore _fs;
+    private readonly IDocumentStore _fs;
     private readonly string _roomId;
     private readonly string _peerId;
     private readonly string _nick;
+    private readonly long _joinedAtMs;
 
     private Socket? _socket;
     private Thread? _rxThread;
@@ -94,12 +122,21 @@ public sealed class RoomSession : IDisposable
     private readonly List<IPEndPoint> _localEps = new();
     private uint _mySenderId;
     private uint _voiceSeq;
+    private readonly object _socialLock = new();
+    private SocialPosition _social;
+    private long _lastSocialSendMs;
 
     public bool Muted { get; set; }
     public bool Sharing { get; set; }
 
+    public SocialPosition Social
+    {
+        get { lock (_socialLock) return _social; }
+    }
+
     public string RoomId => _roomId;
     public string PeerId => _peerId;
+    public DateTimeOffset JoinedAt => DateTimeOffset.FromUnixTimeMilliseconds(_joinedAtMs);
     public IPEndPoint? PublicEndpoint => _publicEp;
 
     /// <summary>Voz recebida de alguem (thread de rede — nao toque na UI daqui).</summary>
@@ -108,8 +145,18 @@ public sealed class RoomSession : IDisposable
     /// <summary>Audio do sistema do DJ (modo musica).</summary>
     public event Action<uint, byte[], int, int>? MusicReceived;
 
+    /// <summary>Nome comum usado pelo relay e pela malha direta.</summary>
+    public event Action<uint, byte[], int, int>? SharedAudioReceived
+    {
+        add => MusicReceived += value;
+        remove => MusicReceived -= value;
+    }
+
     /// <summary>Quadro de tela COMPLETO ja remontado: (quem, jpeg, largura, altura).</summary>
     public event Action<uint, byte[], int, int>? ScreenFrameReceived;
+
+    /// <summary>Quadro de camera COMPLETO ja remontado: (quem, jpeg, largura, altura).</summary>
+    public event Action<uint, byte[], int, int>? WebcamFrameReceived;
 
     /// <summary>Mensagem de controle do cinema (JSON).</summary>
     public event Action<uint, string>? CinemaControl;
@@ -117,19 +164,24 @@ public sealed class RoomSession : IDisposable
     /// <summary>Pedaco do arquivo de video: (quem, indice, buffer, offset, tamanho).</summary>
     public event Action<uint, int, byte[], int, int>? CinemaChunk;
 
+    /// <summary>Movimento social recebido pela malha (thread de rede).</summary>
+    public event Action<uint, SocialPosition>? SocialMoved;
+
     /// <summary>A lista de participantes mudou (entrou, saiu, mutou, conectou).</summary>
     public event Action? PeersChanged;
 
-    /// <summary>Erro que o usuario precisa ver (ex.: rules do Firestore faltando).</summary>
+    /// <summary>Erro de rede que o usuario precisa ver.</summary>
     public event Action<string>? Failed;
 
-    public RoomSession(Firestore fs, string roomId, string peerId, string nick)
+    public RoomSession(IDocumentStore fs, string roomId, string peerId, string nick)
     {
         _fs = fs;
         _roomId = roomId;
         _peerId = peerId;
         _nick = nick;
+        _joinedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         _mySenderId = HashId(peerId);
+        _social = SocialPosition.DefaultFor(_mySenderId);
     }
 
     public List<RemotePeer> Peers
@@ -138,7 +190,7 @@ public sealed class RoomSession : IDisposable
     }
 
     /// <summary>
-    /// Registra um par manualmente, pulando o Firestore. Existe pro harness de teste
+    /// Registra um par manualmente, pulando a presenca distribuida. Existe pro harness de teste
     /// conseguir exercitar o protocolo (punch/ack/voz) em loopback — o caminho normal
     /// e o SyncPeersAsync descobrir os pares sozinho.
     /// </summary>
@@ -149,7 +201,12 @@ public sealed class RoomSession : IDisposable
         {
             if (!_peers.TryGetValue(sid, out var p))
             {
-                p = new RemotePeer { PeerId = peerId, SenderId = sid };
+                p = new RemotePeer
+                {
+                    PeerId = peerId, SenderId = sid,
+                    JoinedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    Social = SocialPosition.DefaultFor(sid),
+                };
                 _peers[sid] = p;
             }
             p.Nick = nick;
@@ -159,7 +216,7 @@ public sealed class RoomSession : IDisposable
         PeersChanged?.Invoke();
     }
 
-    /// <summary>Sobe so a rede (socket + STUN + punch), sem publicar no Firestore.</summary>
+    /// <summary>Sobe so a rede (socket + STUN + punch), sem publicar presenca.</summary>
     public async Task StartNetworkOnlyAsync(bool useStun = true, CancellationToken ct = default)
     {
         _firestoreBacked = false;
@@ -174,7 +231,7 @@ public sealed class RoomSession : IDisposable
         try { _socket.SendBufferSize = 2 * 1024 * 1024; } catch { }
         _socket.Bind(new IPEndPoint(IPAddress.Any, 0));
         int localPort = ((IPEndPoint)_socket.LocalEndPoint!).Port;
-        foreach (var ip in AppEnv.LocalIPv4()) _localEps.Add(new IPEndPoint(ip, localPort));
+        foreach (var ip in OrderedLocalAddresses()) _localEps.Add(new IPEndPoint(ip, localPort));
 
         if (useStun) _publicEp = await Stun.DiscoverAsync(_socket, ct: _cts.Token).ConfigureAwait(false);
 
@@ -185,6 +242,27 @@ public sealed class RoomSession : IDisposable
 
     /// <summary>Porta UDP local (o harness precisa pra montar o endpoint de loopback).</summary>
     public int LocalPort => _socket?.LocalEndPoint is IPEndPoint ep ? ep.Port : 0;
+
+    /// <summary>
+    /// Atualiza a bolinha local e envia no maximo 20 vezes/s. final ignora o limite,
+    /// garantindo que todos recebam exatamente o ponto em que o jogador soltou.
+    /// </summary>
+    public void UpdateSocial(SocialPosition position, bool final = false)
+    {
+        position = position.Normalized();
+        lock (_socialLock) _social = position;
+
+        long now = Environment.TickCount64;
+        long previous = Interlocked.Read(ref _lastSocialSendMs);
+        if (!final && now - previous < 50) return;
+        Interlocked.Exchange(ref _lastSocialSendMs, now);
+
+        var payload = new byte[12];
+        BinaryPrimitives.WriteSingleLittleEndian(payload.AsSpan(0, 4), (float)position.X);
+        BinaryPrimitives.WriteSingleLittleEndian(payload.AsSpan(4, 4), (float)position.Y);
+        BinaryPrimitives.WriteSingleLittleEndian(payload.AsSpan(8, 4), position.Scale);
+        SendToAll(TypeSocial, payload, 0, payload.Length);
+    }
 
     // ─── CICLO DE VIDA ───────────────────────────────────────────────────────
 
@@ -202,7 +280,7 @@ public sealed class RoomSession : IDisposable
         _socket.Bind(new IPEndPoint(IPAddress.Any, 0));   // porta efemera: o STUN descobre qual
         int localPort = ((IPEndPoint)_socket.LocalEndPoint!).Port;
 
-        foreach (var ip in AppEnv.LocalIPv4()) _localEps.Add(new IPEndPoint(ip, localPort));
+        foreach (var ip in OrderedLocalAddresses()) _localEps.Add(new IPEndPoint(ip, localPort));
         Log.Write($"sala {_roomId}: socket na porta {localPort}, locais=[{string.Join(",", _localEps)}]");
 
         // STUN ANTES do loop de recepcao (ele consome do mesmo socket).
@@ -240,45 +318,60 @@ public sealed class RoomSession : IDisposable
         Log.Write($"sala {_roomId}: encerrada");
     }
 
-    // ─── PRESENCA (Firestore) ────────────────────────────────────────────────
+    // ─── PRESENCA (replicas SQLite dos mini servidores) ────────────────────
 
     private async Task PresenceLoopAsync(CancellationToken ct)
     {
+        int delayMs = PresenceSyncMs;
         while (_running && !ct.IsCancellationRequested)
         {
             try
             {
                 await PublishPresenceAsync(full: false).ConfigureAwait(false);
                 await SyncPeersAsync(ct).ConfigureAwait(false);
+                delayMs = PresenceSyncMs;
             }
-            catch (FirestoreException ex)
+            catch (DocumentStoreException ex)
             {
                 Log.Write("presenca falhou: " + ex.Message);
                 if (ex.IsPermissionDenied)
                 {
-                    Failed?.Invoke("O Firestore recusou a escrita — falta publicar as rules "
-                                 + "do pc_rooms no Firebase Console.");
+                    Failed?.Invoke("O servidor de coordenacao recusou a presenca desta sala.");
                     return;
                 }
+                delayMs = ex.IsQuotaExceeded
+                    ? Math.Min(15 * 60_000, Math.Max(60_000, delayMs * 2))
+                    : Math.Min(5 * 60_000, Math.Max(30_000, delayMs * 2));
             }
-            catch (Exception ex) { Log.Write("presenca falhou: " + ex.Message); }
+            catch (Exception ex)
+            {
+                Log.Write("presenca falhou: " + ex.Message);
+                delayMs = Math.Min(5 * 60_000, Math.Max(30_000, delayMs * 2));
+            }
 
-            try { await Task.Delay(PresenceSyncMs, ct).ConfigureAwait(false); }
+            try { await Task.Delay(delayMs, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
         }
     }
 
     private async Task PublishPresenceAsync(bool full)
     {
+        SocialPosition social = Social;
         var fields = new Dictionary<string, object?>
         {
             ["lastSeen"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             ["muted"] = Muted,
             ["sharing"] = Sharing,
+            ["socialX"] = social.X,
+            ["socialY"] = social.Y,
+            ["socialScale"] = social.Scale,
         };
         if (full)
         {
             fields["nick"] = _nick;
+            // Um Int64 a mais na mesma escrita inicial. Nao cria tabela, request
+            // nem heartbeat adicional.
+            fields["joinedAt"] = _joinedAtMs;
             fields["pubIp"] = _publicEp?.Address.ToString() ?? "";
             fields["pubPort"] = (long)(_publicEp?.Port ?? 0);
             fields["locEps"] = string.Join(",", _localEps.Select(e => e.ToString()));
@@ -299,6 +392,7 @@ public sealed class RoomSession : IDisposable
             if (id == _peerId) continue;
             long lastSeen = Firestore.Num(f, "lastSeen");
             if (now - lastSeen > PeerStaleMs) continue;   // fantasma de sessao morta
+            long joinedAt = Firestore.Num(f, "joinedAt");
 
             uint sid = HashId(id);
             alive.Add(sid);
@@ -307,7 +401,12 @@ public sealed class RoomSession : IDisposable
             {
                 if (!_peers.TryGetValue(sid, out var p))
                 {
-                    p = new RemotePeer { PeerId = id, SenderId = sid };
+                    p = new RemotePeer
+                    {
+                        PeerId = id, SenderId = sid,
+                        JoinedAtMs = joinedAt,
+                        Social = SocialPosition.DefaultFor(sid),
+                    };
                     _peers[sid] = p;
                     changed = true;
                     Log.Write($"entrou: {Firestore.Str(f, "nick")} ({id})");
@@ -316,15 +415,27 @@ public sealed class RoomSession : IDisposable
                 string nick = Firestore.Str(f, "nick", id);
                 bool muted = Firestore.Flag(f, "muted");
                 bool sharing = Firestore.Flag(f, "sharing");
-                if (p.Nick != nick || p.Muted != muted || p.Sharing != sharing) changed = true;
+                if (p.Nick != nick || p.Muted != muted || p.Sharing != sharing
+                    || (joinedAt > 0 && p.JoinedAtMs != joinedAt)) changed = true;
                 p.Nick = nick; p.Muted = muted; p.Sharing = sharing;
+                if (joinedAt > 0) p.JoinedAtMs = joinedAt;
                 p.LastSeenMs = lastSeen;
+
+                var social = new SocialPosition(
+                    Firestore.Real(f, "socialX", p.Social.X),
+                    Firestore.Real(f, "socialY", p.Social.Y),
+                    (int)Firestore.Num(f, "socialScale", p.Social.Scale)).Normalized();
+                if (social != p.Social)
+                {
+                    p.Social = social;
+                    SocialMoved?.Invoke(sid, social);
+                }
 
                 RefreshCandidates(p, f);
             }
         }
 
-        // Quem sumiu do Firestore saiu da sala.
+        // Quem sumiu da presenca distribuida saiu da sala.
         lock (_peersLock)
         {
             foreach (var sid in _peers.Keys.Where(k => !alive.Contains(k)).ToList())
@@ -358,6 +469,13 @@ public sealed class RoomSession : IDisposable
         p.Candidates.AddRange(fresh);
     }
 
+    /// <summary>
+    /// O candidato 100.64/10 vai primeiro: o Tailscale escolhe rota direta ou DERP
+    /// sozinho. LAN e STUN continuam publicados como plano B da mesma sessao.
+    /// </summary>
+    private static IEnumerable<IPAddress> OrderedLocalAddresses()
+        => AppEnv.LocalIPv4().Distinct().OrderByDescending(TailscaleIntegration.IsTailnetAddress);
+
     // ─── HOLE PUNCHING + KEEPALIVE ───────────────────────────────────────────
 
     private void PunchTick()
@@ -388,6 +506,18 @@ public sealed class RoomSession : IDisposable
                 }
             }
 
+            // Passou muito do normal (o furo fecha em menos de 5s quando fecha):
+            // deixa registrado o que foi tentado, senao o diagnostico depois vira
+            // adivinhacao. Continua tentando — so o silencio e que fica explicado.
+            if (!p.GaveUpLogged && p.SilentSeconds >= 25)
+            {
+                p.GaveUpLogged = true;
+                Log.Write($"{p.Nick}: sem rota apos {p.SilentSeconds}s. Nenhum pacote chegou. "
+                        + $"Candidatos tentados: [{string.Join(", ", p.Candidates)}]. "
+                        + $"Meu publico: {_publicEp?.ToString() ?? "NENHUM (STUN falhou)"}. "
+                        + "Causas tipicas: NAT simetrico dos dois lados (4G/CGNAT) ou firewall.");
+            }
+
             foreach (var ep in p.Candidates) SendTo(ep, TypePunch, Array.Empty<byte>(), 0, 0);
         }
     }
@@ -405,6 +535,9 @@ public sealed class RoomSession : IDisposable
     public void SendMusic(byte[] payload, int offset, int count)
         => SendToAll(TypeMusic, payload, offset, count, Interlocked.Increment(ref _musicSeq));
 
+    public void SendSharedAudio(byte[] payload, int offset, int count)
+        => SendMusic(payload, offset, count);
+
     /// <summary>Mensagem de controle do cinema (cabe num datagrama).</summary>
     public void SendCinemaControl(string json)
     {
@@ -419,6 +552,7 @@ public sealed class RoomSession : IDisposable
 
     private uint _musicSeq;
     private ushort _screenFrameId;
+    private ushort _webcamFrameId;
 
     /// <summary>
     /// Pica um quadro JPEG em datagramas e manda pra todo mundo.
@@ -429,11 +563,22 @@ public sealed class RoomSession : IDisposable
     /// atrasado e pior que faltar um quadro.
     /// </remarks>
     public void SendScreenFrame(byte[] jpeg, int length, int width, int height)
+        => SendFragmented(TypeScreen, ref _screenFrameId, jpeg, length, width, height);
+
+    /// <summary>
+    /// Um quadro da camera. Mesmo empacotamento da tela — e o mesmo problema:
+    /// nao cabe num datagrama, e chegar atrasado e pior que faltar.
+    /// </summary>
+    public void SendWebcamFrame(byte[] jpeg, int length, int width, int height)
+        => SendFragmented(TypeWebcam, ref _webcamFrameId, jpeg, length, width, height);
+
+    private void SendFragmented(byte type, ref ushort frameCounter,
+                                byte[] jpeg, int length, int width, int height)
     {
         var sock = _socket;
         if (sock == null) return;
 
-        ushort frameId = _screenFrameId++;
+        ushort frameId = frameCounter++;
         int chunks = (length + ChunkPayload - 1) / ChunkPayload;
         if (chunks == 0 || chunks > ushort.MaxValue) return;
 
@@ -446,7 +591,7 @@ public sealed class RoomSession : IDisposable
             int len = Math.Min(ChunkPayload, length - off);
             byte[] packet = new byte[HeaderBytes + ScreenSubHeader + len];
 
-            packet[0] = TypeScreen;
+            packet[0] = type;
             WriteUInt32(packet, 1, _mySenderId);
             WriteUInt32(packet, 5, frameId);
             WriteUInt16(packet, 9, frameId);
@@ -521,7 +666,7 @@ public sealed class RoomSession : IDisposable
             var src = (IPEndPoint)from;
             RemotePeer? peer;
             lock (_peersLock) _peers.TryGetValue(senderId, out peer);
-            if (peer == null) continue;   // ainda nao apareceu no Firestore
+            if (peer == null) continue;   // ainda nao apareceu na presenca
 
             Interlocked.Exchange(ref peer.LastRecvTicks, DateTime.UtcNow.Ticks);
 
@@ -546,7 +691,8 @@ public sealed class RoomSession : IDisposable
                     break;
 
                 case TypeScreen:
-                    HandleScreenChunk(peer, buf, len);
+                case TypeWebcam:
+                    HandleFragmentedChunk(peer, type, buf, len);
                     break;
 
                 case TypeCinemaCtl:
@@ -562,6 +708,17 @@ public sealed class RoomSession : IDisposable
                     // O indice do pedaco viaja no campo de sequencia do cabecalho.
                     CinemaChunk?.Invoke(senderId, (int)ReadUInt32(buf, 5),
                                         buf, HeaderBytes, len - HeaderBytes);
+                    break;
+
+                case TypeSocial:
+                    if (len != HeaderBytes + 12) break;
+                    var social = new SocialPosition(
+                        BinaryPrimitives.ReadSingleLittleEndian(buf.AsSpan(HeaderBytes, 4)),
+                        BinaryPrimitives.ReadSingleLittleEndian(buf.AsSpan(HeaderBytes + 4, 4)),
+                        (int)Math.Round(BinaryPrimitives.ReadSingleLittleEndian(
+                            buf.AsSpan(HeaderBytes + 8, 4)))).Normalized();
+                    peer.Social = social;
+                    SocialMoved?.Invoke(senderId, social);
                     break;
 
                 case TypePunch:
@@ -594,9 +751,18 @@ public sealed class RoomSession : IDisposable
         public long StartedTicks;
     }
 
-    private readonly Dictionary<uint, FrameAssembly> _assembling = new();
+    /// <summary>
+    /// Remontagem em curso, por (quem, que tipo de video).
+    /// </summary>
+    /// <remarks>
+    /// O TIPO faz parte da chave de proposito. Indexando so por remetente, a mesma
+    /// pessoa compartilhando tela E camera ao mesmo tempo teria os dois fluxos
+    /// disputando o mesmo estado: cada quadro de um jogaria fora o quadro pela
+    /// metade do outro, e nenhum dos dois fecharia nunca.
+    /// </remarks>
+    private readonly Dictionary<(uint Sender, byte Type), FrameAssembly> _assembling = new();
 
-    private void HandleScreenChunk(RemotePeer peer, byte[] buf, int len)
+    private void HandleFragmentedChunk(RemotePeer peer, byte type, byte[] buf, int len)
     {
         if (len < HeaderBytes + ScreenSubHeader) return;
 
@@ -615,10 +781,11 @@ public sealed class RoomSession : IDisposable
         FrameAssembly asm;
         lock (_assembling)
         {
-            if (!_assembling.TryGetValue(peer.SenderId, out asm!))
+            var key = (peer.SenderId, type);
+            if (!_assembling.TryGetValue(key, out asm!))
             {
                 asm = new FrameAssembly();
-                _assembling[peer.SenderId] = asm;
+                _assembling[key] = asm;
             }
 
             // Quadro novo: joga fora o anterior incompleto. Pedaço atrasado de um
@@ -663,7 +830,8 @@ public sealed class RoomSession : IDisposable
             Buffer.BlockCopy(c!, 0, jpeg, pos, c!.Length);
             pos += c.Length;
         }
-        ScreenFrameReceived?.Invoke(peer.SenderId, jpeg, width, height);
+        if (type == TypeWebcam) WebcamFrameReceived?.Invoke(peer.SenderId, jpeg, width, height);
+        else ScreenFrameReceived?.Invoke(peer.SenderId, jpeg, width, height);
     }
 
     // ─── UTIL ────────────────────────────────────────────────────────────────

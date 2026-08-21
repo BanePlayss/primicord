@@ -20,7 +20,7 @@ namespace Primicord;
 ///
 /// A apiKey e a mesma do app web (chave publica de cliente; quem protege e a rules).
 /// </remarks>
-public sealed class Firestore
+public sealed class Firestore : IDocumentStore
 {
     public const string ProjectId = "primitivao";
     private const string ApiKey = "AIzaSyB4Tu-OIAfBUfzdtY-wF9tSoBwP_36hdRg";
@@ -103,6 +103,31 @@ public sealed class Firestore
         return ParseFields(node?["fields"]);
     }
 
+    /// <summary>
+    /// O documento CRU, pra quem precisa andar em estrutura aninhada.
+    /// </summary>
+    /// <remarks>
+    /// O <see cref="GetAsync"/> devolve so os campos rasos (string, numero, bool):
+    /// mapa dentro de mapa ele nao sabe representar. Quem precisa disso — o campo
+    /// `interests`, por exemplo — le daqui e caminha no JSON.
+    ///
+    /// <paramref name="fields"/> vira mask.fieldPaths e IMPORTA: o doc de apostas
+    /// tem 665KB, e pedindo so `json` e `interests` vem 134KB. Sao os mesmos
+    /// bytes que o app deixa de baixar a cada leitura.
+    /// </remarks>
+    public async Task<JsonNode?> GetRawAsync(string docPath, string[]? fields = null,
+                                             CancellationToken ct = default)
+    {
+        string? q = null;
+        if (fields is { Length: > 0 })
+            q = string.Join("&", fields.Select(f => "mask.fieldPaths=" + Uri.EscapeDataString(f)));
+
+        using var resp = await _http.GetAsync(Url(docPath, q), ct).ConfigureAwait(false);
+        if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
+        if (!resp.IsSuccessStatusCode) throw new FirestoreException(await Describe(resp).ConfigureAwait(false));
+        return JsonNode.Parse(await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
+    }
+
     // ─── ESCRITA ─────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -143,20 +168,54 @@ public sealed class Firestore
         string parentPath, string collectionId, string orderField, bool descending, int limit,
         CancellationToken ct = default)
     {
-        var body = new JsonObject
+        var query = new JsonObject
         {
-            ["structuredQuery"] = new JsonObject
+            ["from"] = new JsonArray(new JsonObject { ["collectionId"] = collectionId }),
+            ["orderBy"] = new JsonArray(new JsonObject
             {
-                ["from"] = new JsonArray(new JsonObject { ["collectionId"] = collectionId }),
-                ["orderBy"] = new JsonArray(new JsonObject
+                ["field"] = new JsonObject { ["fieldPath"] = orderField },
+                ["direction"] = descending ? "DESCENDING" : "ASCENDING",
+            }),
+            ["limit"] = limit,
+        };
+        return await RunQueryAsync(parentPath, query, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Busca somente documentos cujo campo numerico e maior ou igual ao cursor.
+    /// Usado pelo chat depois da primeira carga: em vez de reler 60 mensagens a
+    /// cada poll, normalmente recebe zero ou uma.
+    /// </summary>
+    public async Task<List<(string Id, Dictionary<string, object?> Fields)>> QuerySinceAsync(
+        string parentPath, string collectionId, string orderField, long sinceInclusive, int limit,
+        CancellationToken ct = default)
+    {
+        var query = new JsonObject
+        {
+            ["from"] = new JsonArray(new JsonObject { ["collectionId"] = collectionId }),
+            ["where"] = new JsonObject
+            {
+                ["fieldFilter"] = new JsonObject
                 {
                     ["field"] = new JsonObject { ["fieldPath"] = orderField },
-                    ["direction"] = descending ? "DESCENDING" : "ASCENDING",
-                }),
-                ["limit"] = limit,
+                    ["op"] = "GREATER_THAN_OR_EQUAL",
+                    ["value"] = new JsonObject { ["integerValue"] = sinceInclusive.ToString() },
+                },
             },
+            ["orderBy"] = new JsonArray(new JsonObject
+            {
+                ["field"] = new JsonObject { ["fieldPath"] = orderField },
+                ["direction"] = "ASCENDING",
+            }),
+            ["limit"] = limit,
         };
+        return await RunQueryAsync(parentPath, query, ct).ConfigureAwait(false);
+    }
 
+    private async Task<List<(string Id, Dictionary<string, object?> Fields)>> RunQueryAsync(
+        string parentPath, JsonObject structuredQuery, CancellationToken ct)
+    {
+        var body = new JsonObject { ["structuredQuery"] = structuredQuery };
         string url = Base + "/" + parentPath.Trim('/') + ":runQuery?key=" + ApiKey;
         using var content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
         using var resp = await _http.PostAsync(url, content, ct).ConfigureAwait(false);
@@ -245,15 +304,32 @@ public sealed class Firestore
     public static long Num(Dictionary<string, object?> f, string key, long fallback = 0)
         => f.TryGetValue(key, out var v) && v is long l ? l : fallback;
 
+    /// <summary>Numero real aceitando tanto doubleValue quanto integerValue.</summary>
+    public static double Real(Dictionary<string, object?> f, string key, double fallback = 0)
+        => f.TryGetValue(key, out var v) ? v switch
+        {
+            double d => d,
+            long l => l,
+            _ => fallback,
+        } : fallback;
+
     public static bool Flag(Dictionary<string, object?> f, string key, bool fallback = false)
         => f.TryGetValue(key, out var v) && v is bool b ? b : fallback;
 }
 
-public sealed class FirestoreException : Exception
+public sealed class FirestoreException : DocumentStoreException
 {
     public FirestoreException(string message) : base(message) { }
 
     /// <summary>true quando a rules recusou — sinal de que falta publicar as rules.</summary>
-    public bool IsPermissionDenied =>
+    public override bool IsPermissionDenied =>
         Message.Contains("403") || Message.Contains("PERMISSION_DENIED", StringComparison.OrdinalIgnoreCase);
+
+    public override bool IsQuotaExceeded =>
+        Message.Contains("429") || Message.Contains("RESOURCE_EXHAUSTED", StringComparison.OrdinalIgnoreCase)
+                                || Message.Contains("Quota exceeded", StringComparison.OrdinalIgnoreCase);
+
+    public override bool IsUnavailable => Message.Contains("408") || Message.Contains("425")
+        || Message.Contains("500") || Message.Contains("502") || Message.Contains("503")
+        || Message.Contains("504") || Message.Contains("UNAVAILABLE", StringComparison.OrdinalIgnoreCase);
 }

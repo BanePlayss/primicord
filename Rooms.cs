@@ -14,12 +14,13 @@ public sealed class RoomInfo
 /// <summary>Lista/cria/apaga salas no Firestore — o "lobby".</summary>
 public sealed class RoomDirectory
 {
-    private const int PeerStaleMs = 15000;
-    private readonly Firestore _fs;
+    private const int PeerStaleMs = 45_000;
+    private readonly IDocumentStore _fs;
 
-    public RoomDirectory(Firestore fs) => _fs = fs;
+    public RoomDirectory(IDocumentStore fs) => _fs = fs;
 
-    public async Task<List<RoomInfo>> ListAsync(CancellationToken ct = default)
+    public async Task<List<RoomInfo>> ListAsync(bool includeOccupants = true,
+                                                CancellationToken ct = default)
     {
         var rooms = new List<RoomInfo>();
         var docs = await _fs.ListAsync("pc_rooms", ct: ct).ConfigureAwait(false);
@@ -38,10 +39,13 @@ public sealed class RoomDirectory
             // morreu sem despedida — fecharam o app no botao X, caiu a luz, etc.
             try
             {
-                var peers = await _fs.ListAsync($"pc_rooms/{id}/peers", ct: ct).ConfigureAwait(false);
-                foreach (var (_, pf) in peers)
-                    if (now - Firestore.Num(pf, "lastSeen") <= PeerStaleMs)
-                        room.Occupants.Add(Firestore.Str(pf, "nick", "?"));
+                if (includeOccupants)
+                {
+                    var peers = await _fs.ListAsync($"pc_rooms/{id}/peers", ct: ct).ConfigureAwait(false);
+                    foreach (var (_, pf) in peers)
+                        if (now - Firestore.Num(pf, "lastSeen") <= PeerStaleMs)
+                            room.Occupants.Add(Firestore.Str(pf, "nick", "?"));
+                }
             }
             catch (Exception ex) { Log.Write($"peers da sala {id}: " + ex.Message); }
 
@@ -104,6 +108,31 @@ public sealed class Config
     /// hashes pra qualquer um — guardar aqui nao aumenta a exposicao.
     /// </summary>
     public string SenhaHash = "";
+    public long CachedPc;
+    public long CachedCc;
+    public string CachedTeamId = "";
+    public string CachedTeamName = "";
+    public string CachedThemeId = "";
+    public bool CachedIsMod;
+    public string CoordServerUrl = "http://primicord-server:8765";
+    public bool HostMiniServer;
+
+    /// <summary>
+    /// Volume que ESTE PC aplica a cada participante. A chave e um hash estavel do
+    /// nick; o SenderId da rede muda a cada sessao e por isso nao pode ser salvo.
+    /// Nada disto vai para a sala ou muda o audio dos outros.
+    /// </summary>
+    public readonly Dictionary<uint, int> PeerVolumes = new();
+
+    private static uint PeerVolumeKey(string nick)
+        => RoomSession.HashId((nick ?? "").Trim().ToLowerInvariant());
+
+    public int PeerVolume(string nick)
+        => PeerVolumes.TryGetValue(PeerVolumeKey(nick), out int value)
+            ? Math.Clamp(value, 0, 200) : 100;
+
+    public void SetPeerVolume(string nick, int percent)
+        => PeerVolumes[PeerVolumeKey(nick)] = Math.Clamp(percent, 0, 200);
     public int MicDevice = 0;
     public string OutputDeviceId = "";
     public bool PushToTalk;
@@ -129,7 +158,7 @@ public sealed class Config
     public int ScreenBudgetKb = 2000;
 
     /// <summary>Usar o tema (cor) que o jogador escolheu no site do Primitivao.</summary>
-    public bool UseSiteTheme = true;
+    public bool UseSiteTheme;
 
     /// <summary>Volume da musica do DJ (0..200%), separado do volume das vozes.</summary>
     public int MusicVolume = 70;
@@ -140,11 +169,87 @@ public sealed class Config
     /// <summary>Bipe quando alguem entra ou sai da sala de voz.</summary>
     public bool JoinLeaveSound = true;
 
+    public static string NormalizeCoordServerUrl(string? value)
+    {
+        string candidate = (value ?? "").Trim();
+        if (candidate.Length == 0) candidate = "primicord-server";
+        if (!candidate.Contains("://", StringComparison.Ordinal))
+            candidate = "http://" + candidate;
+
+        if (!Uri.TryCreate(candidate, UriKind.Absolute, out var uri)
+            || string.IsNullOrWhiteSpace(uri.Host))
+            return "http://primicord-server:8765";
+
+        var normalized = new UriBuilder(uri)
+        {
+            Scheme = "http",
+            Port = uri.IsDefaultPort ? 8765 : uri.Port,
+            Path = "",
+            Query = "",
+            Fragment = "",
+        };
+        return normalized.Uri.GetLeftPart(UriPartial.Authority);
+    }
+
     /// <summary>
     /// Mandar o som do sistema junto com a tela. Sem isso o pessoal ve o jogo/video
     /// mudo — so a voz passa.
     /// </summary>
     public bool ShareAudioWithScreen = true;
+
+    /// <summary>
+    /// Levar a voz por WebRTC (Opus + DTLS-SRTP) em vez da malha UDP com PCM cru.
+    /// </summary>
+    /// <remarks>
+    /// Fica desligado por padrao enquanto o caminho novo nao tiver rodado o
+    /// bastante em campo. A malha antiga e a que tem quilometragem; esta chave
+    /// existe justamente pra dar pra comparar as duas na mesma tarde — e pra
+    /// voltar atras sem precisar de outro build se algo der errado no meio da
+    /// sessao. Tela e audio compartilhado usam o relay independente desta chave.
+    /// </remarks>
+    public bool UseWebRtc;
+
+    /// <summary>
+    /// Tratar o microfone antes de mandar: cancelar eco, tirar chiado e nivelar volume.
+    /// </summary>
+    /// <remarks>
+    /// Ligado por padrao. E o que derruba a regra "todo mundo de fone" do README —
+    /// quem usa caixa de som para de devolver a voz dos outros pro microfone. Com
+    /// fone e quase inocuo (nao ha eco pra cancelar) e ainda assim o denoise e o
+    /// nivelamento ajudam, entao nao ha caso em que valha deixar desligado por
+    /// padrao. A chave existe pra desligar se o AGC incomodar num microfone especifico.
+    /// </remarks>
+    public bool EchoCancel = true;
+
+    /// <summary>
+    /// Nivelar o volume do microfone automaticamente. DESLIGADO por padrao: sem o
+    /// elo entre o preprocessador e o cancelador (limite do wrapper do Speex), ele
+    /// re-amplifica o residuo e derruba o cancelamento de eco de 16 dB pra 2,5 dB.
+    /// So vale ligar pra quem usa fone — ai nao ha eco pra cancelar mesmo.
+    /// </summary>
+    public bool MicAutoGain;
+
+    /// <summary>
+    /// Onde o botao de atualizar procura versao nova (dono/repositorio no GitHub).
+    /// Fica no config pra corrigir sem recompilar se o repositorio mudar de nome.
+    /// </summary>
+    public string UpdateRepo = Updater.DefaultRepo;
+
+    /// <summary>Camera preferida (nome do dispositivo). Vazio = a primeira que abrir.</summary>
+    public string CamDevice = "";
+
+    /// <summary>
+    /// Largura pedida a camera. O padrao e 320 (com 240 de altura) porque a conta
+    /// que manda aqui e a da MALHA, nao a da camera: cada espectador recebe uma
+    /// copia, entao a subida multiplica por N-1. Medido na C270 com teto de 15 fps:
+    /// 320x240 da ~200 kbps por espectador, 640x480 da ~570 kbps. Numa sala de 6,
+    /// e a diferenca entre 1,0 e 2,9 Mbps de subida so de camera.
+    /// </summary>
+    public int CamWidth = 320;
+    public int CamHeight = 240;
+
+    /// <summary>Teto de quadros por segundo. A camera pode entregar menos (luz baixa).</summary>
+    public int CamFps = 15;
 
     private static string Path_ => System.IO.Path.Combine(AppEnv.DataDir, "config.txt");
 
@@ -159,10 +264,29 @@ public sealed class Config
                 int eq = line.IndexOf('=');
                 if (eq <= 0) continue;
                 string k = line[..eq].Trim(), v = line[(eq + 1)..].Trim();
+                if (k.StartsWith("peervol-", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        uint senderId = Convert.ToUInt32(k[8..], 16);
+                        if (int.TryParse(v, out int volume))
+                            c.PeerVolumes[senderId] = Math.Clamp(volume, 0, 200);
+                    }
+                    catch { }
+                    continue;
+                }
                 switch (k)
                 {
                     case "nick": c.Nick = v; break;
                     case "hash": c.SenhaHash = v; break;
+                    case "profilepc": if (long.TryParse(v, out var ppc)) c.CachedPc = ppc; break;
+                    case "profilecc": if (long.TryParse(v, out var pcc)) c.CachedCc = pcc; break;
+                    case "profileteamid": c.CachedTeamId = v; break;
+                    case "profileteamname": c.CachedTeamName = v; break;
+                    case "profiletheme": c.CachedThemeId = v; break;
+                    case "profilemod": c.CachedIsMod = v == "1"; break;
+                    case "coordserver": if (v.Length > 0) c.CoordServerUrl = v; break;
+                    case "hostserver": c.HostMiniServer = v == "1"; break;
                     case "mic": if (int.TryParse(v, out var m)) c.MicDevice = m; break;
                     case "out": c.OutputDeviceId = v; break;
                     case "ptt": c.PushToTalk = v == "1"; break;
@@ -175,10 +299,19 @@ public sealed class Config
                     case "tray": c.TrayOnClose = v != "0"; break;
                     case "joinsound": c.JoinLeaveSound = v != "0"; break;
                     case "screenaudio": c.ShareAudioWithScreen = v != "0"; break;
+                    case "webrtc": c.UseWebRtc = v == "1"; break;
+                    case "aec": c.EchoCancel = v != "0"; break;
+                    case "agc": c.MicAutoGain = v == "1"; break;
+                    case "updaterepo": if (v.Length > 0) c.UpdateRepo = v; break;
+                    case "camdevice": c.CamDevice = v; break;
+                    case "camw": if (int.TryParse(v, out var cw)) c.CamWidth = Math.Clamp(cw, 160, 1280); break;
+                    case "camh": if (int.TryParse(v, out var chh)) c.CamHeight = Math.Clamp(chh, 120, 720); break;
+                    case "camfps": if (int.TryParse(v, out var cf)) c.CamFps = Math.Clamp(cf, 5, 30); break;
                 }
             }
         }
         catch (Exception ex) { Log.Write("config nao carregou: " + ex.Message); }
+        c.CoordServerUrl = NormalizeCoordServerUrl(c.CoordServerUrl);
         return c;
     }
 
@@ -186,10 +319,18 @@ public sealed class Config
     {
         try
         {
-            File.WriteAllLines(Path_, new[]
+            var linhas = new List<string>
             {
                 "nick=" + Nick,
                 "hash=" + SenhaHash,
+                "profilepc=" + CachedPc,
+                "profilecc=" + CachedCc,
+                "profileteamid=" + CachedTeamId,
+                "profileteamname=" + CachedTeamName,
+                "profiletheme=" + CachedThemeId,
+                "profilemod=" + (CachedIsMod ? "1" : "0"),
+                "coordserver=" + CoordServerUrl,
+                "hostserver=" + (HostMiniServer ? "1" : "0"),
                 "mic=" + MicDevice,
                 "out=" + OutputDeviceId,
                 "ptt=" + (PushToTalk ? "1" : "0"),
@@ -202,8 +343,41 @@ public sealed class Config
                 "tray=" + (TrayOnClose ? "1" : "0"),
                 "joinsound=" + (JoinLeaveSound ? "1" : "0"),
                 "screenaudio=" + (ShareAudioWithScreen ? "1" : "0"),
-            });
+                "webrtc=" + (UseWebRtc ? "1" : "0"),
+                "aec=" + (EchoCancel ? "1" : "0"),
+                "agc=" + (MicAutoGain ? "1" : "0"),
+                "camdevice=" + CamDevice,
+                "camw=" + CamWidth,
+                "camh=" + CamHeight,
+                "camfps=" + CamFps,
+            };
+
+            // updaterepo so vai pro arquivo se o usuario REALMENTE trocou.
+            //
+            // Gravando sempre, quem clicasse em SALVAR uma vez ficava congelado no
+            // padrao daquele dia: quando o padrao mudasse numa versao nova, o valor
+            // velho do arquivo continuaria vencendo, em silencio, e o botao de
+            // atualizar apontaria pro lugar errado pra sempre. Aconteceu de verdade
+            // — o app foi procurar release no repositorio do CODIGO, que e privado
+            // e nao tem release nenhuma.
+            if (!string.Equals(UpdateRepo, Updater.DefaultRepo, StringComparison.OrdinalIgnoreCase))
+                linhas.Add("updaterepo=" + UpdateRepo);
+
+            foreach (var (senderId, volume) in PeerVolumes.OrderBy(pair => pair.Key))
+                linhas.Add($"peervol-{senderId:X8}={Math.Clamp(volume, 0, 200)}");
+
+            File.WriteAllLines(Path_, linhas);
         }
         catch (Exception ex) { Log.Write("config nao salvou: " + ex.Message); }
+    }
+
+    public void CacheProfile(PrimitivaoUser user)
+    {
+        CachedPc = user.Pc;
+        CachedCc = user.Cc;
+        CachedTeamId = user.TeamId;
+        CachedTeamName = user.TeamName;
+        CachedThemeId = user.ThemeId;
+        CachedIsMod = user.IsMod;
     }
 }
