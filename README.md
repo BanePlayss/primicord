@@ -3,6 +3,22 @@
 O Discord dos primitivos — app nativo de Windows pra sala de voz em grupo,
 compartilhar tela e tirar clipe dos últimos segundos.
 
+## 0.7.1 — primeira versão pública
+
+- O Primicord passa a abrir como um app de comunidade: canal geral, salas de voz,
+  conversas e membros. Campeonato, ranking e apostas deixam a interface e não são
+  mais consultados; do Primitivão ficam apenas login, avatar e perfis de usuários.
+- Nova identidade visual inspirada na estrutura do Discord, com paleta neutra,
+  destaque azul, navegação persistente e controles da chamada no rodapé.
+- O som da janela ou monitor compartilhado agora usa Opus a 64 kbps e atravessa o
+  mesmo relay da voz e da imagem; a malha UDP fica somente como compatibilidade.
+- Ao compartilhar uma janela, o áudio é isolado pelo processo escolhido. Ao
+  compartilhar o monitor, o Primicord é excluído da captura para impedir eco.
+- Corrige o falso “zoom” da captura de janela: o bitmap agora usa o quadro visual
+  completo informado pelo Windows, sem cortar e esticar a área interna.
+- O palco preserva a proporção original com letterbox e mantém as miniaturas numa
+  faixa separada, sem cobrir a parte inferior da transmissão.
+
 ## 0.6.26 — participantes e tela pelo relay
 
 - A lista de participantes do relay passa a levar `id + nick`; cards, cabeçalho e

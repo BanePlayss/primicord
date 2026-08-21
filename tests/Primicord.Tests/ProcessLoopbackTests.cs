@@ -18,5 +18,9 @@ public sealed class ProcessLoopbackTests
 
         using var capture = ProcessLoopbackCapture.ExcludingSelf();
         capture.Prepare();
+
+        using var selectedWindow = ProcessLoopbackCapture.IncludingProcess(
+            (uint)Environment.ProcessId);
+        selectedWindow.Prepare();
     }
 }

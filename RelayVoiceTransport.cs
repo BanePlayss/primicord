@@ -13,10 +13,11 @@ namespace Primicord;
 /// abre uma conexao de SAIDA para uma replica Primicord; nenhum participante
 /// precisa receber uma porta aleatoria pelo Firewall do Windows.
 /// </summary>
-public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
+public sealed class RelayVoiceTransport : IVoiceTransport, ISharedAudioTransport, IDisposable
 {
     private const byte AudioPacket = 1;
     private const byte ScreenPacket = 2;
+    private const byte SharedAudioPacket = 3;
     private const int HeaderBytes = 7; // audio: tipo + senderId + sequencia
     private const int ScreenHeaderBytes = 9; // tipo + senderId + largura + altura
     private const int MaxRelayMessageBytes = 512 * 1024;
@@ -30,11 +31,16 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
     private readonly string _nick;
     private readonly uint _senderId;
     private readonly FrameAccumulator _mic = new();
+    private readonly FrameAccumulator _sharedAudio = new();
     private readonly byte[] _pcm = new byte[PcmBytesPerFrame];
+    private readonly byte[] _sharedPcm = new byte[PcmBytesPerFrame];
     private readonly short[] _samples = new short[SamplesPerFrame];
+    private readonly short[] _sharedSamples = new short[SamplesPerFrame];
     private readonly byte[] _opus = new byte[MaxOpusPacket];
+    private readonly byte[] _sharedOpus = new byte[MaxOpusPacket];
     private readonly object _encodeLock = new();
     private readonly IOpusEncoder _encoder;
+    private readonly IOpusEncoder _sharedAudioEncoder;
     private readonly Channel<byte[]> _outgoing = Channel.CreateBounded<byte[]>(
         new BoundedChannelOptions(12)
         {
@@ -49,14 +55,25 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
             SingleWriter = false,
             FullMode = BoundedChannelFullMode.DropOldest,
         });
+    private readonly Channel<byte[]> _sharedAudioOutgoing = Channel.CreateBounded<byte[]>(
+        new BoundedChannelOptions(8)
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            FullMode = BoundedChannelFullMode.DropOldest,
+        });
     private readonly object _peerLock = new();
     private readonly Dictionary<uint, string> _relayPeers = new();
+    private readonly HashSet<uint> _sharedAudioPeers = new();
     private readonly Dictionary<uint, DecoderState> _decoders = new();
+    private readonly Dictionary<uint, DecoderState> _sharedAudioDecoders = new();
     private CancellationTokenSource? _cts;
     private bool _running;
     private volatile bool _connected;
     private volatile bool _screenRelaySupported;
+    private volatile bool _sharedAudioRelaySupported;
     private ushort _sequence;
+    private ushort _sharedAudioSequence;
     private int _reconnectFailures;
 
     public RelayVoiceTransport(IClusterEndpointProvider endpoints, string roomId,
@@ -74,23 +91,41 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
         _encoder.UseInbandFEC = true;
         _encoder.PacketLossPercent = 3;
         _encoder.Complexity = 7;
+
+        _sharedAudioEncoder = OpusCodecFactory.CreateEncoder(
+            48000, 1, OpusApplication.OPUS_APPLICATION_AUDIO);
+        _sharedAudioEncoder.Bitrate = 64_000;
+        _sharedAudioEncoder.UseVBR = true;
+        _sharedAudioEncoder.UseDTX = true;
+        _sharedAudioEncoder.UseInbandFEC = true;
+        _sharedAudioEncoder.PacketLossPercent = 3;
+        _sharedAudioEncoder.Complexity = 8;
     }
 
     public bool Muted { get; set; }
     public bool Connected => _connected;
     public bool ScreenRelaySupported => _connected && _screenRelaySupported;
+    public bool SharedAudioRelaySupported => _connected && _sharedAudioRelaySupported;
     public int ConnectedPeerCount { get { lock (_peerLock) return _relayPeers.Count; } }
     public IReadOnlyDictionary<uint, string> Peers
     {
         get { lock (_peerLock) return new Dictionary<uint, string>(_relayPeers); }
     }
     public event Action<uint, byte[], int, int>? VoiceReceived;
+    public event Action<uint, byte[], int, int>? SharedAudioReceived;
     public event Action<uint, byte[], int, int>? ScreenFrameReceived;
     public event Action? StateChanged;
 
     public bool HasPeer(uint senderId)
     {
         lock (_peerLock) return _connected && _relayPeers.ContainsKey(senderId);
+    }
+
+    public bool HasSharedAudioPeer(uint senderId)
+    {
+        lock (_peerLock)
+            return _connected && _sharedAudioRelaySupported
+                && _sharedAudioPeers.Contains(senderId);
     }
 
     public void Start()
@@ -124,6 +159,45 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
                 Buffer.BlockCopy(_opus, 0, packet, HeaderBytes, encoded);
             }
             _outgoing.Writer.TryWrite(packet);
+        }
+    }
+
+    /// <summary>
+    /// Comprime o som da tela em Opus separado da voz. Usar outro encoder evita
+    /// misturar o estado de fala com musica/jogo e permite 64 kbps para melhor som.
+    /// </summary>
+    public void SendSharedAudio(byte[] payload, int offset, int count)
+    {
+        if (!_running || !SharedAudioRelaySupported || count <= 0) return;
+        _sharedAudio.Append(payload, offset, count);
+        while (_sharedAudio.TryDequeueFrame(_sharedPcm, 0, PcmBytesPerFrame))
+        {
+            byte[] packet;
+            lock (_encodeLock)
+            {
+                for (int i = 0; i < SamplesPerFrame; i++)
+                    _sharedSamples[i] = (short)(_sharedPcm[i * 2] | (_sharedPcm[i * 2 + 1] << 8));
+                int encoded;
+                try
+                {
+                    encoded = _sharedAudioEncoder.Encode(
+                        _sharedSamples, SamplesPerFrame, _sharedOpus, _sharedOpus.Length);
+                }
+                catch (Exception ex)
+                {
+                    Log.Write("relay audio compartilhado: encode: " + ex.Message);
+                    return;
+                }
+                if (encoded <= 2) continue;
+
+                packet = new byte[HeaderBytes + encoded];
+                packet[0] = SharedAudioPacket;
+                BinaryPrimitives.WriteUInt32LittleEndian(packet.AsSpan(1, 4), _senderId);
+                BinaryPrimitives.WriteUInt16LittleEndian(
+                    packet.AsSpan(5, 2), ++_sharedAudioSequence);
+                Buffer.BlockCopy(_sharedOpus, 0, packet, HeaderBytes, encoded);
+            }
+            _sharedAudioOutgoing.Writer.TryWrite(packet);
         }
     }
 
@@ -191,7 +265,7 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
         await socket.ConnectAsync(uri, connectCts.Token).ConfigureAwait(false);
 
         Log.Write("relay voz conectado: " + uri.GetLeftPart(UriPartial.Authority));
-        SetConnected(true, new Dictionary<uint, string>());
+        SetConnected(true, new Dictionary<uint, string>(), new HashSet<uint>());
         DateTimeOffset connectedAt = DateTimeOffset.UtcNow;
         using var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(outerCt);
         Task send = SendLoopAsync(socket, connectionCts.Token);
@@ -215,7 +289,8 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
             Path = "/v1/voice/" + Uri.EscapeDataString(_roomId),
             Query = "peer=" + Uri.EscapeDataString(_peerId)
                   + "&sender=" + _senderId
-                  + "&nick=" + Uri.EscapeDataString(_nick),
+                  + "&nick=" + Uri.EscapeDataString(_nick)
+                  + "&sharedAudio=1",
         };
         return builder.Uri;
     }
@@ -230,6 +305,13 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
                 await socket.SendAsync(voice, WebSocketMessageType.Binary, true, ct).ConfigureAwait(false);
                 sent = true;
             }
+            // O audio da tela vem antes do video, mas nunca passa na frente da voz.
+            if (_sharedAudioOutgoing.Reader.TryRead(out byte[]? sharedAudio))
+            {
+                await socket.SendAsync(
+                    sharedAudio, WebSocketMessageType.Binary, true, ct).ConfigureAwait(false);
+                sent = true;
+            }
             // No maximo um quadro antes de verificar voz novamente. Tela atrasada
             // ja foi descartada pelo canal de capacidade 2.
             if (_screenOutgoing.Reader.TryRead(out byte[]? screen))
@@ -241,11 +323,18 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
 
             using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             Task<bool> voiceReady = _outgoing.Reader.WaitToReadAsync(waitCts.Token).AsTask();
+            Task<bool> sharedAudioReady = _sharedAudioOutgoing.Reader
+                .WaitToReadAsync(waitCts.Token).AsTask();
             Task<bool> screenReady = _screenOutgoing.Reader.WaitToReadAsync(waitCts.Token).AsTask();
-            Task<bool> winner = await Task.WhenAny(voiceReady, screenReady).ConfigureAwait(false);
+            Task<bool> winner = await Task.WhenAny(
+                voiceReady, sharedAudioReady, screenReady).ConfigureAwait(false);
             bool ready = await winner.ConfigureAwait(false);
             waitCts.Cancel();
-            try { await Task.WhenAll(voiceReady, screenReady).ConfigureAwait(false); } catch { }
+            try
+            {
+                await Task.WhenAll(voiceReady, sharedAudioReady, screenReady).ConfigureAwait(false);
+            }
+            catch { }
             if (!ready) return;
         }
     }
@@ -279,13 +368,17 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
             JsonNode? root = JsonNode.Parse(Encoding.UTF8.GetString(payload));
             if (root?["type"]?.GetValue<string>() != "peers") return;
             _screenRelaySupported = root["screen"]?.GetValue<bool>() == true;
+            _sharedAudioRelaySupported = root["sharedAudio"]?.GetValue<bool>() == true;
             var peers = new Dictionary<uint, string>();
+            var sharedAudioPeers = new HashSet<uint>();
             if (root["members"] is JsonArray members)
                 foreach (JsonNode? node in members)
                 {
                     uint id = node?["id"]?.GetValue<uint>() ?? 0;
                     if (id == 0 || id == _senderId) continue;
                     peers[id] = node?["nick"]?.GetValue<string>()?.Trim() ?? "";
+                    if (node?["sharedAudio"]?.GetValue<bool>() == true)
+                        sharedAudioPeers.Add(id);
                 }
             // Compatibilidade com o servidor 0.6.25, que enviava apenas ids.
             if (root["ids"] is JsonArray ids)
@@ -294,7 +387,7 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
                     uint id = node?.GetValue<uint>() ?? 0;
                     if (id != 0 && id != _senderId) peers.TryAdd(id, "");
                 }
-            SetConnected(true, peers);
+            SetConnected(true, peers, sharedAudioPeers);
         }
         catch (Exception ex) { Log.Write("relay voz: snapshot: " + ex.Message); }
     }
@@ -304,11 +397,22 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
         if (packet.Length < 1) return;
         if (packet[0] == AudioPacket) ReadAudio(packet);
         else if (packet[0] == ScreenPacket) ReadScreen(packet);
+        else if (packet[0] == SharedAudioPacket) ReadSharedAudio(packet);
     }
 
     private void ReadAudio(byte[] packet)
+        => ReadOpus(packet, AudioPacket, _decoders, VoiceReceived, "voz");
+
+    private void ReadSharedAudio(byte[] packet)
+        => ReadOpus(packet, SharedAudioPacket, _sharedAudioDecoders,
+                    SharedAudioReceived, "audio compartilhado");
+
+    private void ReadOpus(byte[] packet, byte packetType,
+                          Dictionary<uint, DecoderState> decoders,
+                          Action<uint, byte[], int, int>? received,
+                          string streamName)
     {
-        if (packet.Length <= HeaderBytes || packet[0] != AudioPacket) return;
+        if (packet.Length <= HeaderBytes || packet[0] != packetType) return;
         uint sender = BinaryPrimitives.ReadUInt32LittleEndian(packet.AsSpan(1, 4));
         if (sender == 0 || sender == _senderId) return;
         bool discovered;
@@ -323,23 +427,23 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
         DecoderState state;
         lock (_peerLock)
         {
-            if (!_decoders.TryGetValue(sender, out state!))
+            if (!decoders.TryGetValue(sender, out state!))
             {
                 state = new DecoderState();
-                _decoders[sender] = state;
+                decoders[sender] = state;
             }
         }
         try
         {
             if (state.HaveSequence && (ushort)(sequence - state.LastSequence) == 2)
                 Emit(sender, state, state.Decoder.Decode(
-                    ReadOnlySpan<byte>.Empty, state.Pcm, SamplesPerFrame, false));
+                    ReadOnlySpan<byte>.Empty, state.Pcm, SamplesPerFrame, false), received);
             state.LastSequence = sequence;
             state.HaveSequence = true;
             Emit(sender, state, state.Decoder.Decode(
-                packet.AsSpan(HeaderBytes), state.Pcm, SamplesPerFrame, false));
+                packet.AsSpan(HeaderBytes), state.Pcm, SamplesPerFrame, false), received);
         }
-        catch (Exception ex) { Log.Write("relay voz: decode: " + ex.Message); }
+        catch (Exception ex) { Log.Write($"relay {streamName}: decode: {ex.Message}"); }
     }
 
     private void ReadScreen(byte[] packet)
@@ -353,7 +457,8 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
         ScreenFrameReceived?.Invoke(sender, payload, width, height);
     }
 
-    private void Emit(uint sender, DecoderState state, int samples)
+    private static void Emit(uint sender, DecoderState state, int samples,
+                             Action<uint, byte[], int, int>? received)
     {
         if (samples <= 0 || samples * 2 > state.Bytes.Length) return;
         for (int i = 0; i < samples; i++)
@@ -362,10 +467,11 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
             state.Bytes[i * 2] = (byte)sample;
             state.Bytes[i * 2 + 1] = (byte)(sample >> 8);
         }
-        VoiceReceived?.Invoke(sender, state.Bytes, 0, samples * 2);
+        received?.Invoke(sender, state.Bytes, 0, samples * 2);
     }
 
-    private void SetConnected(bool connected, IReadOnlyDictionary<uint, string>? peers)
+    private void SetConnected(bool connected, IReadOnlyDictionary<uint, string>? peers,
+                              IReadOnlySet<uint>? sharedAudioPeers = null)
     {
         bool changed;
         lock (_peerLock)
@@ -379,19 +485,26 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
                                       || !string.Equals(nick, pair.Value, StringComparison.Ordinal));
                 _relayPeers.Clear();
                 foreach (var pair in peers) _relayPeers[pair.Key] = pair.Value;
+                _sharedAudioPeers.Clear();
+                if (sharedAudioPeers != null)
+                    foreach (uint id in sharedAudioPeers) _sharedAudioPeers.Add(id);
             }
             else if (_relayPeers.Count > 0)
             {
                 _relayPeers.Clear();
+                _sharedAudioPeers.Clear();
                 changed = true;
             }
         }
         if (!connected)
         {
             _screenRelaySupported = false;
+            _sharedAudioRelaySupported = false;
             while (_outgoing.Reader.TryRead(out _)) { }
+            while (_sharedAudioOutgoing.Reader.TryRead(out _)) { }
             while (_screenOutgoing.Reader.TryRead(out _)) { }
             _mic.Reset();
+            _sharedAudio.Reset();
         }
         if (changed) StateChanged?.Invoke();
     }
@@ -402,6 +515,7 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
         _running = false;
         try { _cts?.Cancel(); } catch { }
         _outgoing.Writer.TryComplete();
+        _sharedAudioOutgoing.Writer.TryComplete();
         _screenOutgoing.Writer.TryComplete();
         SetConnected(false, null);
     }
@@ -422,7 +536,7 @@ public sealed class RelayVoiceTransport : IVoiceTransport, IDisposable
 /// quando os dois lados aparecem no hub, o audio recebido direto e ignorado para
 /// nao tocar duplicado.
 /// </summary>
-public sealed class ResilientVoiceTransport : IVoiceTransport, IDisposable
+public sealed class ResilientVoiceTransport : IVoiceTransport, ISharedAudioTransport, IDisposable
 {
     private readonly RelayVoiceTransport _relay;
     private readonly IVoiceTransport _fallback;
@@ -437,6 +551,8 @@ public sealed class ResilientVoiceTransport : IVoiceTransport, IDisposable
         _presence = presence;
         _relay.VoiceReceived += OnRelayVoice;
         _fallback.VoiceReceived += OnFallbackVoice;
+        _relay.SharedAudioReceived += OnRelaySharedAudio;
+        _presence.SharedAudioReceived += OnFallbackSharedAudio;
     }
 
     public bool Muted
@@ -447,9 +563,11 @@ public sealed class ResilientVoiceTransport : IVoiceTransport, IDisposable
 
     public bool Connected => _relay.Connected;
     public bool ScreenRelaySupported => _relay.ScreenRelaySupported;
+    public bool SharedAudioRelaySupported => _relay.SharedAudioRelaySupported;
     public int ConnectedPeerCount => _relay.ConnectedPeerCount;
     public IReadOnlyDictionary<uint, string> RelayPeers => _relay.Peers;
     public event Action<uint, byte[], int, int>? VoiceReceived;
+    public event Action<uint, byte[], int, int>? SharedAudioReceived;
     public event Action<uint, byte[], int, int>? ScreenFrameReceived
     {
         add => _relay.ScreenFrameReceived += value;
@@ -486,6 +604,19 @@ public sealed class ResilientVoiceTransport : IVoiceTransport, IDisposable
             _fallback.SendVoice(payload, offset, count);
     }
 
+    public void SendSharedAudio(byte[] payload, int offset, int count)
+    {
+        if (_relay.SharedAudioRelaySupported)
+            _relay.SendSharedAudio(payload, offset, count);
+
+        // Atualizacao gradual: cliente/servidor antigo continua ouvindo pela malha
+        // direta. Com todos no relay, o remetente sobe apenas uma copia Opus.
+        var peers = _presence.Peers;
+        if (!_relay.SharedAudioRelaySupported
+            || peers.Any(peer => !_relay.HasSharedAudioPeer(peer.SenderId)))
+            _presence.SendSharedAudio(payload, offset, count);
+    }
+
     private void OnRelayVoice(uint sender, byte[] buffer, int offset, int count)
         => VoiceReceived?.Invoke(sender, buffer, offset, count);
 
@@ -494,10 +625,21 @@ public sealed class ResilientVoiceTransport : IVoiceTransport, IDisposable
         if (!_relay.HasPeer(sender)) VoiceReceived?.Invoke(sender, buffer, offset, count);
     }
 
+    private void OnRelaySharedAudio(uint sender, byte[] buffer, int offset, int count)
+        => SharedAudioReceived?.Invoke(sender, buffer, offset, count);
+
+    private void OnFallbackSharedAudio(uint sender, byte[] buffer, int offset, int count)
+    {
+        if (!_relay.HasSharedAudioPeer(sender))
+            SharedAudioReceived?.Invoke(sender, buffer, offset, count);
+    }
+
     public void Dispose()
     {
         _relay.VoiceReceived -= OnRelayVoice;
         _fallback.VoiceReceived -= OnFallbackVoice;
+        _relay.SharedAudioReceived -= OnRelaySharedAudio;
+        _presence.SharedAudioReceived -= OnFallbackSharedAudio;
         _relay.Dispose();
     }
 }

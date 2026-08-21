@@ -58,6 +58,7 @@ public sealed class MainForm : Form
     private StageView? _stage;
     private uint _focusedSharer;          // 0 = minha propria tela
     private bool _iAmSharing;
+    private uint? _screenAudioProcessId;
     private Label? _djLabel;
     private string _nowPlaying = "";
 
@@ -69,14 +70,9 @@ public sealed class MainForm : Form
     private readonly AppBanner _banner = new();
 
     private Panel? _rail, _brand, _railList, _voiceStrip, _userPanel, _membersList, _contentHost;
-    private Panel? _rightPanel, _membersHead, _championshipPanel;
-    private ClassificacaoView? _tabela;
-    private Label? _tabelaHead;
-    private ApostasView? _apostas;
-    private Label? _apostasHead;
+    private Panel? _rightPanel, _membersHead;
     private ChatView? _chatView;
     private ChatView? _roomChatView;
-    private PrimitivaoView? _primitivao;
     private Panel? _roomPanel;
     private CallGrid? _callGrid;
     private RoomHeader? _roomHeader;
@@ -88,11 +84,9 @@ public sealed class MainForm : Form
     private bool _chatAutoCollapsed;
     private HashSet<string> _roomKnownPeers = new(StringComparer.OrdinalIgnoreCase);
 
-    // estado da navegacao: "geral" | "dm:<nick>" | "room:<id>"
-    // O centro nasce no Primitivao, e nao mais no chat. Quem esta junto aqui esta
-    // FALANDO — o canal de texto ocupando a tela inteira era espaco caro gasto com
-    // o que menos se usa. Ele continua a um clique no rail.
-    private string _view = "primitivao";
+    // estado da navegacao: "geral" | "dm:<nick>" | "room:<id>". A versao publica
+    // nasce no canal geral; campeonato/apostas nao fazem parte do Primicord.
+    private string _view = "geral";
     private List<RoomInfo> _rooms = new();
     private List<string> _members = new();
     private Dictionary<string, MemberPresence> _presence = new(StringComparer.OrdinalIgnoreCase);
@@ -114,8 +108,8 @@ public sealed class MainForm : Form
         MiniServerProcess.Configure(enabled: true);
         _clusterEndpoints = new TailscaleClusterEndpointProvider(_cfg.CoordServerUrl);
         // Sala, presenca e chat pertencem a malha SQLite dos PCs. Firestore e
-        // somente a fonte de conta/campeonato do site: uma falha do mini servidor
-        // deve gerar recuo local, nunca uma tempestade silenciosa de leituras cloud.
+        // somente a fonte de login/perfis do site: uma falha do mini servidor deve
+        // gerar recuo local, nunca uma tempestade silenciosa de leituras cloud.
         _coord = new ClusterDocumentStore(_clusterEndpoints, fallback: null);
         _dir = new RoomDirectory(_coord);
 
@@ -389,7 +383,9 @@ public sealed class MainForm : Form
             var g = e.Graphics;
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
             using (var b = new SolidBrush(Pv.Orange))
-                Pv.DrawTracked(g, "PRIMICORD", Pv.DisplaySm, b, 16, 18, 2.2f);
+                Pv.DrawTracked(g, "PRIMICORD", Pv.DisplaySm, b, 16, 10, 2.2f);
+            using (var b = new SolidBrush(Pv.BoneDim))
+                Pv.DrawTracked(g, "COMUNIDADE", Pv.Label, b, 16, 34, 1.8f);
             using (var p = new Pen(Pv.Char3, 2)) g.DrawLine(p, 0, _brand.Height - 1, _brand.Width, _brand.Height - 1);
         };
 
@@ -426,34 +422,6 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill, AutoScroll = true, BackColor = Pv.Char2,
             Padding = new Padding(0, 4, 0, 8),
         };
-        // ── CLASSIFICACAO (embaixo, na mesma coluna) ──
-        _championshipPanel = new Panel { Dock = DockStyle.Bottom, AutoSize = true, BackColor = Pv.Char2 };
-        _tabelaHead = new Label
-        {
-            Dock = DockStyle.Top, Height = 34, BackColor = Pv.Char2, ForeColor = Pv.BoneDim,
-            Font = Pv.Label, Padding = new Padding(18, 12, 8, 0), Text = "LOL",
-        };
-        _tabela = new ClassificacaoView { Dock = DockStyle.Top };
-
-        _apostasHead = new Label
-        {
-            Dock = DockStyle.Top, Height = 30, BackColor = Pv.Char2, ForeColor = Pv.BoneDim,
-            Font = Pv.Label, Padding = new Padding(18, 10, 8, 0), Text = "APOSTAS DISPONIVEIS",
-            Visible = false,
-        };
-        _apostas = new ApostasView { Dock = DockStyle.Top, Visible = false };
-
-        // Ordem inversa: o ultimo adicionado fica no topo da pilha do Dock.
-        _championshipPanel.Controls.Add(_apostas);
-        _championshipPanel.Controls.Add(_apostasHead);
-        _championshipPanel.Controls.Add(_tabela);
-        _championshipPanel.Controls.Add(_tabelaHead);
-        _championshipPanel.Paint += (_, e) =>
-        {
-            using var p = new Pen(Pv.Char3, 2);
-            e.Graphics.DrawLine(p, 12, 0, _championshipPanel.Width - 12, 0);
-        };
-
         _roomChatView = new ChatView(compact: true) { Dock = DockStyle.Fill, Visible = false };
         _roomChatView.Send += OnSendMessageAsync;
         _roomActivity = new RoomActivityView { Visible = false };
@@ -462,7 +430,6 @@ public sealed class MainForm : Form
         _rightPanel.Controls.Add(_membersList);
         _rightPanel.Controls.Add(_roomChatView);
         _rightPanel.Controls.Add(_roomActivity);
-        _rightPanel.Controls.Add(_championshipPanel);
         _rightPanel.Controls.Add(_membersHead);
 
         // ── CONTEUDO ──
@@ -476,7 +443,7 @@ public sealed class MainForm : Form
         _chatView = new ChatView { Dock = DockStyle.Fill };
         _chatView.Send += OnSendMessageAsync;
 
-        SelectView("primitivao");
+        SelectView("geral");
         RebuildRail();
 
         // O shell nao precisa reler sala, presenca e chat a cada 2s. A voz tem seu
@@ -607,6 +574,7 @@ public sealed class MainForm : Form
                 _voice.Dispose();
                 _voice = new VoiceEngine
                 {
+                    MusicVolume = _cfg.MusicVolume / 100f,
                     PreprocessMic = _cfg.EchoCancel,
                     MicAutoGain = _cfg.MicAutoGain,
                 };
@@ -614,7 +582,9 @@ public sealed class MainForm : Form
                 _voice.Failed += ShowBanner;
                 // Reata no transporte que ja estava valendo — trocar de microfone
                 // nao pode renegociar as conexoes WebRTC.
-                _voice.AttachTransport(_voiceRoute ?? (IVoiceTransport?)_webrtc ?? _session, _session);
+                _voice.AttachTransport(
+                    _voiceRoute ?? (IVoiceTransport?)_webrtc ?? _session,
+                    (ISharedAudioTransport?)_voiceRoute ?? _session);
                 _voice.Start(_cfg.MicDevice,
                     string.IsNullOrEmpty(_cfg.OutputDeviceId) ? null : _cfg.OutputDeviceId);
                 Log.Write("audio reaberto com os dispositivos novos");
@@ -641,12 +611,6 @@ public sealed class MainForm : Form
 
         // Dock=Top empilha ao contrario: montamos a lista e adicionamos invertida.
         var items = new List<Control>();
-
-        items.Add(RailHeader("PRIMITIVAO"));
-        var prim = new RailItem("Campeonato", RailItem.Kind.Action)
-        { Dock = DockStyle.Top, Active = _view == "primitivao" };
-        prim.Click += (_, _) => SelectView("primitivao");
-        items.Add(prim);
 
         items.Add(RailHeader("CANAIS"));
         var geral = new RailItem("geral", RailItem.Kind.TextChannel)
@@ -741,13 +705,6 @@ public sealed class MainForm : Form
         {
             _contentHost.Controls.Add(EnsureRoomPanel());
         }
-        else if (view == "primitivao")
-        {
-            _primitivao ??= new PrimitivaoView { Dock = DockStyle.Fill };
-            _primitivao.MeuNick = Nick;
-            _contentHost.Controls.Add(_primitivao);
-            if (!ServerBackoffActive) _ = RefreshCampeonatoAsync();
-        }
         else
         {
             if (_chatView == null) return;
@@ -788,7 +745,6 @@ public sealed class MainForm : Form
         _membersHead.Visible = !inRoom;
         _roomChatView.Visible = inRoom && _roomChatVisible;
         if (_roomActivity != null) _roomActivity.Visible = inRoom && _roomChatVisible;
-        if (_championshipPanel != null) _championshipPanel.Visible = !inRoom;
         _rightPanel.Width = inRoom ? 288 : 236;
         _rightPanel.Visible = !inRoom || _roomChatVisible;
 
@@ -886,20 +842,14 @@ public sealed class MainForm : Form
                     return;
                 }
 
-            // Dados do site sao decorativos no Primicord. Se a cota deles acabar,
-            // pausamos apenas membros/ranking; sala, chat e voz pela malha local
-            // continuam no mesmo ciclo.
+            // Da parte do site, a versao publica usa apenas a lista de usuarios.
+            // Campeonato, ranking e apostas nao sao mais lidos pelo Primicord.
             if (DateTimeOffset.UtcNow >= _siteBackoffUntil)
             {
                 try
                 {
                     if (_members.Count == 0)
                         _members = await Primitivao.ListMembersAsync(_fs);
-
-                    // Classificacao: a cada ~15min. O primeiro tick busca na hora
-                    // para a tabela nao nascer vazia.
-                    if (first || _pollTick % 90 == 1)
-                        await RefreshCampeonatoAsync(propagateFirestore: true);
                 }
                 catch (FirestoreException ex)
                 {
@@ -997,46 +947,6 @@ public sealed class MainForm : Form
         if (!_serverBanner) return;
         _serverBanner = false;
         _banner.Dismiss();
-    }
-
-    /// <summary>Le a tabela do Primitivao e joga na coluna da direita.</summary>
-    private async Task RefreshCampeonatoAsync(bool propagateFirestore = false)
-    {
-        if (_tabela == null || _tabela.IsDisposed) return;
-        try
-        {
-            var painel = await CampeonatoLol.LerAsync(_fs, Nick);
-            if (_tabela.IsDisposed) return;
-
-            if (_primitivao != null && !_primitivao.IsDisposed)
-            {
-                _primitivao.MeuNick = Nick;
-                _primitivao.Definir(painel);
-            }
-
-            _tabela.MeuNick = Nick;
-            _tabela.MaxLinhas = 4;   // o TOP 4, como no rascunho
-            _tabela.Definir(painel?.Tabela);
-            if (_tabelaHead != null && !_tabelaHead.IsDisposed)
-            {
-                string resumo = _tabela.Resumo;
-                _tabelaHead.Text = resumo.Length > 0 ? "LOL  ·  " + resumo : "LOL";
-            }
-
-            if (_apostas != null && !_apostas.IsDisposed)
-            {
-                var abertas = painel?.Apostas ?? new List<ApostaLol>();
-                _apostas.Definir(abertas);
-                if (_apostasHead != null && !_apostasHead.IsDisposed)
-                    _apostasHead.Visible = abertas.Count > 0;
-            }
-        }
-        catch (FirestoreException ex)
-        {
-            if (propagateFirestore) throw;
-            Log.Write("campeonato: " + ex.Message);
-        }
-        catch (Exception ex) { Log.Write("campeonato: " + ex.Message); }
     }
 
     private async Task RefreshChatAsync(bool propagateFirestore = false)
@@ -1368,7 +1278,9 @@ public sealed class MainForm : Form
                     ApplySavedPeerVolumes();
                     _voice.OutputMuted = _audioMuted;
                     _voice.Failed += ShowBanner;
-                    _voice.AttachTransport(_voiceRoute ?? (IVoiceTransport?)_webrtc ?? _session, _session);
+                    _voice.AttachTransport(
+                        _voiceRoute ?? (IVoiceTransport?)_webrtc ?? _session,
+                        (ISharedAudioTransport?)_voiceRoute ?? _session);
                     _voice.HeardPcm += (b, o, c) => _clips?.PushHeard(b, o, c);
                     _voice.MicPcm += (b, o, c) => _clips?.PushMic(b, o, c);
                     _voice.Start(_cfg.MicDevice,
@@ -1404,9 +1316,9 @@ public sealed class MainForm : Form
         ApplySavedPeerVolumes();
         _voice.Failed += ShowBanner;
 
-        // A malha UDP continua levando tela/musica/cinema e funciona como fallback
-        // pra clientes antigos. A voz principal usa WebSocket de saida: Firewall e
-        // NAT do outro PC deixam de ser requisito pra conversar.
+        // A malha UDP continua como fallback para clientes antigos. Voz, tela e som
+        // compartilhado usam primeiro o WebSocket de saida: Firewall e NAT do outro
+        // PC deixam de ser requisito para a chamada normal.
         IVoiceTransport fallback = _session;
         if (_cfg.UseWebRtc)
         {
@@ -1425,7 +1337,7 @@ public sealed class MainForm : Form
         {
             if (!IsDisposed) try { BeginInvoke(() => { OnPeersChanged(); UpdateRoomStatus(); }); } catch { }
         };
-        _voice.AttachTransport(_voiceRoute, _session);
+        _voice.AttachTransport(_voiceRoute, _voiceRoute);
 
         // Buffer rolante de clipe: recebe o que eu ouço e o meu microfone.
         _clips = new ClipRecorder(60);
@@ -1503,6 +1415,7 @@ public sealed class MainForm : Form
         try { _screenSender?.Dispose(); } catch { }
         _screenSender = null;
         _iAmSharing = false;
+        _screenAudioProcessId = null;
         _stage?.ClearSelfFrame();
         try { _music?.Dispose(); } catch { }
         _music = null;
@@ -1893,6 +1806,7 @@ public sealed class MainForm : Form
             _screenSender?.Dispose();
             _screenSender = null;
             _iAmSharing = false;
+            _screenAudioProcessId = null;
             _stage?.ClearSelfFrame();
             _session.Sharing = false;
             SyncSystemAudio();      // sem tela, o som do sistema so segue se for DJ
@@ -1909,7 +1823,8 @@ public sealed class MainForm : Form
 
         try
         {
-            _screenSender = new ScreenSender(_session, targets[pick], _voiceRoute)
+            CaptureTarget target = targets[pick];
+            _screenSender = new ScreenSender(_session, target, _voiceRoute)
             { TotalUploadBudget = Math.Clamp(_cfg.ScreenBudgetKb, 200, 6000) * 1000 };
             _screenSender.FullFrameProduced += OnMyFrame;
             _screenSender.PreviewFrameProduced += OnMyPreviewFrame;
@@ -1921,6 +1836,7 @@ public sealed class MainForm : Form
             _screenSender.NeedFullFrames = _cfg.AutoBuffer;
             _screenSender.Start();
             _iAmSharing = true;
+            _screenAudioProcessId = target.ProcessId;
             _session.Sharing = true;
             _focusedSharer = 0;   // foca a minha propria tela
             // Tela sem som e tela pela metade: o pessoal veria o jogo mudo.
@@ -2099,8 +2015,14 @@ public sealed class MainForm : Form
 
         try
         {
-            _music = new MusicShare(_session!);
+            ISharedAudioTransport transport = (ISharedAudioTransport?)_voiceRoute ?? _session!;
+            uint? processId = _iAmSharing && !_djMode ? _screenAudioProcessId : null;
+            _music = new MusicShare(transport, processId);
             _music.Start();
+            if (_iAmSharing)
+                Toast("TELA COM AUDIO", processId.HasValue
+                    ? "Som isolado da janela selecionada."
+                    : "Som do sistema sem recapturar o Primicord.");
         }
         catch (ProcessLoopbackUnavailableException ex)
         {
@@ -2108,7 +2030,8 @@ public sealed class MainForm : Form
             _music = null;
             _screenAudio = false;
             _djMode = false;
-            Toast("TELA SEM AUDIO", "Isolamento falhou; o eco foi bloqueado.");
+            Toast("TELA SEM AUDIO",
+                "O Windows nao abriu a captura isolada; a imagem continua sem eco.");
         }
         catch (Exception ex)
         {
@@ -2198,7 +2121,12 @@ public sealed class MainForm : Form
         _icCam.Invalidate();
 
         _icShare!.Active = _iAmSharing;
-        _icShare.Caption = _iAmSharing ? "NA TELA" : "TELA";
+        _icShare.Caption = _iAmSharing
+            ? (_music != null ? "TELA + SOM" : "NA TELA")
+            : "TELA";
+        _icShare.ToolTipText = _iAmSharing
+            ? (_music != null ? "Compartilhando imagem e som" : "Compartilhando somente imagem")
+            : "Compartilhar tela ou janela (com som)";
         _icShare.Invalidate();
 
         bool buffering = _clips?.Active == true;

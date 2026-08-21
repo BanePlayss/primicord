@@ -29,7 +29,8 @@ public sealed class MusicShare : IDisposable
 {
     private const int FrameBytes = 960;   // 10ms @ 48k mono 16-bit (igual a voz)
 
-    private readonly RoomSession _session;
+    private readonly ISharedAudioTransport _transport;
+    private readonly uint? _targetProcessId;
     private IWaveIn? _capture;
     private readonly FrameAccumulator _acc = new();
     private readonly byte[] _frame = new byte[FrameBytes];
@@ -42,7 +43,16 @@ public sealed class MusicShare : IDisposable
     public bool Running { get; private set; }
     public float Peak { get; private set; }
 
-    public MusicShare(RoomSession session) => _session = session;
+    /// <param name="targetProcessId">
+    /// Processo da janela compartilhada. Quando existe, capturamos somente esse
+    /// processo e seus filhos; para monitor inteiro capturamos tudo menos o proprio
+    /// Primicord, evitando devolver as vozes para a sala.
+    /// </param>
+    public MusicShare(ISharedAudioTransport transport, uint? targetProcessId = null)
+    {
+        _transport = transport;
+        _targetProcessId = targetProcessId is > 0 ? targetProcessId : null;
+    }
 
     public void Start()
     {
@@ -50,14 +60,18 @@ public sealed class MusicShare : IDisposable
 
         try
         {
-            var proc = ProcessLoopbackCapture.ExcludingSelf();
+            var proc = _targetProcessId is uint processId
+                ? ProcessLoopbackCapture.IncludingProcess(processId)
+                : ProcessLoopbackCapture.ExcludingSelf();
             // Pedimos o formato: o engine converte. Evita o problema de saida 7.1
             // entregar 8 canais (o fone do Lucas faz isso).
             proc.WaveFormat = WaveFormat.CreateIeeeFloatWaveFormat(48000, 2);
             proc.Prepare();
             _capture = proc;
             EchoRisk = false;
-            Log.Write("DJ: process loopback (sem eco)");
+            Log.Write(_targetProcessId is uint id
+                ? $"audio compartilhado: processo {id} e filhos (sem eco)"
+                : "audio compartilhado: sistema menos Primicord (sem eco)");
         }
         catch (Exception ex)
         {
@@ -155,7 +169,7 @@ public sealed class MusicShare : IDisposable
 
             _acc.Append(_pcmBuf, 0, outFrames * 2);
             while (_acc.TryDequeueFrame(_frame, 0, FrameBytes))
-                _session.SendMusic(_frame, 0, FrameBytes);
+                _transport.SendSharedAudio(_frame, 0, FrameBytes);
         }
         catch (Exception ex) { Log.Write("DJ: erro no audio: " + ex.Message); }
     }

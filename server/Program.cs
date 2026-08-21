@@ -39,7 +39,7 @@ app.MapGet("/health", async context =>
     await ServerJson.WriteAsync(context, new JsonObject
     {
         ["ok"] = true,
-        ["version"] = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.6.26",
+        ["version"] = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.7.1",
         ["storage"] = "sqlite",
     });
 });
@@ -58,6 +58,7 @@ app.Map("/v1/voice/{roomId}", async context =>
     string roomId = (context.Request.RouteValues["roomId"]?.ToString() ?? "").Trim();
     string peerId = context.Request.Query["peer"].ToString().Trim();
     string nick = context.Request.Query["nick"].ToString().Trim();
+    bool sharedAudio = context.Request.Query["sharedAudio"].ToString() == "1";
     if (roomId.Length is < 1 or > 96 || peerId.Length is < 1 or > 96
         || nick.Length is < 1 or > 48
         || !uint.TryParse(context.Request.Query["sender"], out uint senderId) || senderId == 0)
@@ -70,7 +71,7 @@ app.Map("/v1/voice/{roomId}", async context =>
     // RequestAborted pode ser sinalizado pelo servidor logo depois do upgrade
     // HTTP no Windows. O WebSocket tem ciclo proprio; so o encerramento do app
     // deve cancelar a espera. O fechamento do cliente ja termina ReceiveAsync.
-    await VoiceRelayHub.RunAsync(roomId, peerId, senderId, nick, socket,
+    await VoiceRelayHub.RunAsync(roomId, peerId, senderId, nick, sharedAudio, socket,
                                  app.Lifetime.ApplicationStopping);
 });
 

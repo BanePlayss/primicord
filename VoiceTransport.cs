@@ -36,3 +36,16 @@ public interface IVoiceTransport
     /// </summary>
     event Action<uint, byte[], int, int>? VoiceReceived;
 }
+
+/// <summary>
+/// Canal separado para o som compartilhado. Voz e audio da tela nao podem cair no
+/// mesmo jitter buffer: cada um tem volume, codec e continuidade proprios.
+/// </summary>
+public interface ISharedAudioTransport
+{
+    /// <summary>PCM 48kHz mono 16-bit produzido pela captura do sistema.</summary>
+    void SendSharedAudio(byte[] payload, int offset, int count);
+
+    /// <summary>PCM 48kHz mono 16-bit recebido de outro participante.</summary>
+    event Action<uint, byte[], int, int>? SharedAudioReceived;
+}

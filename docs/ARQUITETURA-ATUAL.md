@@ -3,6 +3,14 @@
 Auditoria da Fase 0. Retrato do código como ele está em `57f5784`, sem
 modificação nenhuma. Serve de linha de base para o [plano de migração](PLANO-DE-MIGRACAO.md).
 
+> **ATUALIZAÇÃO 0.7.1 (21/08/2026):** o texto abaixo é a linha de base histórica,
+> não o estado operacional da versão pública. Hoje salas, presença e chat usam
+> réplicas SQLite descobertas pelo Tailscale; o Firestore ficou restrito a login,
+> avatar e usuários do Primitivão. Voz (Opus 32 kbps), tela (JPEG delta) e áudio
+> compartilhado (Opus 64 kbps) atravessam um relay WebSocket efêmero, sem gravação
+> de mídia. A malha UDP permanece como compatibilidade. O shell público removeu
+> campeonato, ranking e apostas e abre diretamente no canal geral.
+
 ---
 
 ## 1. Números

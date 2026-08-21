@@ -10,6 +10,11 @@ continua executável — só fica mais cara nos pontos indicados.
 > e reduzir o uso do Firestore. A 0.6.9 entrega o instalador integrado, candidatos
 > `100.64/10`, mini servidor local com SQLite e Firestore como compatibilidade.
 > A voz por WebRTC já estava implementada e foi preservada.
+>
+> **MARCO 0.7.1 (21/08/2026):** a primeira versão pública leva voz, tela e áudio
+> compartilhado pelo relay WebSocket. Campeonato/apostas saíram do app; somente
+> autenticação e perfis continuam vindos do Primitivão. A malha UDP agora é caminho
+> de compatibilidade, não requisito para compartilhar tela ou som.
 
 ---
 

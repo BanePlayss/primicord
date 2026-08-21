@@ -17,6 +17,9 @@ public sealed class CallGrid : Panel
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public int ParticipantCount => _participants.Count;
 
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Rectangle StageBounds => _stage?.Bounds ?? Rectangle.Empty;
+
     public CallGrid()
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
@@ -106,7 +109,13 @@ public sealed class CallGrid : Panel
 
         if (_stage?.Visible == true)
         {
-            _stage.Bounds = ClientRectangle;
+            // A faixa de participantes nao cobre mais a imagem. Antes os cards
+            // ficavam por cima dos pixels inferiores e davam a sensacao de tela
+            // ampliada/cortada. Discord tambem separa palco e miniaturas.
+            int thumbHeight = Math.Clamp(Height / 7, 82, 116);
+            int stripHeight = thumbHeight + 24;
+            _stage.Bounds = new Rectangle(
+                12, 12, Math.Max(1, Width - 24), Math.Max(1, Height - stripHeight - 24));
             _stage.SendToBack();
             LayoutThumbnails(tiles);
         }

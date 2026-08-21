@@ -7,6 +7,32 @@ namespace Primicord.Tests;
 public sealed class CallUxTests
 {
     [Fact]
+    public void Palco_preserva_proporcao_sem_crop_ou_zoom()
+    {
+        Rectangle fitted = StageView.FitFrame(
+            new Size(1920, 1080), new Rectangle(0, 0, 800, 600));
+
+        Assert.Equal(new Rectangle(0, 75, 800, 450), fitted);
+        Assert.Equal(16d / 9d, fitted.Width / (double)fitted.Height, 3);
+    }
+
+    [Fact]
+    public void Miniaturas_ficam_fora_do_palco_compartilhado()
+    {
+        using var call = new CallGrid { Size = new Size(1000, 650) };
+        using var stage = new StageView();
+        call.AttachStage(stage);
+        call.SetOwn(new PeerTile { Nick = "bane" });
+        call.SetStageVisible(true);
+        call.CreateControl();
+        call.PerformLayout();
+
+        PeerTile tile = Assert.Single(call.Controls.OfType<PeerTile>());
+        Assert.True(call.StageBounds.Bottom < tile.Top,
+            $"palco {call.StageBounds} ainda invade miniatura {tile.Bounds}");
+    }
+
+    [Fact]
     public void Volume_do_peer_pode_ser_definido_antes_do_primeiro_audio()
     {
         using var voice = new VoiceEngine();

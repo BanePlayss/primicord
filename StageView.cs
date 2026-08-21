@@ -158,13 +158,33 @@ public sealed class StageView : Control
     {
         // Encaixa mantendo proporcao (letterbox). O ScreenReceiver segura o mesmo
         // lock usado para escrever os blocos durante toda esta chamada.
-        double scale = Math.Min(Width / (double)frame.Width, Height / (double)frame.Height);
-        int w = (int)(frame.Width * scale), h = (int)(frame.Height * scale);
-        var dest = new Rectangle((Width - w) / 2, (Height - h) / 2, w, h);
+        var dest = FitFrame(new Size(frame.Width, frame.Height), ClientRectangle);
+        if (dest.Width <= 0 || dest.Height <= 0) return;
 
         g.InterpolationMode = InterpolationMode.HighQualityBilinear;
         g.PixelOffsetMode = PixelOffsetMode.HighQuality;
         g.DrawImage(frame, dest);
+    }
+
+    /// <summary>
+    /// Retangulo de exibicao sem crop nem ampliacao desproporcional. Publico para
+    /// o contrato poder ser testado sem depender de uma tela fisica.
+    /// </summary>
+    public static Rectangle FitFrame(Size frame, Rectangle viewport)
+    {
+        if (frame.Width <= 0 || frame.Height <= 0 ||
+            viewport.Width <= 0 || viewport.Height <= 0) return Rectangle.Empty;
+
+        double scale = Math.Min(
+            viewport.Width / (double)frame.Width,
+            viewport.Height / (double)frame.Height);
+        int width = Math.Max(1, (int)Math.Round(frame.Width * scale));
+        int height = Math.Max(1, (int)Math.Round(frame.Height * scale));
+        return new Rectangle(
+            viewport.X + (viewport.Width - width) / 2,
+            viewport.Y + (viewport.Height - height) / 2,
+            width,
+            height);
     }
 
     /// <summary>Cartao temporario enquanto o primeiro quadro local ainda nao chegou.</summary>

@@ -93,6 +93,10 @@ public sealed class ClusterFailoverIntegrationTests : IDisposable
         Assert.True(b.HasPeer(RoomSession.HashId("bane-aaa")));
         Assert.True(a.ScreenRelaySupported);
         Assert.True(b.ScreenRelaySupported);
+        Assert.True(a.SharedAudioRelaySupported);
+        Assert.True(b.SharedAudioRelaySupported);
+        Assert.True(a.HasSharedAudioPeer(RoomSession.HashId("kentaroz-bbb")));
+        Assert.True(b.HasSharedAudioPeer(RoomSession.HashId("bane-aaa")));
         Assert.Equal("kentaroz", a.Peers[RoomSession.HashId("kentaroz-bbb")]);
         Assert.Equal("bane", b.Peers[RoomSession.HashId("bane-aaa")]);
 
@@ -130,6 +134,30 @@ public sealed class ClusterFailoverIntegrationTests : IDisposable
 
         Assert.True(await Wait.UntilAsync(() => Volatile.Read(ref frames) >= 10, 5_000));
         Assert.Equal(RoomSession.HashId("bane-aaa"), sender);
+
+        int sharedFrames = 0;
+        uint sharedSender = 0;
+        b.SharedAudioReceived += (id, _, _, count) =>
+        {
+            sharedSender = id;
+            if (count > 0) Interlocked.Increment(ref sharedFrames);
+        };
+        phase = 0;
+        for (int frame = 0; frame < 60; frame++)
+        {
+            for (int i = 0; i < pcm.Length / 2; i++, phase++)
+            {
+                short sample = (short)(Math.Sin(phase * 2 * Math.PI * 880 / 48000) * 7000);
+                pcm[i * 2] = (byte)sample;
+                pcm[i * 2 + 1] = (byte)(sample >> 8);
+            }
+            a.SendSharedAudio(pcm, 0, pcm.Length);
+            await Task.Delay(10);
+        }
+
+        Assert.True(await Wait.UntilAsync(
+            () => Volatile.Read(ref sharedFrames) >= 10, 5_000));
+        Assert.Equal(RoomSession.HashId("bane-aaa"), sharedSender);
     }
 
     private Process StartServer(string name, int port)

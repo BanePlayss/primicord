@@ -158,7 +158,7 @@ public sealed class Config
     public int ScreenBudgetKb = 2000;
 
     /// <summary>Usar o tema (cor) que o jogador escolheu no site do Primitivao.</summary>
-    public bool UseSiteTheme = true;
+    public bool UseSiteTheme;
 
     /// <summary>Volume da musica do DJ (0..200%), separado do volume das vozes.</summary>
     public int MusicVolume = 70;
@@ -205,7 +205,7 @@ public sealed class Config
     /// bastante em campo. A malha antiga e a que tem quilometragem; esta chave
     /// existe justamente pra dar pra comparar as duas na mesma tarde — e pra
     /// voltar atras sem precisar de outro build se algo der errado no meio da
-    /// sessao. Vale so pra VOZ: tela, musica e cinema seguem pela malha.
+    /// sessao. Tela e audio compartilhado usam o relay independente desta chave.
     /// </remarks>
     public bool UseWebRtc;
 

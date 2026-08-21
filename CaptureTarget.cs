@@ -12,6 +12,17 @@ public sealed class CaptureTarget
 
     public bool IsWindow => Window != IntPtr.Zero;
 
+    /// <summary>PID da janela, usado para compartilhar somente o audio dela.</summary>
+    public uint? ProcessId
+    {
+        get
+        {
+            if (!IsWindow) return null;
+            GetWindowThreadProcessId(Window, out uint pid);
+            return pid == 0 ? null : pid;
+        }
+    }
+
     public override string ToString() => Name;
 
     // ─── WIN32 ───────────────────────────────────────────────────────────────
@@ -87,8 +98,8 @@ public sealed class CaptureTarget
                 string title = sb.ToString().Trim();
                 if (title.Length == 0) return true;
 
-                if (!GetClientRect(h, out var rc)) return true;
-                int w = rc.Right - rc.Left, hh = rc.Bottom - rc.Top;
+                Size captureSize = WindowFrameSize(h);
+                int w = captureSize.Width, hh = captureSize.Height;
                 if (w < 200 || hh < 120) return true;   // barras, tooltips, lixo
 
                 windows.Add(new CaptureTarget
@@ -109,11 +120,29 @@ public sealed class CaptureTarget
     public Size CurrentSize()
     {
         if (!IsWindow) return MonitorBounds.Size;
-        if (GetClientRect(Window, out var rc))
+        return WindowFrameSize(Window);
+    }
+
+    /// <summary>
+    /// PrintWindow desenha a JANELA INTEIRA. Usar GetClientRect aqui criava um DC
+    /// menor que o quadro produzido pelo Windows: o resultado era cortado e depois
+    /// esticado, parecendo zoom. DWM fornece o retangulo visual exato, sem a sombra.
+    /// </summary>
+    private static Size WindowFrameSize(IntPtr window)
+    {
+        if (DwmGetWindowAttribute(window, DwmaExtendedFrameBounds, out Rect frame,
+                                  Marshal.SizeOf<Rect>()) == 0)
         {
-            var s = new Size(rc.Right - rc.Left, rc.Bottom - rc.Top);
-            if (s.Width > 0 && s.Height > 0) return s;
+            var size = new Size(frame.Right - frame.Left, frame.Bottom - frame.Top);
+            if (size.Width > 0 && size.Height > 0) return size;
         }
+        if (GetWindowRect(window, out Rect rect))
+        {
+            var size = new Size(rect.Right - rect.Left, rect.Bottom - rect.Top);
+            if (size.Width > 0 && size.Height > 0) return size;
+        }
+        if (GetClientRect(window, out Rect client))
+            return new Size(client.Right - client.Left, client.Bottom - client.Top);
         return Size.Empty;
     }
 

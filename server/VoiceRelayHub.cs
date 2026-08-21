@@ -19,10 +19,10 @@ public static class VoiceRelayHub
         new(StringComparer.Ordinal);
 
     public static async Task RunAsync(string roomId, string peerId, uint senderId, string nick,
-                                      WebSocket socket, CancellationToken ct)
+                                      bool sharedAudio, WebSocket socket, CancellationToken ct)
     {
         RoomState room = Rooms.GetOrAdd(roomId, _ => new RoomState());
-        var client = new RelayClient(peerId, senderId, nick, socket);
+        var client = new RelayClient(peerId, senderId, nick, sharedAudio, socket);
         room.Add(client);
         await room.BroadcastPeersAsync().ConfigureAwait(false);
 
@@ -100,21 +100,24 @@ public static class VoiceRelayHub
             string ids = string.Join(',', ordered.Select(client => client.SenderId));
             string members = string.Join(',', ordered.Select(client =>
                 "{\"id\":" + client.SenderId + ",\"nick\":\""
-                + JsonEncodedText.Encode(client.Nick).ToString() + "\"}"));
+                + JsonEncodedText.Encode(client.Nick).ToString()
+                + "\",\"sharedAudio\":" + (client.SharedAudio ? "true" : "false") + "}"));
             byte[] snapshot = Encoding.UTF8.GetBytes(
-                "{\"type\":\"peers\",\"screen\":true,\"ids\":[" + ids
+                "{\"type\":\"peers\",\"screen\":true,\"sharedAudio\":true,\"ids\":[" + ids
                 + "],\"members\":[" + members + "]}");
             await Task.WhenAll(clients.Select(client => client.TrySendAsync(
                 snapshot, WebSocketMessageType.Text, dropIfBusy: false))).ConfigureAwait(false);
         }
     }
 
-    private sealed class RelayClient(string peerId, uint senderId, string nick, WebSocket socket)
+    private sealed class RelayClient(string peerId, uint senderId, string nick,
+                                     bool sharedAudio, WebSocket socket)
     {
         private readonly SemaphoreSlim _sendGate = new(1, 1);
         public string PeerId { get; } = peerId;
         public uint SenderId { get; } = senderId;
         public string Nick { get; } = nick;
+        public bool SharedAudio { get; } = sharedAudio;
 
         public async Task TrySendAsync(byte[] payload, WebSocketMessageType type, bool dropIfBusy)
         {

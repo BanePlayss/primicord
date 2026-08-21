@@ -174,10 +174,10 @@ public sealed class SettingsDialog : Form
             Size = new Size(412, 40),
         };
 
-        // ── DO PRIMITIVAO / APP ──
+        // ── PERFIL / APP ──
         var titleApp = new Label
         {
-            Text = "PRIMITIVAO E APP", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
+            Text = "PERFIL E APP", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
             Location = new Point(24, 666), AutoSize = true,
         };
 
@@ -187,8 +187,8 @@ public sealed class SettingsDialog : Form
 
         var themeHint = new Label
         {
-            Text = "A cor vem do tema escolhido no site. Trocar de tema e la:\n"
-                 + "o Primicord so le, nunca escreve no doc de apostas.",
+            Text = "A cor vem do seu perfil do Primitivao. O Primicord usa apenas\n"
+                 + "login, avatar e dados publicos do usuario.",
             Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(48, 734),
             Size = new Size(400, 44),
         };

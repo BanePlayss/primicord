@@ -67,7 +67,7 @@ public sealed class VoiceEngine : IDisposable
     /// WebRTC: e um fluxo separado, com volume proprio, e a malha segue de pe pra
     /// carregar tela e cinema de qualquer jeito.
     /// </summary>
-    private RoomSession? _musicSource;
+    private ISharedAudioTransport? _musicSource;
 
     private volatile bool _running;
 
@@ -231,20 +231,20 @@ public sealed class VoiceEngine : IDisposable
     /// <paramref name="musicSource"/> entrega o audio do DJ. Normalmente sao o
     /// mesmo objeto (a malha UDP); com o WebRTC ligado, a voz vem de outro lugar.
     /// </summary>
-    public void AttachTransport(IVoiceTransport voice, RoomSession musicSource)
+    public void AttachTransport(IVoiceTransport voice, ISharedAudioTransport musicSource)
     {
         _voiceTx = voice;
         voice.VoiceReceived += OnVoiceReceived;
 
         _musicSource = musicSource;
-        musicSource.MusicReceived += OnMusicReceived;
+        musicSource.SharedAudioReceived += OnMusicReceived;
     }
 
     public void Dispose()
     {
         _running = false;
         if (_voiceTx != null) _voiceTx.VoiceReceived -= OnVoiceReceived;
-        if (_musicSource != null) _musicSource.MusicReceived -= OnMusicReceived;
+        if (_musicSource != null) _musicSource.SharedAudioReceived -= OnMusicReceived;
 
         try { if (_mic != null) { _mic.DataAvailable -= OnMicData; _mic.StopRecording(); _mic.Dispose(); } }
         catch { }

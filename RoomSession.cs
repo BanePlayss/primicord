@@ -77,7 +77,7 @@ public sealed class RemotePeer
 /// caso so um servidor relay (TURN) resolve — nao temos um, entao o par nao conecta.
 /// O app avisa na UI em vez de ficar mudo sem explicacao.
 /// </remarks>
-public sealed class RoomSession : IVoiceTransport, IDisposable
+public sealed class RoomSession : IVoiceTransport, ISharedAudioTransport, IDisposable
 {
     // ─── protocolo ───────────────────────────────────────────────────────────
     public const int HeaderBytes = 9;
@@ -144,6 +144,13 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
 
     /// <summary>Audio do sistema do DJ (modo musica).</summary>
     public event Action<uint, byte[], int, int>? MusicReceived;
+
+    /// <summary>Nome comum usado pelo relay e pela malha direta.</summary>
+    public event Action<uint, byte[], int, int>? SharedAudioReceived
+    {
+        add => MusicReceived += value;
+        remove => MusicReceived -= value;
+    }
 
     /// <summary>Quadro de tela COMPLETO ja remontado: (quem, jpeg, largura, altura).</summary>
     public event Action<uint, byte[], int, int>? ScreenFrameReceived;
@@ -527,6 +534,9 @@ public sealed class RoomSession : IVoiceTransport, IDisposable
     /// <summary>Manda um frame do audio do sistema (modo DJ).</summary>
     public void SendMusic(byte[] payload, int offset, int count)
         => SendToAll(TypeMusic, payload, offset, count, Interlocked.Increment(ref _musicSeq));
+
+    public void SendSharedAudio(byte[] payload, int offset, int count)
+        => SendMusic(payload, offset, count);
 
     /// <summary>Mensagem de controle do cinema (cabe num datagrama).</summary>
     public void SendCinemaControl(string json)

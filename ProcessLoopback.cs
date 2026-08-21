@@ -54,6 +54,16 @@ public sealed class ProcessLoopbackCapture : IWaveIn
     public static ProcessLoopbackCapture ExcludingSelf()
         => new((uint)Environment.ProcessId, Mode.ExcludeProcessTree);
 
+    /// <summary>
+    /// Captura somente a janela escolhida e processos filhos (jogo + launcher,
+    /// navegador + renderers). As vozes do Primicord ficam fora por construcao.
+    /// </summary>
+    public static ProcessLoopbackCapture IncludingProcess(uint processId)
+    {
+        if (processId == 0) throw new ArgumentOutOfRangeException(nameof(processId));
+        return new ProcessLoopbackCapture(processId, Mode.IncludeProcessTree);
+    }
+
     /// <summary>Ativa e inicializa ja (lanca aqui se indisponivel -> chamador faz fallback).</summary>
     public void Prepare()
     {

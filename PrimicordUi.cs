@@ -10,24 +10,24 @@ public static class Pv
     /// Cor de destaque. Nao e constante porque o app adota o TEMA que o jogador
     /// escolheu no site do Primitivao — quem usa "Hortelã" la ve o Primicord verde.
     /// </summary>
-    public static Color Orange { get; private set; } = Color.FromArgb(0xD7, 0x64, 0x14);
-    public static Color OrangeDim { get; private set; } = Color.FromArgb(0xA8, 0x4A, 0x08);
+    public static Color Orange { get; private set; } = Color.FromArgb(0x58, 0x65, 0xF2);
+    public static Color OrangeDim { get; private set; } = Color.FromArgb(0x47, 0x51, 0xC4);
 
     /// <summary>Troca a cor de destaque (null volta pro laranja padrao).</summary>
     public static void SetAccent(Color? accent)
     {
-        var c = accent ?? Color.FromArgb(0xD7, 0x64, 0x14);
+        var c = accent ?? Color.FromArgb(0x58, 0x65, 0xF2);
         Orange = c;
         // Versao apagada pra estados secundarios (borda de "conectando", etc).
         OrangeDim = Color.FromArgb((int)(c.R * 0.72), (int)(c.G * 0.72), (int)(c.B * 0.72));
     }
-    public static readonly Color Charcoal = Color.FromArgb(0x1C, 0x16, 0x12);
-    public static readonly Color Char2 = Color.FromArgb(0x2A, 0x21, 0x1B);
-    public static readonly Color Char3 = Color.FromArgb(0x38, 0x2C, 0x24);
-    public static readonly Color Bone = Color.FromArgb(0xF4, 0xEA, 0xD7);
-    public static readonly Color BoneDim = Color.FromArgb(0x8A, 0x81, 0x74);
-    public static readonly Color Green = Color.FromArgb(0x6D, 0x9A, 0x44);
-    public static readonly Color Red = Color.FromArgb(0xC0, 0x33, 0x33);
+    public static readonly Color Charcoal = Color.FromArgb(0x1E, 0x1F, 0x22);
+    public static readonly Color Char2 = Color.FromArgb(0x2B, 0x2D, 0x31);
+    public static readonly Color Char3 = Color.FromArgb(0x38, 0x3A, 0x40);
+    public static readonly Color Bone = Color.FromArgb(0xF2, 0xF3, 0xF5);
+    public static readonly Color BoneDim = Color.FromArgb(0xB5, 0xBA, 0xC1);
+    public static readonly Color Green = Color.FromArgb(0x23, 0xA5, 0x5A);
+    public static readonly Color Red = Color.FromArgb(0xF2, 0x3F, 0x42);
 
     public static readonly Font Display = new("Bahnschrift", 20f, FontStyle.Bold);
     public static readonly Font DisplaySm = new("Bahnschrift", 13f, FontStyle.Bold);
