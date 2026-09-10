@@ -6,10 +6,12 @@ internal static class Program
     private static Mutex? _single;
 
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
+        bool preview = args.Any(a => string.Equals(a, "--preview", StringComparison.OrdinalIgnoreCase));
         bool created;
-        try { _single = new Mutex(true, "Primicord.SingleInstance", out created); }
+        string mutexName = preview ? "Primicord.Preview." + Environment.ProcessId : "Primicord.SingleInstance";
+        try { _single = new Mutex(true, mutexName, out created); }
         catch { created = true; }
 
         if (!created)
@@ -29,7 +31,7 @@ internal static class Program
             Log.Write("EXCECAO NA UI: " + e.Exception);
 
         Log.Write("=== Primicord iniciando ===");
-        try { Application.Run(new MainForm()); }
+        try { Application.Run(new MainForm(preview)); }
         finally
         {
             Log.Write("=== Primicord encerrado ===");

@@ -3,31 +3,46 @@ using System.Drawing.Drawing2D;
 
 namespace Primicord;
 
-/// <summary>Paleta e fontes — mesma identidade do app de apostas, em "edicao noturna".</summary>
+/// <summary>
+/// Paleta e fontes do Primicord. A hierarquia de superfícies mantém a densidade
+/// de apps de comunidade modernos, enquanto o osso/fuligem/laranja traz a marca
+/// Primitivão para toda a interface.
+/// </summary>
 public static class Pv
 {
     /// <summary>
     /// Cor de destaque. Nao e constante porque o app adota o TEMA que o jogador
     /// escolheu no site do Primitivao — quem usa "Hortelã" la ve o Primicord verde.
     /// </summary>
-    public static Color Orange { get; private set; } = Color.FromArgb(0xD7, 0x64, 0x14);
-    public static Color OrangeDim { get; private set; } = Color.FromArgb(0xA8, 0x4A, 0x08);
+    public static Color Orange { get; private set; } = Color.FromArgb(0xE6, 0x72, 0x16);
+    public static Color OrangeDim { get; private set; } = Color.FromArgb(0xA8, 0x4A, 0x10);
 
     /// <summary>Troca a cor de destaque (null volta pro laranja padrao).</summary>
     public static void SetAccent(Color? accent)
     {
-        var c = accent ?? Color.FromArgb(0xD7, 0x64, 0x14);
+        var c = accent ?? Color.FromArgb(0xE6, 0x72, 0x16);
         Orange = c;
         // Versao apagada pra estados secundarios (borda de "conectando", etc).
         OrangeDim = Color.FromArgb((int)(c.R * 0.72), (int)(c.G * 0.72), (int)(c.B * 0.72));
     }
+    // Paleta inspirada no escudo enviado: fuligem, madeira queimada, osso e
+    // laranja de pigmento. O destaque continua legível em telas escuras.
     public static readonly Color Charcoal = Color.FromArgb(0x1C, 0x16, 0x12);
-    public static readonly Color Char2 = Color.FromArgb(0x2A, 0x21, 0x1B);
-    public static readonly Color Char3 = Color.FromArgb(0x38, 0x2C, 0x24);
-    public static readonly Color Bone = Color.FromArgb(0xF4, 0xEA, 0xD7);
-    public static readonly Color BoneDim = Color.FromArgb(0x8A, 0x81, 0x74);
-    public static readonly Color Green = Color.FromArgb(0x6D, 0x9A, 0x44);
-    public static readonly Color Red = Color.FromArgb(0xC0, 0x33, 0x33);
+    public static readonly Color Char2 = Color.FromArgb(0x25, 0x1A, 0x13);
+    public static readonly Color Char3 = Color.FromArgb(0x43, 0x2A, 0x1B);
+    public static readonly Color SurfaceLow = Color.FromArgb(0x2D, 0x1D, 0x14);
+    public static readonly Color SurfaceLowest = Color.FromArgb(0x11, 0x0E, 0x0B);
+    public static readonly Color SurfaceHover = Color.FromArgb(0x4A, 0x2D, 0x1B);
+    public static readonly Color Input = Color.FromArgb(0x32, 0x21, 0x17);
+    public static readonly Color Border = Color.FromArgb(0x53, 0x35, 0x20);
+    public static readonly Color Bone = Color.FromArgb(0xF4, 0xE5, 0xCC);
+    public static readonly Color BoneDim = Color.FromArgb(0xC9, 0xB6, 0x98);
+    public static readonly Color Muted = Color.FromArgb(0x99, 0x82, 0x68);
+    public static readonly Color Green = Color.FromArgb(0x8F, 0xBA, 0x62);
+    public static readonly Color Red = Color.FromArgb(0xD8, 0x5A, 0x45);
+    public static readonly Color Yellow = Color.FromArgb(0xE3, 0xB5, 0x4B);
+    public static readonly Color NitroPurple = Color.FromArgb(0xB0, 0x5A, 0x20);
+    public static readonly Color NitroPink = Color.FromArgb(0xF0, 0x8A, 0x25);
 
     public static readonly Font Display = new("Bahnschrift", 20f, FontStyle.Bold);
     public static readonly Font DisplaySm = new("Bahnschrift", 13f, FontStyle.Bold);
@@ -77,7 +92,7 @@ public static class Pv
             : g.MeasureString(c.ToString(), font, PointF.Empty, StringFormat.GenericTypographic).Width;
 }
 
-/// <summary>Botao chapado no estilo do app: retangulo com sombra dura, sem gradiente.</summary>
+/// <summary>Botao compacto, arredondado e de alto contraste.</summary>
 public sealed class PrimButton : Control
 {
     public enum Style { Solid, Ghost, Danger }
@@ -134,18 +149,29 @@ public sealed class PrimButton : Control
         }
         if (!Enabled) { bg = Pv.Char2; fg = Pv.BoneDim; border = Pv.Char3; }
 
-        var r = new Rectangle(0, 0, Width - 1, Height - 1);
+        var r = new Rectangle(1, 1, Width - 3, Height - 3);
         if (_down && Enabled) r.Offset(0, 1);
 
         if (bg != Color.Transparent)
-            using (var b = new SolidBrush(bg)) g.FillRectangle(b, r);
-        using (var p = new Pen(border, 2)) g.DrawRectangle(p, r);
+            using (var b = new SolidBrush(bg))
+            using (var path = Pv.RoundRect(r, 4)) g.FillPath(b, path);
+        if (Kind != Style.Ghost || _hover)
+            using (var p = new Pen(border, 1))
+            using (var path = Pv.RoundRect(r, 4)) g.DrawPath(p, path);
 
         string t = Text.ToUpperInvariant();
         using var brush = new SolidBrush(fg);
-        float tw = Pv.TrackedWidth(g, t, Font, 1.6f);
-        Pv.DrawTracked(g, t, Font, brush, r.X + (r.Width - tw) / 2f,
-                       r.Y + (r.Height - Font.Height) / 2f, 1.6f);
+        // Labels such as “TRANSMITIR MINHA MUSICA” precisam continuar legíveis
+        // em uma janela estreita. O desenho centralizado com ellipsis evita que
+        // o tracking antigo corte letras fora do botão.
+        using var sf = new StringFormat
+        {
+            Alignment = StringAlignment.Center,
+            LineAlignment = StringAlignment.Center,
+            Trimming = StringTrimming.EllipsisCharacter,
+            FormatFlags = StringFormatFlags.NoWrap,
+        };
+        g.DrawString(t, Font, brush, r, sf);
     }
 }
 
@@ -289,13 +315,13 @@ public sealed class PrimInput : Panel
 
     public PrimInput(string placeholder = "")
     {
-        BackColor = Pv.Charcoal;
+        BackColor = Pv.Input;
         Padding = new Padding(10, 8, 10, 8);
         Height = 38;
         Box = new TextBox
         {
             BorderStyle = BorderStyle.None,
-            BackColor = Pv.Charcoal,
+            BackColor = Pv.Input,
             ForeColor = Pv.Bone,
             Font = new Font("Segoe UI", 11f, FontStyle.Bold),
             Dock = DockStyle.Fill,
@@ -304,8 +330,11 @@ public sealed class PrimInput : Panel
         Controls.Add(Box);
         Paint += (_, e) =>
         {
-            using var p = new Pen(Box.Focused ? Pv.Orange : Pv.Char3, 2);
-            e.Graphics.DrawRectangle(p, 0, 0, Width - 1, Height - 1);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            var r = new Rectangle(0, 0, Width - 1, Height - 1);
+            using var p = new Pen(Box.Focused ? Pv.Orange : Pv.Input, 1);
+            using var path = Pv.RoundRect(r, 7);
+            e.Graphics.DrawPath(p, path);
         };
         Box.GotFocus += (_, _) => Invalidate();
         Box.LostFocus += (_, _) => Invalidate();

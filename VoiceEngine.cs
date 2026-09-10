@@ -67,11 +67,32 @@ public sealed class VoiceEngine : IDisposable
         {
             _musicVolume = Math.Clamp(value, 0f, 2f);
             lock (_streamsLock)
-                foreach (var (key, st) in _streams)
-                    if ((key & MusicFlag) != 0) st.Volume.Volume = _musicVolume;
+                foreach (var st in _streams.Values)
+                    if (st.Music)
+                    {
+                        st.BaseVolume = _musicVolume;
+                        st.Volume.Volume = _deafened ? 0f : st.BaseVolume;
+                    }
         }
     }
     private float _musicVolume = 0.7f;
+
+    /// <summary>
+    /// Silencia toda a saida sem sair da sala. Mantem os volumes individuais para
+    /// restaura-los ao desensurdecer, como o controle equivalente do Discord.
+    /// </summary>
+    public bool Deafened
+    {
+        get => _deafened;
+        set
+        {
+            _deafened = value;
+            lock (_streamsLock)
+                foreach (var st in _streams.Values)
+                    st.Volume.Volume = value ? 0f : st.BaseVolume;
+        }
+    }
+    private bool _deafened;
 
     /// <summary>
     /// Bit que separa a musica da voz da MESMA pessoa. O DJ manda dois fluxos ao
@@ -83,6 +104,8 @@ public sealed class VoiceEngine : IDisposable
     {
         public BufferedWaveProvider Jitter = null!;
         public VolumeSampleProvider Volume = null!;
+        public float BaseVolume = 1f;
+        public bool Music;
         public bool Primed;
         public float Peak;
         public long LastAudioTicks;
@@ -243,9 +266,13 @@ public sealed class VoiceEngine : IDisposable
                     BufferDuration = TimeSpan.FromMilliseconds(JitterMaxMs),
                     DiscardOnBufferOverflow = true,
                 };
+                float baseVolume = music ? _musicVolume : 1.0f;
                 var vol = new VolumeSampleProvider(jitter.ToSampleProvider())
-                { Volume = music ? _musicVolume : 1.0f };
-                st = new PeerStream { Jitter = jitter, Volume = vol };
+                { Volume = _deafened ? 0f : baseVolume };
+                st = new PeerStream
+                {
+                    Jitter = jitter, Volume = vol, BaseVolume = baseVolume, Music = music,
+                };
                 _streams[key] = st;
                 mixer.AddMixerInput(vol);
                 Log.Write($"stream de {(music ? "musica" : "voz")} criada p/ {key:X8}");
@@ -282,6 +309,23 @@ public sealed class VoiceEngine : IDisposable
         }
     }
 
+    /// <summary>
+    /// Remove apenas os fluxos de musica. Usado ao sair da escuta DJ sem tocar na
+    /// voz dos mesmos participantes, que continua ativa na sala principal.
+    /// </summary>
+    public void ClearMusicStreams()
+    {
+        lock (_streamsLock)
+        {
+            foreach (uint key in _streams.Keys.Where(k => (k & MusicFlag) != 0).ToList())
+            {
+                var st = _streams[key];
+                _streams.Remove(key);
+                try { _mixer?.RemoveMixerInput(st.Volume); } catch { }
+            }
+        }
+    }
+
     /// <summary>Nivel de voz de um participante (0..1); zera se ele parou de falar.</summary>
     public float PeakOf(uint senderId)
     {
@@ -297,7 +341,11 @@ public sealed class VoiceEngine : IDisposable
     public void SetPeerVolume(uint senderId, float volume)
     {
         lock (_streamsLock)
-            if (_streams.TryGetValue(senderId, out var st)) st.Volume.Volume = Math.Clamp(volume, 0f, 2f);
+            if (_streams.TryGetValue(senderId, out var st))
+            {
+                st.BaseVolume = Math.Clamp(volume, 0f, 2f);
+                st.Volume.Volume = _deafened ? 0f : st.BaseVolume;
+            }
     }
 
     /// <summary>

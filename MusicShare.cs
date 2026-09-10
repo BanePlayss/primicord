@@ -4,7 +4,7 @@ namespace Primicord;
 
 /// <summary>
 /// Modo DJ: transmite o audio do SISTEMA (Spotify, YouTube, o que estiver tocando)
-/// pra todo mundo da sala.
+/// pra tela compartilhada inteira ou apenas para a escuta DJ selecionada.
 /// </summary>
 /// <remarks>
 /// POR QUE NAO E UMA "JAM DO SPOTIFY": o Jam nao tem API publica — nao da pra criar
@@ -30,43 +30,39 @@ public sealed class MusicShare : IDisposable
     private float[] _floatBuf = Array.Empty<float>();
     private byte[] _pcmBuf = Array.Empty<byte>();
 
-    /// <summary>true se caiu no loopback comum (vai ter eco — avisar o usuario).</summary>
+    /// <summary>Retido para compatibilidade com a UI antiga; agora nunca há fallback.</summary>
     public bool EchoRisk { get; private set; }
 
     public bool Running { get; private set; }
     public float Peak { get; private set; }
 
+    /// <summary>
+    /// true: somente quem entrou na camada DJ recebe. false: audio acompanha a
+    /// tela compartilhada e vai para toda a sala.
+    /// </summary>
+    public bool DjOnly { get; set; }
+
     public MusicShare(RoomSession session) => _session = session;
 
-    public void Start()
+    public void Start(AudioCaptureTarget? target = null)
     {
         if (Running) return;
 
-        try
-        {
-            var proc = ProcessLoopbackCapture.ExcludingSelf();
-            // Pedimos o formato: o engine converte. Evita o problema de saida 7.1
-            // entregar 8 canais (o fone do Lucas faz isso).
-            proc.WaveFormat = WaveFormat.CreateIeeeFloatWaveFormat(48000, 2);
-            proc.Prepare();
-            _capture = proc;
-            EchoRisk = false;
-            Log.Write("DJ: process loopback (sem eco)");
-        }
-        catch (Exception ex)
-        {
-            Log.Write("DJ: process loopback indisponivel (" + ex.Message + "), usando loopback comum");
-            try
-            {
-                _capture = new WasapiLoopbackCapture();
-                EchoRisk = true;
-            }
-            catch (Exception ex2)
-            {
-                Log.Write("DJ: nenhum loopback disponivel: " + ex2.Message);
-                throw;
-            }
-        }
+        target ??= AudioCaptureTarget.System;
+        if (target.Kind == AudioCaptureKind.Silent)
+            throw new InvalidOperationException("Escolha uma fonte de áudio antes de transmitir.");
+        target.ValidateActive();
+        var proc = target.Kind == AudioCaptureKind.Application
+            ? ProcessLoopbackCapture.IncludingProcess(target.ProcessId)
+            : ProcessLoopbackCapture.ExcludingSelf();
+        // Pedimos o formato: o engine converte. Nunca trocamos para outro
+        // dispositivo silenciosamente; a falha volta para a UI com a causa real.
+        proc.WaveFormat = WaveFormat.CreateIeeeFloatWaveFormat(48000, 2);
+        proc.ValidateSource = target.ValidateActive;
+        proc.Prepare();
+        _capture = proc;
+        EchoRisk = false;
+        Log.Write("DJ: process loopback explícito — " + target.Name);
 
         _capture.DataAvailable += OnData;
         _capture.StartRecording();
@@ -155,7 +151,10 @@ public sealed class MusicShare : IDisposable
 
             _acc.Append(_pcmBuf, 0, outFrames * 2);
             while (_acc.TryDequeueFrame(_frame, 0, FrameBytes))
-                _session.SendMusic(_frame, 0, FrameBytes);
+            {
+                if (DjOnly) _session.SendDjMusic(_frame, 0, FrameBytes);
+                else _session.SendMusic(_frame, 0, FrameBytes);
+            }
         }
         catch (Exception ex) { Log.Write("DJ: erro no audio: " + ex.Message); }
     }

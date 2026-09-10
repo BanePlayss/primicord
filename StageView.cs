@@ -41,11 +41,19 @@ public sealed class StageView : Control
         BackColor = Color.Black;
     }
 
-    /// <summary>Troca o quadro exibido. O bitmap pertence ao ScreenReceiver — nao dispomos.</summary>
+    /// <summary>Troca o quadro exibido. O palco assume e libera o clone recebido.</summary>
     public void SetFrame(Bitmap? frame)
     {
+        if (ReferenceEquals(_frame, frame)) return;
+        try { _frame?.Dispose(); } catch { }
         _frame = frame;
         Invalidate();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) { try { _frame?.Dispose(); } catch { } _frame = null; }
+        base.Dispose(disposing);
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -58,10 +66,18 @@ public sealed class StageView : Control
         var f = _frame;
         if (f == null)
         {
-            using var b = new SolidBrush(Pv.BoneDim);
-            const string msg = "Ninguem compartilhando tela";
-            var sz = g.MeasureString(msg, Pv.Body);
-            g.DrawString(msg, Pv.Body, b, (Width - sz.Width) / 2, (Height - sz.Height) / 2);
+            int cw = Math.Min(420, Math.Max(240, Width - 48));
+            var card = new Rectangle((Width - cw) / 2, Math.Max(24, (Height - 156) / 2), cw, 156);
+            using (var b = new SolidBrush(Pv.Char2))
+            using (var path = Pv.RoundRect(card, 12)) g.FillPath(b, path);
+            using (var p = new Pen(Pv.OrangeDim, 1))
+            using (var path = Pv.RoundRect(card, 12)) g.DrawPath(p, path);
+            BrandAssets.Draw(g, new Rectangle(card.X + 18, card.Y + 26, 70, 64));
+            using (var b = new SolidBrush(Pv.Bone))
+                g.DrawString("Palco livre", Pv.DisplaySm, b, card.X + 106, card.Y + 34);
+            using (var b = new SolidBrush(Pv.BoneDim))
+                g.DrawString("Clique em TELA para começar\nou escolha uma transmissão abaixo.",
+                    Pv.Body, b, new RectangleF(card.X + 106, card.Y + 68, card.Width - 124, 48));
             return;
         }
 

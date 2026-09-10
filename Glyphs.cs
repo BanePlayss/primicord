@@ -68,6 +68,21 @@ public static class Glyphs
         g.DrawLine(p, r.X + s * 0.18f, r.Y + s * 0.5f, r.X + s * 0.82f, r.Y + s * 0.5f);
     }
 
+    /// <summary>Rosa dos ventos — descobrir comunidades.</summary>
+    public static void Compass(Graphics g, RectangleF r, Color c, float w = 1.8f)
+    {
+        using var p = P(c, w);
+        float s = Math.Min(r.Width, r.Height), x = r.X, y = r.Y;
+        g.DrawEllipse(p, x + s * 0.08f, y + s * 0.08f, s * 0.84f, s * 0.84f);
+        g.DrawPolygon(p, new[]
+        {
+            new PointF(x + s * 0.66f, y + s * 0.28f),
+            new PointF(x + s * 0.56f, y + s * 0.56f),
+            new PointF(x + s * 0.28f, y + s * 0.66f),
+            new PointF(x + s * 0.44f, y + s * 0.44f),
+        });
+    }
+
     public static void Mic(Graphics g, RectangleF r, Color c, bool off, float w = 1.8f)
     {
         using var p = P(c, w);
@@ -84,6 +99,71 @@ public static class Glyphs
         g.DrawArc(p, x + s * 0.22f, y + s * 0.36f, s * 0.56f, s * 0.46f, 20, 140);
         g.DrawLine(p, x + s * 0.5f, y + s * 0.78f, x + s * 0.5f, y + s * 0.90f);
         if (off) g.DrawLine(p, x + s * 0.14f, y + s * 0.10f, x + s * 0.86f, y + s * 0.90f);
+    }
+
+    /// <summary>Fones — ensurdecer/restaurar a saida de audio.</summary>
+    public static void Headphones(Graphics g, RectangleF r, Color c, bool off = false, float w = 1.8f)
+    {
+        using var p = P(c, w);
+        float s = Math.Min(r.Width, r.Height), x = r.X, y = r.Y;
+        g.DrawArc(p, x + s * 0.14f, y + s * 0.08f, s * 0.72f, s * 0.72f, 190, 160);
+        g.DrawLine(p, x + s * 0.14f, y + s * 0.47f, x + s * 0.14f, y + s * 0.78f);
+        g.DrawLine(p, x + s * 0.86f, y + s * 0.47f, x + s * 0.86f, y + s * 0.78f);
+        g.DrawArc(p, x + s * 0.08f, y + s * 0.58f, s * 0.24f, s * 0.26f, 90, 180);
+        g.DrawArc(p, x + s * 0.68f, y + s * 0.58f, s * 0.24f, s * 0.26f, -90, 180);
+        if (off) g.DrawLine(p, x + s * 0.10f, y + s * 0.10f, x + s * 0.90f, y + s * 0.90f);
+    }
+
+    /// <summary>Duas pessoas — alternar a lista de membros.</summary>
+    public static void Users(Graphics g, RectangleF r, Color c, float w = 1.8f)
+    {
+        using var p = P(c, w);
+        float s = Math.Min(r.Width, r.Height), x = r.X, y = r.Y;
+        g.DrawEllipse(p, x + s * 0.18f, y + s * 0.12f, s * 0.30f, s * 0.30f);
+        g.DrawArc(p, x + s * 0.04f, y + s * 0.40f, s * 0.58f, s * 0.46f, 190, 160);
+        g.DrawEllipse(p, x + s * 0.57f, y + s * 0.20f, s * 0.24f, s * 0.24f);
+        g.DrawArc(p, x + s * 0.46f, y + s * 0.46f, s * 0.48f, s * 0.38f, 195, 150);
+    }
+
+    public static void Bell(Graphics g, RectangleF r, Color c, float w = 1.8f)
+    {
+        using var p = P(c, w);
+        float s = Math.Min(r.Width, r.Height), x = r.X, y = r.Y;
+        g.DrawArc(p, x + s * 0.22f, y + s * 0.16f, s * 0.56f, s * 0.62f, 185, 170);
+        g.DrawLine(p, x + s * 0.22f, y + s * 0.50f, x + s * 0.14f, y + s * 0.74f);
+        g.DrawLine(p, x + s * 0.78f, y + s * 0.50f, x + s * 0.86f, y + s * 0.74f);
+        g.DrawLine(p, x + s * 0.14f, y + s * 0.74f, x + s * 0.86f, y + s * 0.74f);
+        g.DrawArc(p, x + s * 0.40f, y + s * 0.68f, s * 0.20f, s * 0.20f, 0, 180);
+    }
+
+    public static void Pin(Graphics g, RectangleF r, Color c, float w = 1.8f)
+    {
+        using var p = P(c, w);
+        float s = Math.Min(r.Width, r.Height), x = r.X, y = r.Y;
+        g.DrawLine(p, x + s * 0.32f, y + s * 0.16f, x + s * 0.78f, y + s * 0.62f);
+        g.DrawLine(p, x + s * 0.46f, y + s * 0.18f, x + s * 0.76f, y + s * 0.48f);
+        g.DrawLine(p, x + s * 0.28f, y + s * 0.42f, x + s * 0.58f, y + s * 0.72f);
+        g.DrawLine(p, x + s * 0.22f, y + s * 0.68f, x + s * 0.54f, y + s * 0.36f);
+        g.DrawLine(p, x + s * 0.22f, y + s * 0.68f, x + s * 0.10f, y + s * 0.90f);
+    }
+
+    public static void Search(Graphics g, RectangleF r, Color c, float w = 1.8f)
+    {
+        using var p = P(c, w);
+        float s = Math.Min(r.Width, r.Height), x = r.X, y = r.Y;
+        g.DrawEllipse(p, x + s * 0.10f, y + s * 0.08f, s * 0.56f, s * 0.56f);
+        g.DrawLine(p, x + s * 0.60f, y + s * 0.60f, x + s * 0.90f, y + s * 0.90f);
+    }
+
+    public static void Smile(Graphics g, RectangleF r, Color c, float w = 1.8f)
+    {
+        using var p = P(c, w);
+        float s = Math.Min(r.Width, r.Height), x = r.X, y = r.Y;
+        g.DrawEllipse(p, x + s * 0.08f, y + s * 0.08f, s * 0.84f, s * 0.84f);
+        using var b = new SolidBrush(c);
+        g.FillEllipse(b, x + s * 0.29f, y + s * 0.34f, s * 0.08f, s * 0.08f);
+        g.FillEllipse(b, x + s * 0.63f, y + s * 0.34f, s * 0.08f, s * 0.08f);
+        g.DrawArc(p, x + s * 0.28f, y + s * 0.42f, s * 0.44f, s * 0.30f, 15, 150);
     }
 
     /// <summary>Seta saindo da porta — sair da call.</summary>

@@ -11,6 +11,9 @@ public sealed class RemotePeer
     public string Nick = "";
     public bool Muted;
     public bool Sharing;
+    public bool DjJoined;
+    public bool DjHost;
+    public string DjTrack = "";
 
     /// <summary>Enderecos onde ele PODE estar (publico + todos os locais).</summary>
     public readonly List<IPEndPoint> Candidates = new();
@@ -30,6 +33,7 @@ public sealed class RemotePeer
     /// entao da pra mandar tela em qualidade cheia com audio sem pesar em nada.
     /// </summary>
     public bool OnLan => Locked != null && AppEnv.IsPrivateAddress(Locked.Address);
+    public bool OnTailnet => Locked != null && ConnectionPolicy.IsTailnetAddress(Locked.Address);
 }
 
 /// <summary>
@@ -64,6 +68,7 @@ public sealed class RoomSession : IDisposable
     public const byte TypeMusic = 5;   // audio do sistema do DJ
     public const byte TypeCinemaCtl = 6;   // controle do cinema (oferta, nack, play)
     public const byte TypeCinemaData = 7;   // pedaco do arquivo de video
+    public const byte TypeDjMusic = 8;   // musica so para quem entrou na escuta DJ
 
     // Um quadro de tela nao cabe num datagrama, entao vai picado. Sub-cabecalho de
     // 10 bytes depois do cabecalho comum: frameId, indice, total, largura, altura.
@@ -97,6 +102,10 @@ public sealed class RoomSession : IDisposable
 
     public bool Muted { get; set; }
     public bool Sharing { get; set; }
+    public bool TailscaleOnly { get; set; }
+    public bool DjJoined { get; private set; }
+    public bool DjHost { get; private set; }
+    public string DjTrack { get; private set; } = "";
 
     public string RoomId => _roomId;
     public string PeerId => _peerId;
@@ -135,6 +144,31 @@ public sealed class RoomSession : IDisposable
     public List<RemotePeer> Peers
     {
         get { lock (_peersLock) return _peers.Values.ToList(); }
+    }
+
+    /// <summary>
+    /// Atualiza a camada DJ sem sair da chamada. A presenca continua no mesmo peer;
+    /// so estes campos dizem quem recebe musica e quem esta transmitindo.
+    /// </summary>
+    public void SetDjState(bool joined, bool host, string track = "")
+    {
+        DjJoined = joined;
+        DjHost = joined && host;
+        DjTrack = DjHost ? track : "";
+        if (_running && _firestoreBacked) _ = PublishDjStateAsync();
+    }
+
+    public void SetDjTrack(string track)
+    {
+        if (!DjHost) return;
+        DjTrack = track ?? "";
+        if (_running && _firestoreBacked) _ = PublishDjStateAsync();
+    }
+
+    private async Task PublishDjStateAsync()
+    {
+        try { await PublishPresenceAsync(full: false).ConfigureAwait(false); }
+        catch (Exception ex) { Log.Write("DJ: publicar estado falhou: " + ex.Message); }
     }
 
     /// <summary>
@@ -190,6 +224,9 @@ public sealed class RoomSession : IDisposable
 
     public async Task StartAsync(CancellationToken ct = default)
     {
+        var addresses = TailscaleOnly ? ConnectionPolicy.TailnetAddresses() : AppEnv.LocalIPv4();
+        if (TailscaleOnly && addresses.Count == 0)
+            throw new InvalidOperationException("Conecte o Tailscale à rede da tribo antes de entrar na sala.");
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _running = true;
 
@@ -199,14 +236,14 @@ public sealed class RoomSession : IDisposable
         // (~64KB) transborda, derrubando pedacos e perdendo o quadro inteiro.
         try { _socket.ReceiveBufferSize = 4 * 1024 * 1024; } catch { }
         try { _socket.SendBufferSize = 2 * 1024 * 1024; } catch { }
-        _socket.Bind(new IPEndPoint(IPAddress.Any, 0));   // porta efemera: o STUN descobre qual
+        _socket.Bind(new IPEndPoint(TailscaleOnly ? addresses[0] : IPAddress.Any, 0));
         int localPort = ((IPEndPoint)_socket.LocalEndPoint!).Port;
 
-        foreach (var ip in AppEnv.LocalIPv4()) _localEps.Add(new IPEndPoint(ip, localPort));
+        foreach (var ip in addresses) _localEps.Add(new IPEndPoint(ip, localPort));
         Log.Write($"sala {_roomId}: socket na porta {localPort}, locais=[{string.Join(",", _localEps)}]");
 
         // STUN ANTES do loop de recepcao (ele consome do mesmo socket).
-        _publicEp = await Stun.DiscoverAsync(_socket, ct: _cts.Token).ConfigureAwait(false);
+        _publicEp = TailscaleOnly ? null : await Stun.DiscoverAsync(_socket, ct: _cts.Token).ConfigureAwait(false);
         if (_publicEp is null)
             Log.Write("sem endereco publico — so vai conectar com quem estiver na mesma rede");
 
@@ -275,6 +312,9 @@ public sealed class RoomSession : IDisposable
             ["lastSeen"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             ["muted"] = Muted,
             ["sharing"] = Sharing,
+            ["djJoined"] = DjJoined,
+            ["djHost"] = DjHost,
+            ["djTrack"] = DjTrack,
         };
         if (full)
         {
@@ -316,8 +356,14 @@ public sealed class RoomSession : IDisposable
                 string nick = Firestore.Str(f, "nick", id);
                 bool muted = Firestore.Flag(f, "muted");
                 bool sharing = Firestore.Flag(f, "sharing");
-                if (p.Nick != nick || p.Muted != muted || p.Sharing != sharing) changed = true;
+                bool djJoined = Firestore.Flag(f, "djJoined");
+                bool djHost = Firestore.Flag(f, "djHost");
+                string djTrack = Firestore.Str(f, "djTrack");
+                if (p.Nick != nick || p.Muted != muted || p.Sharing != sharing ||
+                    p.DjJoined != djJoined || p.DjHost != djHost || p.DjTrack != djTrack)
+                    changed = true;
                 p.Nick = nick; p.Muted = muted; p.Sharing = sharing;
+                p.DjJoined = djJoined; p.DjHost = djHost; p.DjTrack = djTrack;
                 p.LastSeenMs = lastSeen;
 
                 RefreshCandidates(p, f);
@@ -339,7 +385,7 @@ public sealed class RoomSession : IDisposable
     }
 
     /// <summary>Reconstroi a lista de enderecos candidatos publicada pelo peer.</summary>
-    private static void RefreshCandidates(RemotePeer p, Dictionary<string, object?> f)
+    private void RefreshCandidates(RemotePeer p, Dictionary<string, object?> f)
     {
         var fresh = new List<IPEndPoint>();
 
@@ -350,6 +396,8 @@ public sealed class RoomSession : IDisposable
 
         foreach (string s in Firestore.Str(f, "locEps").Split(',', StringSplitOptions.RemoveEmptyEntries))
             if (IPEndPoint.TryParse(s.Trim(), out var lep)) fresh.Add(lep);
+
+        if (TailscaleOnly) fresh.RemoveAll(e => !ConnectionPolicy.IsTailnetAddress(e.Address));
 
         if (fresh.Count == 0) return;
         // So substitui se mudou de verdade (evita descartar o Locked a cada poll).
@@ -404,6 +452,21 @@ public sealed class RoomSession : IDisposable
     /// <summary>Manda um frame do audio do sistema (modo DJ).</summary>
     public void SendMusic(byte[] payload, int offset, int count)
         => SendToAll(TypeMusic, payload, offset, count, Interlocked.Increment(ref _musicSeq));
+
+    /// <summary>
+    /// Manda musica apenas aos participantes que aderiram a escuta conjunta. A voz
+    /// continua indo para toda a sala pelo fluxo normal e nao e afetada.
+    /// </summary>
+    public void SendDjMusic(byte[] payload, int offset, int count)
+    {
+        uint seq = Interlocked.Increment(ref _musicSeq);
+        foreach (var p in Peers)
+        {
+            if (!p.DjJoined) continue;
+            var ep = p.Locked;
+            if (ep != null) SendTo(ep, TypeDjMusic, payload, offset, count, seq);
+        }
+    }
 
     /// <summary>Mensagem de controle do cinema (cabe num datagrama).</summary>
     public void SendCinemaControl(string json)
@@ -519,6 +582,7 @@ public sealed class RoomSession : IDisposable
             if (senderId == _mySenderId) continue;   // eco de mim mesmo
 
             var src = (IPEndPoint)from;
+            if (TailscaleOnly && !ConnectionPolicy.IsTailnetAddress(src.Address)) continue;
             RemotePeer? peer;
             lock (_peersLock) _peers.TryGetValue(senderId, out peer);
             if (peer == null) continue;   // ainda nao apareceu no Firestore
@@ -543,6 +607,12 @@ public sealed class RoomSession : IDisposable
 
                 case TypeMusic:
                     MusicReceived?.Invoke(senderId, buf, HeaderBytes, len - HeaderBytes);
+                    break;
+
+                case TypeDjMusic:
+                    // A checagem local impede musica para quem apenas esta na call.
+                    if (DjJoined && peer.DjHost)
+                        MusicReceived?.Invoke(senderId, buf, HeaderBytes, len - HeaderBytes);
                     break;
 
                 case TypeScreen:

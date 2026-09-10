@@ -9,6 +9,7 @@ public sealed class RoomInfo
     public string CreatedBy = "";
     public readonly List<string> Occupants = new();
     public int Count => Occupants.Count;
+    public int LiveStreams;
 }
 
 /// <summary>Lista/cria/apaga salas no Firestore — o "lobby".</summary>
@@ -41,7 +42,10 @@ public sealed class RoomDirectory
                 var peers = await _fs.ListAsync($"pc_rooms/{id}/peers", ct: ct).ConfigureAwait(false);
                 foreach (var (_, pf) in peers)
                     if (now - Firestore.Num(pf, "lastSeen") <= PeerStaleMs)
+                    {
                         room.Occupants.Add(Firestore.Str(pf, "nick", "?"));
+                        if (Firestore.Flag(pf, "sharing")) room.LiveStreams++;
+                    }
             }
             catch (Exception ex) { Log.Write($"peers da sala {id}: " + ex.Message); }
 
@@ -127,9 +131,12 @@ public sealed class Config
     /// unico limite da qualidade — nao ha mais gargalo de CPU pra contornar.
     /// </summary>
     public int ScreenBudgetKb = 2000;
+    public int ScreenFps = 60;
+    public int ScreenMaxWidth = 1920;
+    public bool TailscaleOnly = true;
 
     /// <summary>Usar o tema (cor) que o jogador escolheu no site do Primitivao.</summary>
-    public bool UseSiteTheme = true;
+    public bool UseSiteTheme = false;
 
     /// <summary>Volume da musica do DJ (0..200%), separado do volume das vozes.</summary>
     public int MusicVolume = 70;
@@ -170,6 +177,9 @@ public sealed class Config
                     case "clipsecs": if (int.TryParse(v, out var cs)) c.ClipSeconds = Math.Clamp(cs, 5, 60); break;
                     case "autobuf": c.AutoBuffer = v != "0"; break;
                     case "scrkb": if (int.TryParse(v, out var sk)) c.ScreenBudgetKb = Math.Clamp(sk, 200, 6000); break;
+                    case "screenfps": if (int.TryParse(v, out var fps)) c.ScreenFps = fps is 15 or 30 or 60 ? fps : 60; break;
+                    case "screenwidth": if (int.TryParse(v, out var width)) c.ScreenMaxWidth = width is 1280 or 1920 or 2560 ? width : 1920; break;
+                    case "tailscaleonly": c.TailscaleOnly = v != "0"; break;
                     case "sitetheme": c.UseSiteTheme = v != "0"; break;
                     case "musicvol": if (int.TryParse(v, out var mv)) c.MusicVolume = Math.Clamp(mv, 0, 200); break;
                     case "tray": c.TrayOnClose = v != "0"; break;
@@ -197,6 +207,9 @@ public sealed class Config
                 "clipsecs=" + ClipSeconds,
                 "autobuf=" + (AutoBuffer ? "1" : "0"),
                 "scrkb=" + ScreenBudgetKb,
+                "screenfps=" + ScreenFps,
+                "screenwidth=" + ScreenMaxWidth,
+                "tailscaleonly=" + (TailscaleOnly ? "1" : "0"),
                 "sitetheme=" + (UseSiteTheme ? "1" : "0"),
                 "musicvol=" + MusicVolume,
                 "tray=" + (TrayOnClose ? "1" : "0"),

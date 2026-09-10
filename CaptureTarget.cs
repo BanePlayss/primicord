@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -9,10 +10,18 @@ public sealed class CaptureTarget
     public string Name = "";
     public IntPtr Window = IntPtr.Zero;      // Zero = monitor
     public Rectangle MonitorBounds;
+    public uint ProcessId { get; init; }
+    public string ProcessName { get; init; } = "";
+    public string WindowTitle { get; init; } = "";
 
     public bool IsWindow => Window != IntPtr.Zero;
 
     public override string ToString() => Name;
+
+    /// <summary>A tela de um monitor nao implica autorizacao para transmitir todo o audio.</summary>
+    public AudioCaptureTarget ToAudioTarget() => IsWindow
+        ? AudioCaptureTarget.ForWindow(this)
+        : AudioCaptureTarget.Silent;
 
     // ─── WIN32 ───────────────────────────────────────────────────────────────
 
@@ -91,10 +100,21 @@ public sealed class CaptureTarget
                 int w = rc.Right - rc.Left, hh = rc.Bottom - rc.Top;
                 if (w < 200 || hh < 120) return true;   // barras, tooltips, lixo
 
+                string processName = "";
+                try
+                {
+                    using var process = Process.GetProcessById(checked((int)pid));
+                    processName = process.ProcessName;
+                }
+                catch { }
+
                 windows.Add(new CaptureTarget
                 {
                     Name = $"[JANELA] {(title.Length > 52 ? title[..52] + "…" : title)} — {w}x{hh}",
                     Window = h,
+                    ProcessId = pid,
+                    ProcessName = processName,
+                    WindowTitle = title,
                 });
             }
             catch { }

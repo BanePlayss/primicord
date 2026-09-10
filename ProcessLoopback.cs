@@ -10,11 +10,9 @@ using NAudio.Wave;
 namespace Primicord;
 
 /// <summary>
-/// WASAPI process loopback (Win10 19041+): captura o audio do sistema EXCLUINDO a
-/// arvore de processos alvo. Com ExcludingSelf() o "modo DJ" NUNCA
-/// recaptura a voz dos outros tocada pelo proprio Primicord (mata o eco por construcao).
-/// Drop-in de WasapiLoopbackCapture via IWaveIn. Reusa os tipos publicos do NAudio;
-/// o unico interop novo e ActivateAudioInterfaceAsync com PROPVARIANT(VT_BLOB).
+/// WASAPI process loopback (Windows build 20348+). An application includes only
+/// its process tree; explicit system capture excludes Primicord and its children.
+/// Unsupported capture fails closed, without switching to a different source.
 /// </summary>
 public sealed class ProcessLoopbackCapture : IWaveIn
 {
@@ -32,18 +30,38 @@ public sealed class ProcessLoopbackCapture : IWaveIn
     private EventWaitHandle? _frameEvent;
     private Thread? _thread;
     private volatile bool _stop;
+    private readonly object _lifecycle = new();
+    private bool _disposed;
+    private WaveFormat _waveFormat = new(48000, 16, 1);
+    internal Action? ValidateSource { get; set; }
 
     /// <summary>Formato PEDIDO ao engine (GetMixFormat nao existe no device virtual;
     /// o engine converte pro que pedirmos). Setar ANTES de Prepare/StartRecording.</summary>
-    public WaveFormat WaveFormat { get; set; } = WaveFormat.CreateIeeeFloatWaveFormat(48000, 2);
+    public WaveFormat WaveFormat
+    {
+        get => _waveFormat;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            lock (_lifecycle)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                if (_client != null) throw new InvalidOperationException("O formato nao pode mudar durante a captura.");
+                _waveFormat = value;
+            }
+        }
+    }
 
     public event EventHandler<WaveInEventArgs>? DataAvailable;
     public event EventHandler<StoppedEventArgs>? RecordingStopped;
 
-    public static bool IsSupported => OperatingSystem.IsWindowsVersionAtLeast(10, 0, 19041);
+    public const string SupportMessage = "Audio isolado por aplicativo requer Windows 11 ou Windows build 20348+. A fonte nao sera trocada automaticamente.";
+    public static bool IsSupported => OperatingSystem.IsWindowsVersionAtLeast(10, 0, 20348);
 
     public ProcessLoopbackCapture(uint targetProcessId, Mode mode)
     {
+        if (targetProcessId == 0) throw new ArgumentOutOfRangeException(nameof(targetProcessId));
+        if (!Enum.IsDefined(mode)) throw new ArgumentOutOfRangeException(nameof(mode));
         _targetPid = targetProcessId;
         _mode = mode;
     }
@@ -52,43 +70,87 @@ public sealed class ProcessLoopbackCapture : IWaveIn
     public static ProcessLoopbackCapture ExcludingSelf()
         => new((uint)Environment.ProcessId, Mode.ExcludeProcessTree);
 
-    /// <summary>Ativa e inicializa ja (lanca aqui se indisponivel -> chamador faz fallback).</summary>
+    public static ProcessLoopbackCapture IncludingProcess(uint processId)
+        => new(processId, Mode.IncludeProcessTree);
+
+    /// <summary>Ativa a fonte exata; falhas nunca autorizam outro dispositivo.</summary>
     public void Prepare()
     {
-        if (_client != null) return;
-        if (!IsSupported) throw new PlatformNotSupportedException("requer Windows 10 build 19041+");
-        _client = Activate(_targetPid, _mode);
-        // 2_000_000 = 200 ms em unidades de 100 ns; flags LOOPBACK|EVENTCALLBACK.
-        _client.Initialize(AudioClientShareMode.Shared,
-            AudioClientStreamFlags.Loopback | AudioClientStreamFlags.EventCallback,
-            2_000_000, 0, WaveFormat, Guid.Empty);
-        _frameEvent = new EventWaitHandle(false, EventResetMode.AutoReset);
-        _client.SetEventHandle(_frameEvent.SafeWaitHandle.DangerousGetHandle());
-        _capture = _client.AudioCaptureClient; // GetService: SO depois do Initialize
+        lock (_lifecycle)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_client != null) return;
+            if (!IsSupported) throw new PlatformNotSupportedException(SupportMessage);
+            ValidateSource?.Invoke();
+            try
+            {
+                _client = Activate(_targetPid, _mode);
+                // Shared-mode engine period, not a fixed 200 ms buffer. WASAPI
+                // performs conversion/resampling once into the wire PCM format.
+                _client.Initialize(AudioClientShareMode.Shared,
+                    AudioClientStreamFlags.Loopback | AudioClientStreamFlags.EventCallback
+                    | AudioClientStreamFlags.AutoConvertPcm | AudioClientStreamFlags.SrcDefaultQuality,
+                    0, 0, WaveFormat, Guid.Empty);
+                _frameEvent = new EventWaitHandle(false, EventResetMode.AutoReset);
+                _client.SetEventHandle(_frameEvent.SafeWaitHandle.DangerousGetHandle());
+                _capture = _client.AudioCaptureClient;
+            }
+            catch
+            {
+                ReleaseNative();
+                throw;
+            }
+        }
     }
 
     public void StartRecording()
     {
-        if (_thread != null) throw new InvalidOperationException("captura ja iniciada");
-        Prepare();
-        _client!.Start();
-        _stop = false;
-        _thread = new Thread(CaptureLoop) { IsBackground = true, Name = "Primicord-ProcLoopback" };
-        _thread.Start();
+        lock (_lifecycle)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_thread != null) throw new InvalidOperationException("Captura ja iniciada ou ainda encerrando.");
+            Prepare();
+            try
+            {
+                _client!.Start();
+                _stop = false;
+                _thread = new Thread(CaptureLoop) { IsBackground = true, Name = "Primicord-ProcLoopback" };
+                _thread.Start();
+            }
+            catch
+            {
+                _thread = null;
+                ReleaseNative();
+                throw;
+            }
+        }
     }
 
     public void StopRecording()
     {
-        _stop = true;
-        try { _frameEvent?.Set(); } catch { }
-        var t = _thread; _thread = null;
-        if (t != null && t.IsAlive && t != Thread.CurrentThread) t.Join(1000);
-        try { _client?.Stop(); } catch { }
+        Thread? thread;
+        lock (_lifecycle)
+        {
+            _stop = true;
+            try { _frameEvent?.Set(); } catch (ObjectDisposedException) { }
+            thread = _thread;
+        }
+        // If a subscriber stalls, the worker retains ownership of COM handles
+        // until it leaves its callback. Never release a buffer still in use.
+        if (thread != null && thread != Thread.CurrentThread) thread.Join(2000);
     }
 
     public void Dispose()
     {
+        lock (_lifecycle) _disposed = true;
         StopRecording();
+        lock (_lifecycle)
+            if (_thread == null) ReleaseNative();
+    }
+
+    private void ReleaseNative()
+    {
+        try { _client?.Stop(); } catch { }
         try { _capture?.Dispose(); } catch { } _capture = null;
         try { _client?.Dispose(); } catch { } _client = null;
         try { _frameEvent?.Dispose(); } catch { } _frameEvent = null;
@@ -102,20 +164,31 @@ public sealed class ProcessLoopbackCapture : IWaveIn
             var cap = _capture!;
             int blockAlign = WaveFormat.BlockAlign;
             byte[] buf = new byte[Math.Max(WaveFormat.AverageBytesPerSecond / 4, 1 << 16)];
+            long nextSourceCheck = 0;
             while (!_stop)
             {
                 // TIMEOUT obrigatorio: sistema em silencio => NENHUM evento/pacote
                 // (process loopback nao gera pacotes de silencio).
                 _frameEvent!.WaitOne(100);
                 if (_stop) break;
+                long now = Environment.TickCount64;
+                if (now >= nextSourceCheck)
+                {
+                    ValidateSource?.Invoke();
+                    nextSourceCheck = now + 500;
+                }
                 while (!_stop && cap.GetNextPacketSize() > 0)
                 {
                     IntPtr p = cap.GetBuffer(out int frames, out AudioClientBufferFlags flags);
-                    int bytes = frames * blockAlign;
-                    if (buf.Length < bytes) buf = new byte[bytes];
-                    if ((flags & AudioClientBufferFlags.Silent) != 0) Array.Clear(buf, 0, bytes);
-                    else Marshal.Copy(p, buf, 0, bytes);
-                    cap.ReleaseBuffer(frames);
+                    int bytes;
+                    try
+                    {
+                        bytes = checked(frames * blockAlign);
+                        if (buf.Length < bytes) buf = new byte[bytes];
+                        if ((flags & AudioClientBufferFlags.Silent) != 0) Array.Clear(buf, 0, bytes);
+                        else Marshal.Copy(p, buf, 0, bytes);
+                    }
+                    finally { cap.ReleaseBuffer(frames); }
                     // Contrato identico ao WasapiLoopbackCapture: buffer REUTILIZADO,
                     // o handler copia sincronamente (OnLoopbackData ja copia).
                     DataAvailable?.Invoke(this, new WaveInEventArgs(buf, bytes));
@@ -123,6 +196,14 @@ public sealed class ProcessLoopbackCapture : IWaveIn
             }
         }
         catch (Exception ex) { err = ex; }
+        finally
+        {
+            lock (_lifecycle)
+            {
+                ReleaseNative();
+                _thread = null;
+            }
+        }
         try { RecordingStopped?.Invoke(this, new StoppedEventArgs(err)); } catch { }
     }
 
@@ -147,7 +228,8 @@ public sealed class ProcessLoopbackCapture : IWaveIn
             Marshal.FreeHGlobal(pPars);
             Marshal.ThrowExceptionForHR(hr);
         }
-        bool done = handler.Completion.Wait(ActivateTimeout);
+        bool done = Task.WhenAny(handler.Completion, Task.Delay(ActivateTimeout))
+            .GetAwaiter().GetResult() == handler.Completion;
         GC.KeepAlive(op); // op+handler vivos ate o callback (senao GC mata o CCW)
         if (!done)
         {
@@ -161,6 +243,8 @@ public sealed class ProcessLoopbackCapture : IWaveIn
                     try { Marshal.FinalReleaseComObject(late); } catch { }
                 }
                 Marshal.FreeHGlobal(pPars);
+                GC.KeepAlive(op);
+                GC.KeepAlive(handler);
             }, TaskScheduler.Default);
             throw new TimeoutException("ActivateAudioInterfaceAsync nao completou");
         }

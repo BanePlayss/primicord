@@ -10,7 +10,7 @@ namespace Primicord;
 /// </summary>
 public sealed class RailItem : Control
 {
-    public enum Kind { TextChannel, Voice, Dm, Action }
+    public enum Kind { TextChannel, Voice, Music, Dm, Action }
 
     private bool _hover;
 
@@ -32,13 +32,17 @@ public sealed class RailItem : Control
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public bool Online { get; set; }
 
+    /// <summary>Recuo para participantes exibidos abaixo de uma sala de voz.</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public int Indent { get; set; }
+
     public RailItem(string text, Kind kind)
     {
         Text = text;
         ItemKind = kind;
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
                  ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-        Height = 34;
+        Height = 32;
         Cursor = Cursors.Hand;
         BackColor = Pv.Char2;   // MESMA cor do rail: senao aparece emenda vertical
     }
@@ -52,18 +56,11 @@ public sealed class RailItem : Control
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
-        var r = new Rectangle(6, 2, Width - 12, Height - 4);
+        var r = new Rectangle(6 + Indent, 2, Width - 12 - Indent, Height - 4);
         if (Active || _hover)
         {
             using var path = Pv.RoundRect(r, 6);
-            using var b = new SolidBrush(Active ? Pv.Char3 : Color.FromArgb(70, Pv.Char3));
-            g.FillPath(b, path);
-        }
-        if (Active)
-        {
-            // Marcador laranja na borda esquerda (o "voce esta aqui" do Discord).
-            using var b = new SolidBrush(Pv.Orange);
-            using var path = Pv.RoundRect(new Rectangle(0, Height / 2 - 8, 4, 16), 2);
+            using var b = new SolidBrush(Active ? Pv.Char3 : Pv.SurfaceHover);
             g.FillPath(b, path);
         }
 
@@ -77,7 +74,7 @@ public sealed class RailItem : Control
             Glyphs.Avatar(g, box, AvatarNick, Pv.Char3, Pv.Bone);
             if (Online)
                 Glyphs.StatusDot(g, new RectangleF(box.Right - 8, box.Bottom - 8, 9, 9),
-                                 Pv.Green, Pv.Charcoal);
+                                 Pv.Green, Pv.Char2);
             ic = new RectangleF(ic.X + 6, ic.Y, iconBox, iconBox);
         }
         else
@@ -86,6 +83,7 @@ public sealed class RailItem : Control
             {
                 case Kind.TextChannel: Glyphs.Hash(g, ic, fg); break;
                 case Kind.Voice: Glyphs.Speaker(g, ic, fg); break;
+                case Kind.Music: Glyphs.Music(g, ic, fg); break;
                 case Kind.Action: Glyphs.Plus(g, ic, fg); break;
             }
         }
@@ -150,7 +148,7 @@ public sealed class MemberRow : Control
         if (_hover)
         {
             using var path = Pv.RoundRect(r, 6);
-            using var b = new SolidBrush(Color.FromArgb(70, Pv.Char3));
+            using var b = new SolidBrush(Pv.SurfaceHover);
             g.FillPath(b, path);
         }
 
@@ -161,13 +159,13 @@ public sealed class MemberRow : Control
         if (!Online)
         {
             // Offline: veu por cima da foto, como no Discord.
-            using var veil = new SolidBrush(Color.FromArgb(150, Pv.Charcoal));
+            using var veil = new SolidBrush(Color.FromArgb(150, Pv.Char2));
             g.FillEllipse(veil, box);
         }
         g.Restore(saved);
 
         Glyphs.StatusDot(g, new RectangleF(box.Right - 9, box.Bottom - 9, 11, 11),
-                         Online ? Pv.Green : Pv.BoneDim, Pv.Charcoal);
+                         Online ? Pv.Green : Pv.BoneDim, Pv.Char2);
 
         float tx = box.Right + 10;
         bool twoLines = Room.Length > 0;

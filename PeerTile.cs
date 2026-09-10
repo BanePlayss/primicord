@@ -12,6 +12,8 @@ public sealed class PeerTile : Control
     public bool IsMe;
     public bool Muted;
     public bool Sharing;
+    public bool DjJoined;
+    public bool DjHost;
     public bool Connected = true;
     public bool Punching;      // ainda furando o NAT
     public float Level;        // 0..1 nivel de voz agora
@@ -39,6 +41,16 @@ public sealed class PeerTile : Control
 
         Color border = Speaking ? Pv.Green : (Punching ? Pv.OrangeDim : Pv.Char3);
         using (var p = new Pen(border, 2)) g.DrawRectangle(p, r);
+
+        if (DjJoined)
+        {
+            var badge = new Rectangle(Width - 48, 8, 38, 20);
+            using (var b = new SolidBrush(DjHost ? Pv.NitroPink : Pv.Char3))
+            using (var path = Pv.RoundRect(badge, 6)) g.FillPath(b, path);
+            Glyphs.Music(g, new RectangleF(badge.X + 5, badge.Y + 4, 12, 12), Pv.Bone, 1.5f);
+            using var text = new SolidBrush(Pv.Bone);
+            g.DrawString(DjHost ? "DJ" : "♫", Pv.Label, text, badge.X + 20, badge.Y + 5);
+        }
 
         // Avatar: a MESMA foto que o jogador usa no site; sem foto, cai na inicial.
         int av = 52;

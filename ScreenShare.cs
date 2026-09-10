@@ -26,7 +26,6 @@ namespace Primicord;
 /// </remarks>
 public sealed class ScreenSender : IDisposable
 {
-    private const int TargetFps = 30;
     private const int TileSize = 128;
 
     /// <summary>
@@ -57,6 +56,10 @@ public sealed class ScreenSender : IDisposable
     /// O Discord usa ~2,5 Mbps, mas com H.264, que rende umas 5x mais que JPEG solto.
     /// </remarks>
     public int TotalUploadBudget { get; set; } = 900_000;
+    public int TargetFps { get; set; } = 60;
+    public int MaxWidth { get; set; } = 1920;
+    public string CaptureBackend => _target.UsingGpu ? "DXGI Desktop Duplication" : "GDI window compatibility";
+    public string? LastError { get; private set; }
 
     /// <summary>
     /// Teto quando TODO MUNDO da sala esta na mesma rede local. LAN e gigabit: nao
@@ -146,9 +149,9 @@ public sealed class ScreenSender : IDisposable
         var ep = new EncoderParameters(1);
 
         int lastViewers = 0;
-        int frameMs = 1000 / TargetFps;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         long lastStat = Environment.TickCount64;
+        long nextFullFrameAt = 0;
         int framesSec = 0, bytesSec = 0;
         int overBudgetStreak = 0, underBudgetStreak = 0;
 
@@ -156,6 +159,7 @@ public sealed class ScreenSender : IDisposable
         {
             int w = targetW, h = targetH;
             int maxW = WidthLadder[ladderIdx];
+            if (MaxWidth > 0) maxW = maxW == 0 ? MaxWidth : Math.Min(maxW, MaxWidth);
             // 0 = nativo (sem reduzir). Tambem nao amplia: se a fonte ja e menor
             // que o degrau, fica no tamanho dela.
             if (maxW > 0 && w > maxW) { h = (int)Math.Round(h * (maxW / (double)w)); w = maxW; }
@@ -214,7 +218,6 @@ public sealed class ScreenSender : IDisposable
                     // A GPU avisou que nada mudou na tela. Nao ha o que comparar nem
                     // mandar — so o rodizio de conserto, que segue no proximo ciclo.
                     MsCapture = (int)tCap.ElapsedMilliseconds;
-                    framesSec++;
                     goto pacing;
                 }
                 DrawCursorScaled(gScale!, _target.ScreenRect(), outW, outH);
@@ -280,6 +283,7 @@ public sealed class ScreenSender : IDisposable
                 payload.SetLength(0);
                 payload.Position = 8;      // reserva o cabecalho
                 int tilesSent = 0;
+                ep.Param[0]?.Dispose();
                 ep.Param[0] = new EncoderParameter(Encoder.Quality, _quality);
 
                 foreach (var (c, r) in dirty)
@@ -379,9 +383,12 @@ public sealed class ScreenSender : IDisposable
                     }
                 }
 
-                if (NeedFullFrames)
+                long nowFull = Environment.TickCount64;
+                if (NeedFullFrames && nowFull >= nextFullFrameAt)
                 {
+                    nextFullFrameAt = nowFull + 1000L / Math.Clamp(TargetFps, 15, 60);
                     tileMs.SetLength(0);
+                    ep.Param[0]?.Dispose();
                     ep.Param[0] = new EncoderParameter(Encoder.Quality, 70L);
                     scaled.Save(tileMs, _jpegCodec, ep);
                     FullFrameProduced?.Invoke(tileMs.ToArray(), outW, outH);
@@ -392,6 +399,7 @@ public sealed class ScreenSender : IDisposable
             catch (Exception ex)
             {
                 Log.Write("captura de tela falhou: " + ex.Message);
+                LastError = ex.Message;
                 Thread.Sleep(300);
             }
 
@@ -404,6 +412,7 @@ public sealed class ScreenSender : IDisposable
                 lastStat = Environment.TickCount64;
             }
 
+            int frameMs = 1000 / Math.Clamp(TargetFps, 15, 60);
             int wait = frameMs - (int)(sw.ElapsedMilliseconds - t0);
             if (wait > 0) Thread.Sleep(wait);
         }
@@ -495,7 +504,8 @@ public sealed class ScreenReceiver : IDisposable
         int tileSize = payload[3] * 8;
         int frameW = payload[4] | (payload[5] << 8);
         int frameH = payload[6] | (payload[7] << 8);
-        if (tileSize <= 0 || frameW <= 0 || frameH <= 0) return false;
+        if (tileSize <= 0 || frameW <= 0 || frameH <= 0 || frameW > 7680 || frameH > 4320
+            || tileCount <= 0 || tileCount > 4096) return false;
 
         Canvas canvas;
         lock (_lock)
@@ -523,6 +533,7 @@ public sealed class ScreenReceiver : IDisposable
             int jlen = payload[pos + 2] | (payload[pos + 3] << 8);
             pos += 4;
             if (jlen <= 0 || pos + jlen > payload.Length) break;
+            if (col * tileSize >= frameW || row * tileSize >= frameH) { pos += jlen; continue; }
 
             try
             {
@@ -551,7 +562,9 @@ public sealed class ScreenReceiver : IDisposable
         {
             if (!_canvases.TryGetValue(senderId, out var c)) return null;
             if (DateTime.UtcNow.Ticks - c.LastTicks > TimeSpan.TicksPerSecond * 4) return null;
-            return c.Bmp;
+            // A cópia impede que o paint da UI leia uma superfície enquanto a
+            // thread UDP aplica um tile novo nela. O clone é descartado pelo palco.
+            try { return new Bitmap(c.Bmp); } catch { return null; }
         }
     }
 

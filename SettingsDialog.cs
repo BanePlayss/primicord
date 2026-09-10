@@ -19,6 +19,9 @@ public sealed class SettingsDialog : Form
     private readonly PrimCheck _autoBuf = new("Gravar sozinho enquanto alguem compartilha tela");
 
     private readonly ComboBox _bw = new();
+    private readonly ComboBox _fps = new();
+    private readonly ComboBox _width = new();
+    private readonly PrimCheck _tailnet = new("Exigir Tailscale para entrar em salas (recomendado)");
 
     /// <summary>Degraus de banda pro compartilhamento (KB/s, rotulo).</summary>
     /// <summary>
@@ -28,10 +31,10 @@ public sealed class SettingsDialog : Form
     /// </summary>
     private static readonly (int Kb, string Nome)[] BandwidthChoices =
     {
-        (450,  "Economico — 3,5 Mbps  ->  800x450 a 30fps"),
-        (900,  "Equilibrado — 7 Mbps  ->  1024x576 a 30fps"),
-        (2000, "Alta — 16 Mbps  ->  1920x1080 a 26fps"),
-        (4000, "Maxima — 32 Mbps  ->  1920x1080 nitido, 20fps"),
+        (450,  "Econômico — 3,5 Mbps  ·  800x450 até 30 FPS"),
+        (900,  "Equilibrado — 7 Mbps  ·  1280x720 até 30 FPS"),
+        (2000, "Alta — 16 Mbps  ·  1920x1080 até 60 FPS"),
+        (4000, "Máxima — 32 Mbps  ·  1920x1080 com folga para 60 FPS"),
     };
 
     private static int NearestBandwidthIndex(int kb)
@@ -72,7 +75,7 @@ public sealed class SettingsDialog : Form
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
         // Rolagem: a lista cresceu e nem toda tela cabe 1000px de altura.
-        ClientSize = new Size(478, Math.Min(880, Screen.PrimaryScreen!.WorkingArea.Height - 80));
+        ClientSize = new Size(478, Math.Min(1040, Screen.PrimaryScreen!.WorkingArea.Height - 80));
         AutoScroll = true;
         BackColor = Pv.Char2;
         ForeColor = Pv.Bone;
@@ -157,61 +160,83 @@ public sealed class SettingsDialog : Form
 
         var bwHint = new Label
         {
-            Text = "A captura e pela GPU, entao a imagem so depende disto. Se a voz\n"
-                 + "comecar a picotar, sua subida nao aguenta — desce um degrau.",
+            Text = "A captura usa a GPU; o orçamento é dividido pelos espectadores.\n"
+                 + "Se a voz começar a picotar, sua subida não aguenta — desça um degrau.",
             Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(24, 612),
             Size = new Size(412, 40),
+        };
+
+        var lblFps = Section("TAXA DE QUADROS", new Point(24, 662));
+        StyleCombo(_fps, new Point(24, 682));
+        _fps.Items.AddRange(new object[] { "60 FPS — jogos e movimento", "30 FPS — equilibrado", "15 FPS — economia" });
+        _fps.SelectedIndex = cfg.ScreenFps switch { 15 => 2, 30 => 1, _ => 0 };
+
+        var lblWidth = Section("LARGURA MÁXIMA", new Point(24, 720));
+        StyleCombo(_width, new Point(24, 740));
+        _width.Items.AddRange(new object[] { "1920 px — recomendado", "2560 px — ultrawide", "1280 px — economia" });
+        _width.SelectedIndex = cfg.ScreenMaxWidth switch { 1280 => 2, 2560 => 1, _ => 0 };
+
+        _tailnet.Location = new Point(24, 786);
+        _tailnet.Size = new Size(412, 26);
+        _tailnet.Checked = cfg.TailscaleOnly;
+
+        var netHint = new Label
+        {
+            Text = "O app usa o Tailscale como rede privada. Se ele estiver desconectado,\n"
+                 + "a entrada falha com uma mensagem clara em vez de cair para a internet.",
+            Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(48, 816),
+            Size = new Size(400, 42),
         };
 
         // ── DO PRIMITIVAO / APP ──
         var titleApp = new Label
         {
             Text = "PRIMITIVAO E APP", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
-            Location = new Point(24, 666), AutoSize = true,
+            Location = new Point(24, 874), AutoSize = true,
         };
 
-        _siteTheme.Location = new Point(24, 706);
+        _siteTheme.Location = new Point(24, 914);
         _siteTheme.Size = new Size(412, 26);
         _siteTheme.Checked = cfg.UseSiteTheme;
 
         var themeHint = new Label
         {
-            Text = "A cor vem do tema escolhido no site. Trocar de tema e la:\n"
+            Text = "A cor vem do tema escolhido no site. Trocar de tema é lá:\n"
                  + "o Primicord so le, nunca escreve no doc de apostas.",
-            Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(48, 734),
+            Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(48, 942),
             Size = new Size(400, 44),
         };
 
-        var lblMusic = Section("VOLUME DA MUSICA DO DJ", new Point(24, 782));
-        _music.Location = new Point(24, 800);
+        var lblMusic = Section("VOLUME DA MUSICA DO DJ", new Point(24, 990));
+        _music.Location = new Point(24, 1008);
         _music.Size = new Size(412, 30);
         _music.Minimum = 0; _music.Maximum = 200;
         _music.Value = Math.Clamp(cfg.MusicVolume, 0, 200);
-        _musicLabel.Location = new Point(24, 832);
+        _musicLabel.Location = new Point(24, 1040);
         _musicLabel.AutoSize = true;
         _musicLabel.Font = Pv.Body;
         _musicLabel.ForeColor = Pv.BoneDim;
         _music.ValueChanged += (_, _) => UpdateMusicLabel();
         UpdateMusicLabel();
 
-        _tray.Location = new Point(24, 860);
+        _tray.Location = new Point(24, 1070);
         _tray.Size = new Size(412, 26);
         _tray.Checked = cfg.TrayOnClose;
 
-        _joinSound.Location = new Point(24, 890);
+        _joinSound.Location = new Point(24, 1100);
         _joinSound.Size = new Size(412, 26);
         _joinSound.Checked = cfg.JoinLeaveSound;
 
-        var save = new PrimButton("SALVAR") { Location = new Point(24, 930), Size = new Size(200, 40) };
+        var save = new PrimButton("SALVAR") { Location = new Point(24, 1140), Size = new Size(200, 40) };
         save.Click += (_, _) => Apply();
         var cancel = new PrimButton("CANCELAR", PrimButton.Style.Ghost)
-        { Location = new Point(236, 930), Size = new Size(200, 40) };
+        { Location = new Point(236, 1140), Size = new Size(200, 40) };
         cancel.Click += (_, _) => Close();
 
         Controls.AddRange(new Control[]
             { title, lblMic, _mic, lblTest, _level, lblOut, _out, warn,
               titleClip, lblKey, _hotkeyBox, lblSecs, _secs, _secsLabel, _autoBuf,
-              titleScr, lblBw, _bw, bwHint,
+              titleScr, lblBw, _bw, bwHint, lblFps, _fps, lblWidth, _width, _tailnet, netHint,
               titleApp, _siteTheme, themeHint, lblMusic, _music, _musicLabel, _tray, _joinSound,
               save, cancel });
 
@@ -268,6 +293,9 @@ public sealed class SettingsDialog : Form
         _cfg.ClipSeconds = _secs.Value;
         _cfg.AutoBuffer = _autoBuf.Checked;
         if (_bw.SelectedIndex >= 0) _cfg.ScreenBudgetKb = BandwidthChoices[_bw.SelectedIndex].Kb;
+        _cfg.ScreenFps = _fps.SelectedIndex switch { 2 => 15, 1 => 30, _ => 60 };
+        _cfg.ScreenMaxWidth = _width.SelectedIndex switch { 2 => 1280, 1 => 2560, _ => 1920 };
+        _cfg.TailscaleOnly = _tailnet.Checked;
         _cfg.UseSiteTheme = _siteTheme.Checked;
         _cfg.MusicVolume = _music.Value;
         _cfg.TrayOnClose = _tray.Checked;
