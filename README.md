@@ -4,6 +4,14 @@ O app de comunidade dos primitivos — cliente nativo de Windows com uma interfa
 inspirada na organização do Discord e identidade visual do escudo Primitivão.
 Versão publicada: **0.9.5**.
 
+## 0.9.6 — pacing estável de transmissão
+
+- o loop usa pacing de alta precisão para não deixar o timer do Windows transformar
+  60 FPS em aproximadamente 30 FPS;
+- o alvo mínimo passou a ser 30 FPS; configurações antigas com 15 FPS são migradas
+  para 30 FPS;
+- o indicador mostra FPS observados e o alvo configurado no painel da transmissão.
+
 ## 0.9.5 — assistir, comparar e ampliar transmissões
 
 - clique no palco ou use Tela cheia/F11 para ampliar mantendo os participantes

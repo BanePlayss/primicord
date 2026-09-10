@@ -60,7 +60,9 @@ public sealed class ScreenSender : IDisposable
     /// O Discord usa ~2,5 Mbps, mas com H.264, que rende umas 5x mais que JPEG solto.
     /// </remarks>
     public int TotalUploadBudget { get; set; } = 900_000;
+    /// <summary>O stream nunca desce de 30 FPS; 15 FPS deixava jogos travados.</summary>
     public int TargetFps { get; set; } = 60;
+    public int EffectiveTargetFps => Math.Clamp(TargetFps, 30, 60);
     public int MaxWidth { get; set; } = 1920;
     /// <summary>Não reduzir resolução automaticamente e priorizar nitidez.</summary>
     public bool MaxQuality { get; set; } = true;
@@ -157,7 +159,6 @@ public sealed class ScreenSender : IDisposable
         var ep = new EncoderParameters(1);
 
         int lastViewers = 0;
-        var sw = System.Diagnostics.Stopwatch.StartNew();
         long lastStat = Environment.TickCount64;
         long nextFullFrameAt = 0;
         long nextPreviewAt = 0;
@@ -198,7 +199,8 @@ public sealed class ScreenSender : IDisposable
 
         while (_running)
         {
-            long t0 = sw.ElapsedMilliseconds;
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            framesSec++;
             try
             {
                 if (!_target.StillAlive())
@@ -272,7 +274,7 @@ public sealed class ScreenSender : IDisposable
 
                 int budget = LanSession ? LanBudget : TotalUploadBudget;
                 int perViewer = budget / Math.Max(1, viewers);
-                int frameBudget = Math.Max(12_000, perViewer / Math.Max(1, TargetFps));
+                int frameBudget = Math.Max(12_000, perViewer / EffectiveTargetFps);
 
                 var tCmp = System.Diagnostics.Stopwatch.StartNew();
                 var dirty = new List<(int C, int R)>();
@@ -434,7 +436,7 @@ public sealed class ScreenSender : IDisposable
                 long nowFull = Environment.TickCount64;
                 if (NeedFullFrames && nowFull >= nextFullFrameAt)
                 {
-                    nextFullFrameAt = nowFull + 1000L / Math.Clamp(TargetFps, 15, 60);
+                    nextFullFrameAt = nowFull + 1000L / EffectiveTargetFps;
                     tileMs.SetLength(0);
                     ep.Param[0]?.Dispose();
                     ep.Param[0] = new EncoderParameter(Encoder.Quality, 70L);
@@ -442,7 +444,6 @@ public sealed class ScreenSender : IDisposable
                     FullFrameProduced?.Invoke(tileMs.ToArray(), outW, outH);
                 }
 
-                framesSec++;
             }
             catch (Exception ex)
             {
@@ -460,9 +461,7 @@ public sealed class ScreenSender : IDisposable
                 lastStat = Environment.TickCount64;
             }
 
-            int frameMs = 1000 / Math.Clamp(TargetFps, 15, 60);
-            int wait = frameMs - (int)(sw.ElapsedMilliseconds - t0);
-            if (wait > 0) Thread.Sleep(wait);
+            ScreenPacing.Wait(t0, EffectiveTargetFps);
         }
 
         gScale?.Dispose(); scaled?.Dispose();

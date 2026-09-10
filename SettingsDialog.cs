@@ -172,8 +172,8 @@ public sealed class SettingsDialog : Form
 
         var lblFps = Section("TAXA DE QUADROS", new Point(24, 662));
         StyleCombo(_fps, new Point(24, 682));
-        _fps.Items.AddRange(new object[] { "60 FPS — jogos e movimento", "30 FPS — equilibrado", "15 FPS — economia" });
-        _fps.SelectedIndex = cfg.ScreenFps switch { 15 => 2, 30 => 1, _ => 0 };
+        _fps.Items.AddRange(new object[] { "60 FPS — jogos e movimento", "30 FPS — mínimo estável" });
+        _fps.SelectedIndex = cfg.ScreenFps == 30 ? 1 : 0;
 
         var lblWidth = Section("LARGURA MÁXIMA", new Point(24, 720));
         StyleCombo(_width, new Point(24, 740));
@@ -364,7 +364,7 @@ public sealed class SettingsDialog : Form
         _cfg.ClipSeconds = _secs.Value;
         _cfg.AutoBuffer = _autoBuf.Checked;
         if (_bw.SelectedIndex >= 0) _cfg.ScreenBudgetKb = BandwidthChoices[_bw.SelectedIndex].Kb;
-        _cfg.ScreenFps = _fps.SelectedIndex switch { 2 => 15, 1 => 30, _ => 60 };
+        _cfg.ScreenFps = _fps.SelectedIndex == 1 ? 30 : 60;
         _cfg.ScreenMaxWidth = _width.SelectedIndex switch { 2 => 1280, 1 => 2560, _ => 1920 };
         _cfg.TailscaleOnly = _tailnet.Checked;
         _cfg.UseSiteTheme = _siteTheme.Checked;

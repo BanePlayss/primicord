@@ -179,7 +179,7 @@ public sealed class Config
                     case "clipsecs": if (int.TryParse(v, out var cs)) c.ClipSeconds = Math.Clamp(cs, 5, 60); break;
                     case "autobuf": c.AutoBuffer = v != "0"; break;
                     case "scrkb": if (int.TryParse(v, out var sk)) c.ScreenBudgetKb = Math.Clamp(sk, 200, 6000); break;
-                    case "screenfps": if (int.TryParse(v, out var fps)) c.ScreenFps = fps is 15 or 30 or 60 ? fps : 60; break;
+                    case "screenfps": if (int.TryParse(v, out var fps)) c.ScreenFps = fps is 30 or 60 ? fps : 60; break;
                     case "screenwidth": if (int.TryParse(v, out var width)) c.ScreenMaxWidth = width is 1280 or 1920 or 2560 ? width : 1920; break;
                     case "tailscaleonly": c.TailscaleOnly = v != "0"; break;
                     case "sitetheme": c.UseSiteTheme = v != "0"; break;

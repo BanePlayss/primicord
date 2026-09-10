@@ -72,9 +72,24 @@ internal sealed class ScreenUploadBudget
 
 internal static class ScreenPacing
 {
-    public static void Wait(WaitHandle stop, long cycleStart, int fps)
+    /// <summary>
+    /// Espera com precisão de sub-milisegundo. Thread.Sleep(16) sozinho pode ser
+    /// arredondado pelo timer do Windows e fazer um alvo de 60 FPS cair para ~30.
+    /// Dormimos quase todo o intervalo e queimamos apenas o último milissegundo.
+    /// </summary>
+    public static void Wait(long cycleStart, int fps)
     {
-        double remaining = 1000d / Math.Clamp(fps, 5, 60) - Stopwatch.GetElapsedTime(cycleStart).TotalMilliseconds;
-        if (remaining > 0) stop.WaitOne((int)Math.Ceiling(remaining));
+        double frameMs = 1000d / Math.Clamp(fps, 30, 60);
+        while (true)
+        {
+            double remaining = frameMs - Stopwatch.GetElapsedTime(cycleStart).TotalMilliseconds;
+            if (remaining <= 0) return;
+            if (remaining > 2.0)
+            {
+                Thread.Sleep(Math.Max(1, (int)Math.Floor(remaining - 1.0)));
+                continue;
+            }
+            Thread.SpinWait(2000);
+        }
     }
 }

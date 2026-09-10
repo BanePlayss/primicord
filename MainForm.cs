@@ -1482,7 +1482,7 @@ public sealed partial class MainForm : Form
         bool buffering = _clips?.Active == true;
         _stage.Recording = buffering;
         string net = _iAmSharing && _screenSender != null
-            ? $"{_screenSender.Fps}FPS · Q{_screenSender.Quality} · {_screenSender.KbPerSecond}KB/s"
+            ? $"{_screenSender.Fps}FPS · alvo {_screenSender.EffectiveTargetFps} · Q{_screenSender.Quality} · {_screenSender.KbPerSecond}KB/s"
               + (_screenSender.MaxQuality ? " · MÁX" : "")
             : "";
         _stage.StatusRight = buffering
