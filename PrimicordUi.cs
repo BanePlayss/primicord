@@ -27,18 +27,18 @@ public static class Pv
     }
     // Paleta inspirada no escudo enviado: fuligem, madeira queimada, osso e
     // laranja de pigmento. O destaque continua legível em telas escuras.
-    public static readonly Color Charcoal = Color.FromArgb(0x16, 0x16, 0x14);
-    public static readonly Color Char2 = Color.FromArgb(0x22, 0x22, 0x1F);
-    public static readonly Color Char3 = Color.FromArgb(0x3C, 0x3B, 0x35);
-    public static readonly Color SurfaceLow = Color.FromArgb(0x29, 0x28, 0x23);
-    public static readonly Color SurfaceLowest = Color.FromArgb(0x11, 0x0E, 0x0B);
-    public static readonly Color SurfaceHover = Color.FromArgb(0x4A, 0x2D, 0x1B);
-    public static readonly Color Input = Color.FromArgb(0x32, 0x21, 0x17);
-    public static readonly Color Border = Color.FromArgb(0x53, 0x35, 0x20);
-    public static readonly Color Bone = Color.FromArgb(0xF4, 0xE5, 0xCC);
-    public static readonly Color BoneDim = Color.FromArgb(0xC9, 0xB6, 0x98);
-    public static readonly Color Muted = Color.FromArgb(0x99, 0x82, 0x68);
-    public static readonly Color Green = Color.FromArgb(0x8F, 0xBA, 0x62);
+    public static readonly Color Charcoal = Color.FromArgb(0x12, 0x13, 0x16);
+    public static readonly Color Char2 = Color.FromArgb(0x1A, 0x1B, 0x1F);
+    public static readonly Color Char3 = Color.FromArgb(0x35, 0x36, 0x3C);
+    public static readonly Color SurfaceLow = Color.FromArgb(0x23, 0x24, 0x2A);
+    public static readonly Color SurfaceLowest = Color.FromArgb(0x10, 0x11, 0x14);
+    public static readonly Color SurfaceHover = Color.FromArgb(0x2C, 0x2D, 0x33);
+    public static readonly Color Input = Color.FromArgb(0x27, 0x28, 0x2E);
+    public static readonly Color Border = Color.FromArgb(0x30, 0x31, 0x37);
+    public static readonly Color Bone = Color.FromArgb(0xF2, 0xF0, 0xEC);
+    public static readonly Color BoneDim = Color.FromArgb(0xAC, 0xAE, 0xB7);
+    public static readonly Color Muted = Color.FromArgb(0x83, 0x85, 0x90);
+    public static readonly Color Green = Color.FromArgb(0x43, 0xB5, 0x81);
     public static readonly Color Red = Color.FromArgb(0xD8, 0x5A, 0x45);
     public static readonly Color Yellow = Color.FromArgb(0xE3, 0xB5, 0x4B);
     public static readonly Color NitroPurple = Color.FromArgb(0xB0, 0x5A, 0x20);

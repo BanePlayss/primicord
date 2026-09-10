@@ -26,7 +26,7 @@ public sealed class PeerTile : Control
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
                  ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
         Size = new Size(186, 124);
-        BackColor = Pv.Char2;
+        BackColor = Pv.Charcoal;
     }
 
     public bool Speaking => Level > SpeakThreshold && !Muted && Connected;
@@ -36,6 +36,7 @@ public sealed class PeerTile : Control
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        if (Large || Height < 120) { DrawCallCard(g); return; }
 
         var r = new Rectangle(0, 0, Width - 1, Height - 1);
         using (var b = new SolidBrush(Pv.Char2)) g.FillRectangle(b, r);
@@ -129,5 +130,40 @@ public sealed class PeerTile : Control
             using var b = new SolidBrush(Pv.Green);
             g.FillRectangle(b, 20, Height - 12, bw, 3);
         }
+    }
+
+    private void DrawCallCard(Graphics g)
+    {
+        // Stable, restrained avatar colors give each person a recognizable tile.
+        Color[] colors = { Color.FromArgb(60, 45, 42), Color.FromArgb(43, 52, 66),
+            Color.FromArgb(46, 57, 51), Color.FromArgb(57, 43, 63), Color.FromArgb(62, 52, 37) };
+        uint hash = 0;
+        foreach (char ch in Nick.ToLowerInvariant()) hash = unchecked(hash * 31 + ch);
+        var rect = new Rectangle(2, 2, Math.Max(1, Width - 5), Math.Max(1, Height - 5));
+        using var path = Pv.RoundRect(rect, 12);
+        using (var fill = new SolidBrush(colors[hash % (uint)colors.Length])) g.FillPath(fill, path);
+        if (Speaking || Punching)
+            using (var pen = new Pen(Speaking ? Pv.Green : Pv.Orange, 3)) g.DrawPath(pen, path);
+
+        int diameter = Math.Clamp(Height / 3, Large ? 44 : 32, 86);
+        var avatar = new Rectangle((Width - diameter) / 2, (Height - diameter) / 2 - 2, diameter, diameter);
+        Glyphs.Avatar(g, avatar, Nick, Pv.Orange, Pv.Bone);
+        if (Speaking)
+            using (var pen = new Pen(Pv.Green, 4)) g.DrawEllipse(pen, Rectangle.Inflate(avatar, 5, 5));
+        using var light = new SolidBrush(Pv.Bone);
+        using var dim = new SolidBrush(Pv.BoneDim);
+        using var format = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
+        g.DrawString(IsMe ? Nick + " (você)" : Nick, Pv.BodyBold, light,
+            new RectangleF(14, Height - 30, Math.Max(1, Width - 54), 24), format);
+        if (Large && Game.Length > 0)
+            g.DrawString("Jogando " + Game, Pv.Label, dim, new RectangleF(14, 12, Math.Max(1, Width - 85), 20), format);
+        if (JamJoined)
+        {
+            Glyphs.Music(g, new RectangleF(Width - 61, 12, 14, 14), Pv.Green, 1.5f);
+            g.DrawString("JAM", Pv.Label, light, Width - 42, 13);
+        }
+        if (Muted) Glyphs.Mic(g, new RectangleF(Width - 34, Height - 32, 18, 18), Pv.Red, true);
+        if (!Connected)
+            g.DrawString(Punching ? "Conectando…" : "Sem sinal", Pv.Label, dim, 14, Height - 50);
     }
 }

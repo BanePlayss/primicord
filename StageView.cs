@@ -119,6 +119,11 @@ public sealed class StageView : Control
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
         var preview = _selfFrame;
+        if (preview != null)
+        {
+            DrawLocalPreview(g, new Rectangle(8, 8, Math.Max(1, Width - 16), Math.Max(1, Height - 16)), preview);
+            return;
+        }
         int cw = preview != null ? Math.Min(760, Width - 60) : Math.Min(520, Width - 60);
         int ch = preview != null ? Math.Min(430, Height - 80) : 190;
         var card = new Rectangle((Width - cw) / 2, (Height - ch) / 2, cw, ch);
@@ -128,12 +133,6 @@ public sealed class StageView : Control
         using (var pen = new Pen(Pv.Orange, 2))
         using (var p = Pv.RoundRect(card, 8))
             g.DrawPath(pen, p);
-
-        if (preview != null)
-        {
-            DrawLocalPreview(g, card, preview);
-            return;
-        }
 
         // Monitor estilizado, so pra dar cara de "transmitindo" quando o primeiro
         // quadro ainda está sendo capturado.
@@ -148,7 +147,7 @@ public sealed class StageView : Control
         }
         using (var b = new SolidBrush(Pv.BoneDim))
         {
-            const string t = "a galera esta vendo — sua propria tela nao aparece aqui";
+            const string t = "Preparando a prévia da sua transmissão…";
             var sz = g.MeasureString(t, Pv.Body);
             g.DrawString(t, Pv.Body, b, card.X + (cw - sz.Width) / 2, card.Y + 128);
         }
@@ -164,7 +163,7 @@ public sealed class StageView : Control
 
     private void DrawLocalPreview(Graphics g, Rectangle card, Bitmap preview)
     {
-        int margin = 18;
+        int margin = 0;
         var area = new Rectangle(card.X + margin, card.Y + margin,
             Math.Max(1, card.Width - margin * 2), Math.Max(1, card.Height - margin * 2));
         double scale = Math.Min(area.Width / (double)preview.Width, area.Height / (double)preview.Height);
@@ -176,8 +175,6 @@ public sealed class StageView : Control
         try { g.DrawImage(preview, dest); } catch { }
         using var shade = new SolidBrush(Color.FromArgb(170, Pv.Charcoal));
         g.FillRectangle(shade, dest.X, dest.Y, Math.Min(dest.Width, 250), 27);
-        using var p = new Pen(Pv.Orange, 2);
-        g.DrawRectangle(p, dest);
         using var b = new SolidBrush(Pv.Bone);
         g.DrawString("PRÉVIA LOCAL · VOCÊ TRANSMITE", Pv.Label, b, dest.X + 10, dest.Y + 7);
         if (SelfInfo.Length > 0) DrawTag(g, SelfInfo, false);

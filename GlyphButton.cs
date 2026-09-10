@@ -31,7 +31,18 @@ public sealed class GlyphButton : Control
         BackColor = Color.Transparent;
         Size = new Size(34, 34);
         Cursor = Cursors.Hand;
+        TabStop = true;
+        AccessibleRole = AccessibleRole.PushButton;
     }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (e.KeyCode is Keys.Enter or Keys.Space) { e.SuppressKeyPress = true; OnClick(EventArgs.Empty); }
+        base.OnKeyDown(e);
+    }
+
+    protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+    protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
 
     protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
     protected override void OnMouseLeave(EventArgs e) { _hover = false; _down = false; Invalidate(); base.OnMouseLeave(e); }
@@ -52,6 +63,7 @@ public sealed class GlyphButton : Control
         float pad = Width * 0.24f;
         var box = new RectangleF(pad, pad, Width - pad * 2, Height - pad * 2);
         _paint(g, box, _hover ? Pv.Orange : Accent, 1.7f);
+        if (Focused) { using var pen = new Pen(Pv.Orange, 2); g.DrawEllipse(pen, 2, 2, Width - 5, Height - 5); }
     }
 
     protected override void Dispose(bool disposing)

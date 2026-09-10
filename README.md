@@ -2,7 +2,23 @@
 
 O app de comunidade dos primitivos — cliente nativo de Windows com uma interface
 inspirada na organização do Discord e identidade visual do escudo Primitivão.
-Versão publicada: **0.9.3**.
+Versão publicada: **0.9.4**.
+
+## 0.9.4 — UX de canais e call
+
+- canais de texto e salas de voz acessíveis diretamente pela lateral, com a sala
+  conectada destacada e seus participantes recuados abaixo;
+- barra de voz conectada clicável para voltar à call; perfil compacto com microfone,
+  fone, configurações, transmitir e sair no rodapé;
+- cartões da call arredondados, avatar central, anel verde de fala, nome no canto,
+  atividade e selo da Jam; convite ocupa a última posição da grade;
+- superfícies neutras escuras e destaque laranja da identidade Primitivão;
+- prévia local ampliada e miniaturas dos participantes visíveis durante a transmissão;
+- controles do perfil acessíveis por teclado e motivo explícito quando transmitir
+  está indisponível. A Jam continua como camada inferior do painel direito.
+
+A verificação visual cobre 12 layouts em 1280×720, 1440×900 e 1920×1080,
+incluindo a separação entre palco, participantes, navegação e controles do perfil.
 
 ## 0.9.3 — transmissão contínua e recuperação de pacotes
 

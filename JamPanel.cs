@@ -70,13 +70,13 @@ public sealed class InviteTile : Control
         using var pen = new Pen(Focused ? Pv.Orange : Pv.BoneDim, 2) { DashStyle = DashStyle.Dash };
         using var path = Pv.RoundRect(new Rectangle(2,2,Math.Max(1,Width-5),Math.Max(1,Height-5)), 12);
         g.DrawPath(pen,path);
-        int y = Height / 2 - 42;
+        int y = Math.Max(12, Height / 2 - 52);
         g.DrawEllipse(pen,Width/2-24,y,48,48);
         using var b = new SolidBrush(Pv.Bone);
         using var sf = new StringFormat { Alignment = StringAlignment.Center };
         g.DrawString("+",Pv.Display,b,new RectangleF(0,y+5,Width,40),sf);
-        g.DrawString("CHAMAR A TRIBO",Pv.BodyBold,b,new RectangleF(0,y+68,Width,24),sf);
+        g.DrawString("CHAMAR A TRIBO",Pv.BodyBold,b,new RectangleF(0,y+56,Width,24),sf);
         using var dim = new SolidBrush(Pv.BoneDim);
-        g.DrawString("copiar código da sala",Pv.Label,dim,new RectangleF(0,y+94,Width,24),sf);
+        g.DrawString("copiar código da sala",Pv.Label,dim,new RectangleF(0,y+80,Width,24),sf);
     }
 }
