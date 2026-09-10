@@ -12,7 +12,7 @@ namespace Primicord;
 /// calculada do ClientSize no construtor — o Windows escala por DPI e tamanho fixo
 /// estoura pra fora da tela.
 /// </remarks>
-public sealed class MainForm : Form
+public sealed partial class MainForm : Form
 {
     private readonly bool _preview;
     private readonly Firestore _fs = new();
@@ -105,7 +105,7 @@ public sealed class MainForm : Form
         _dir = new RoomDirectory(_fs);
         _cfg = Config.Load();
 
-        Text = "PRIMICORD · 0.9.4";
+        Text = "PRIMICORD · 0.9.5";
         try
         {
             string? exe = Environment.ProcessPath;
@@ -363,6 +363,7 @@ public sealed class MainForm : Form
 
         // ── CANAIS DA COMUNIDADE UNICA ──
         var rail = new Panel { Dock = DockStyle.Left, Width = 256, BackColor = Pv.Char2 };
+        _navigationRail = rail;
         rail.Paint += (_, e) =>
         {
             using var p = new Pen(Pv.Border, 1);
@@ -719,6 +720,7 @@ public sealed class MainForm : Form
 
     private void SelectView(string view)
     {
+        if (_watchFullscreen) SetWatchFullscreen(false);
         _view = view;
         if (_contentHost == null) return;
 
@@ -1103,15 +1105,23 @@ public sealed class MainForm : Form
     {
         if (_roomPanel != null && !_roomPanel.IsDisposed) return _roomPanel;
         _roomPanel = new Panel { Dock = DockStyle.Fill, BackColor = Pv.Charcoal, Padding = new Padding(16) };
-        var title = new Label { Dock = DockStyle.Top, Height = 28, Text = "Call da tribo",
-            Font = Pv.BodyBold, ForeColor = Pv.Bone };
+        var title = BuildWatchHeader();
         _roomStatus = new Label { Dock = DockStyle.Top, Height = 26, Font = Pv.Body, ForeColor = Pv.BoneDim };
         _stageActions = BuildRoomActions();
         _stageActions.Dock = DockStyle.Bottom;
         _tiles = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = true,
             BackColor = Pv.Charcoal, Padding = new Padding(0,8,0,8) };
         _stage = new StageView { Dock = DockStyle.Fill };
-        _roomPanel.Controls.Add(_stage);
+        _secondStage = new StageView { Dock = DockStyle.Fill, Visible = false };
+        _watchStages = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.Black, ColumnCount = 1, RowCount = 1, Margin = Padding.Empty };
+        _watchStages.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _watchStages.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        _watchStages.Controls.Add(_stage, 0, 0);
+        _stage.Cursor = Cursors.Hand;
+        _stage.Click += (_, _) => SetWatchFullscreen(true);
+        _secondStage.Cursor = Cursors.Hand;
+        _secondStage.Click += (_, _) => SetWatchFullscreen(true);
+        _roomPanel.Controls.Add(_watchStages);
         _roomPanel.Controls.Add(_tiles);
         _roomPanel.Controls.Add(_stageActions);
         _roomPanel.Controls.Add(_roomStatus);
@@ -1133,6 +1143,8 @@ public sealed class MainForm : Form
         if (_tiles == null || _stage == null || _stageActions == null || _roomPanel == null) return;
         bool live = _iAmSharing || _previewSharing || _session?.Peers.Any(p => p.Sharing) == true;
         _stage.Visible = live;
+        if (_watchStages != null) _watchStages.Visible = live;
+        SyncWatchLayout();
         _stageActions.Visible = live;
         _tiles.Dock = live ? DockStyle.Bottom : DockStyle.Fill;
         _tiles.Height = live ? 152 : Math.Max(150, _roomPanel.Height - 100);
@@ -1157,7 +1169,7 @@ public sealed class MainForm : Form
             tile.Size = new Size(width, height);
             if (tile is PeerTile peer) peer.Large = !live;
         }
-        if (_previewSharing) { _stage.SelfPreview = true; _stage.SelfInfo = "PRÉVIA · 1440p / 60 FPS"; }
+        if (_previewSharing) { _stage.SelfPreview = _focusedSharer == 0; _stage.SelfInfo = "PRÉVIA LOCAL"; }
     }
 
     private void ConfigurePreviewRoom()
@@ -1177,6 +1189,9 @@ public sealed class MainForm : Form
                 Margin = new Padding(6),
             };
             _tiles.Controls.Add(tile);
+            tile.Sharing = _previewSharing && nick is "bane" or "mohamed" or "vitinho";
+            uint sourceId = tile.IsMe ? 0 : nick == "mohamed" ? 101u : 102u;
+            tile.Click += (_, _) => { if (tile.Sharing) WatchStream(sourceId, (ModifierKeys & Keys.Control) != 0); };
         }
         _tiles.ResumeLayout();
         if (_roomStatus != null) _roomStatus.Text = "5 na call · Tailscale P2P · modo de prévia visual";
@@ -1288,6 +1303,7 @@ public sealed class MainForm : Form
         EnsureRoomPanel();
         _tiles!.Controls.Clear();
         _myTile = new PeerTile { Nick = Nick, IsMe = true, Connected = true, Margin = new Padding(6) };
+        _myTile.Click += (_, _) => { if (_iAmSharing) WatchStream(0, (ModifierKeys & Keys.Control) != 0); };
         _tiles.Controls.Add(_myTile);
         SyncStageLayout();
 
@@ -1328,6 +1344,10 @@ public sealed class MainForm : Form
 
     private void LeaveVoice()
     {
+        if (_watchFullscreen) SetWatchFullscreen(false);
+        _secondSharer = null;
+        _secondStage?.SetFrame(null);
+        _secondStage?.SetSelfFrame(null);
         _voiceTimer?.Stop();
         _voiceTimer?.Dispose();
         _voiceTimer = null;
@@ -1403,7 +1423,7 @@ public sealed class MainForm : Form
                 tile.Tag = "clickable";
                 uint sid = p.SenderId;
                 tile.Cursor = Cursors.Hand;
-                tile.Click += (_, _) => { _focusedSharer = sid; };
+                tile.Click += (_, _) => { if (tile.Sharing) WatchStream(sid, (ModifierKeys & Keys.Control) != 0); };
             }
             tile.Invalidate();
         }
@@ -1433,8 +1453,16 @@ public sealed class MainForm : Form
 
     private void TickStage()
     {
-        if (_stage == null || _stage.IsDisposed || _session == null) return;
-        if ((_focusedSharer == 0 || !_session.Peers.Any(p => p.SenderId == _focusedSharer && p.Sharing)) && !_iAmSharing) _focusedSharer = _session.Peers.FirstOrDefault(p => p.Sharing)?.SenderId ?? 0;
+        if (_stage == null || _stage.IsDisposed || _session == null || _roomPanel?.Visible != true) return;
+        if (_focusedSharer != 0 && !_session.Peers.Any(p => p.SenderId == _focusedSharer && p.Sharing)) _focusedSharer = 0;
+        if (_focusedSharer == 0 && !_iAmSharing) _focusedSharer = _session.Peers.FirstOrDefault(p => p.Sharing)?.SenderId ?? 0;
+        if (_secondSharer == _focusedSharer)
+        {
+            _secondSharer = null;
+            _secondStage?.SetFrame(null);
+            _secondStage?.SetSelfFrame(null);
+            SyncWatchLayout();
+        }
         if (_focusedSharer != 0)
         {
             _stage.SetFrame(_screens.FrameOf(_focusedSharer));
@@ -1461,6 +1489,7 @@ public sealed class MainForm : Form
             ? $"BUFFER {_clips!.BufferSeconds}s" + (net.Length > 0 ? " · " + net : "")
             : net;
         _stage.Invalidate();
+        RefreshSecondStage();
     }
 
     private void TickVoice()
@@ -1472,6 +1501,8 @@ public sealed class MainForm : Form
             _myTile.Level = _session.Muted ? 0f : _voice.MyPeak;
             _myTile.Muted = _session.Muted;
             _myTile.JamJoined = _session.JamJoined;
+            _myTile.Sharing = _iAmSharing;
+            _myTile.Cursor = _iAmSharing ? Cursors.Hand : Cursors.Default;
             _myTile.Invalidate();
         }
         foreach (var p in _session.Peers)
@@ -1680,7 +1711,11 @@ public sealed class MainForm : Form
             frame?.Dispose();
             return;
         }
-        if (_iAmSharing) _stage.SetSelfFrame(frame);
+        if (_iAmSharing)
+        {
+            if (_secondSharer == 0) _secondStage?.SetSelfFrame(new Bitmap(frame));
+            _stage.SetSelfFrame(frame);
+        }
         else frame.Dispose();
     }
 
@@ -2014,10 +2049,13 @@ public sealed class MainForm : Form
         foreach (var size in new[] { new Size(1920,1080), new Size(1440,900), new Size(1280,720) })
         {
             ClientSize = size;
-            foreach (string scene in new[] { "acampamento", "call", "jam", "transmissao" })
+            foreach (string scene in new[] { "acampamento", "call", "jam", "transmissao", "duas-telas", "tela-cheia" })
             {
+                if (_watchFullscreen) SetWatchFullscreen(false);
+                _focusedSharer = 0;
+                _secondSharer = null;
                 _stage?.SetSelfFrame(null);
-                _previewSharing = scene == "transmissao";
+                _previewSharing = scene is "transmissao" or "duas-telas" or "tela-cheia";
                 _previewJam = scene == "jam";
                 _voiceRoomId = scene == "acampamento" ? "" : "arena";
                 _voiceRoomName = _voiceRoomId.Length == 0 ? "" : "ARENA PRINCIPAL";
@@ -2026,25 +2064,59 @@ public sealed class MainForm : Form
                 SyncStageLayout();
                 if (scene == "transmissao" && _stage != null)
                     _stage.SetSelfFrame(BuildPreviewFrame());
+                if (scene is "duas-telas" or "tela-cheia")
+                {
+                    WatchStream(101, false);
+                    WatchStream(102, true);
+                    if (_focusedSharer != 101 || _secondSharer != 102 || !_previewSharing) failures++;
+                    // Focusing the secondary swaps the two; own stream is also watchable.
+                    WatchStream(102, false);
+                    if (_focusedSharer != 102 || _secondSharer != 101) failures++;
+                    WatchStream(0, false);
+                    if (_focusedSharer != 0 || _secondSharer != 101 || !_previewSharing) failures++;
+                    WatchStream(102, false);
+                    if (scene == "tela-cheia") SetWatchFullscreen(true);
+                }
                 if (scene != "acampamento") {
-                    bool live = scene == "transmissao";
+                    bool live = _previewSharing;
                     if (_stage!.Visible != live || _stageActions!.Visible != live || _inviteTile!.Visible == live) failures++;
                     if (_tiles!.Controls.OfType<PeerTile>().Count() != 5) failures++;
                 }
                 bool inCall = scene != "acampamento";
                 if (_profileShare == null || _profileShare.Enabled != inCall) failures++;
-                if (_voiceStrip == null || _voiceStrip.Visible != inCall) failures++;
+                if (_voiceStrip == null || _voiceStrip.Visible != (inCall && !_watchFullscreen)) failures++;
                 if (_railList!.Controls.OfType<RailItem>().Count(r => r.ItemKind == RailItem.Kind.TextChannel) != TextChannels.Length) failures++;
                 if (!_railList.Controls.OfType<RailItem>().Any(r => r.Text == "ARENA PRINCIPAL")) failures++;
-                if (scene == "transmissao" && _stage!.Bottom > _tiles!.Top) failures++;
+                if (_previewSharing && _watchStages!.Bottom > _tiles!.Top) failures++;
+                if (_secondSharer.HasValue && (!_secondStage!.Visible || _stage!.Bounds.IntersectsWith(_secondStage.Bounds))) failures++;
+                if (_watchFullscreen && (!_tiles!.Visible || _navigationRail!.Visible || !_expandWatch!.Enabled)) failures++;
                 if (_userPanel!.Controls.Cast<Control>().Any(c => c.Visible && !_userPanel.ClientRectangle.Contains(c.Bounds))) failures++;
                 using var bitmap = new Bitmap(Width, Height);
                 DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size));
                 bitmap.Save(Path.Combine(directory, scene + "-" + size.Width + ".png"));
+                if (_watchFullscreen)
+                {
+                    SetWatchFullscreen(false);
+                    if (!_navigationRail!.Visible || !_previewSharing || _voiceRoomId != "arena" || ClientSize != size)
+                    {
+                        failures++;
+                        File.AppendAllText(Path.Combine(directory, "details.txt"), $"fullscreen restore {size}: actual={ClientSize}, rail={_navigationRail.Visible}, sharing={_previewSharing}, room={_voiceRoomId}\n");
+                    }
+                }
+                if (scene == "duas-telas")
+                {
+                    SelectView("geral");
+                    if (!_previewSharing || _voiceRoomId != "arena" || _focusedSharer != 102) failures++;
+                    SelectView("room:arena");
+                    if (!_previewSharing || _secondSharer != 101) failures++;
+                    _previewSharing = false;
+                    SyncStageLayout();
+                    if (_secondSharer.HasValue || _stage!.Visible || !_tiles!.Visible || _voiceRoomId != "arena") failures++;
+                }
             }
         }
         File.WriteAllText(Path.Combine(directory,"result.txt"), failures == 0
-            ? "PASS: 12 layouts; stage/grid/actions/invite/profile/voice/sidebar UX invariants."
+            ? "PASS: 18 layouts; stream selection/swap/navigation/fullscreen restore and stage/roster/profile invariants."
             : "FAIL: " + failures);
         _reallyClosing = true;
         Close();

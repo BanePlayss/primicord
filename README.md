@@ -2,7 +2,24 @@
 
 O app de comunidade dos primitivos — cliente nativo de Windows com uma interface
 inspirada na organização do Discord e identidade visual do escudo Primitivão.
-Versão publicada: **0.9.4**.
+Versão publicada: **0.9.5**.
+
+## 0.9.5 — assistir, comparar e ampliar transmissões
+
+- clique no palco ou use Tela cheia/F11 para ampliar mantendo os participantes
+  visíveis; Esc ou Voltar restaura a navegação sem sair da call;
+- o menu Assistir lista as transmissões ativas, incluindo a sua própria prévia;
+- + Outra tela abre uma segunda transmissão: lado a lado em áreas largas e
+  empilhadas em áreas estreitas. Fechar 2ª tela fecha apenas essa visualização;
+- clique no participante com selo AO VIVO para focar a tela; Ctrl+clique adiciona
+  a segunda. Trocar a tela assistida não encerra a sua transmissão;
+- voltar aos canais preserva a voz, a transmissão publicada e a seleção de telas;
+- ao terminar uma transmissão remota, a visualização deixa de focar uma fonte
+  inativa. O segundo painel é removido quando sua fonte termina.
+
+Validação local: 18 layouts de prévia com testes de seleção, troca entre telas,
+retorno à própria prévia, navegação, fim de transmissão e restauração de tela cheia.
+Esses testes não substituem uma call real entre PCs para avaliar FPS e áudio.
 
 ## 0.9.4 — UX de canais e call
 

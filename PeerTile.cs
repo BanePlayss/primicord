@@ -27,6 +27,14 @@ public sealed class PeerTile : Control
                  ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
         Size = new Size(186, 124);
         BackColor = Pv.Charcoal;
+        TabStop = true;
+        AccessibleRole = AccessibleRole.PushButton;
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (e.KeyCode is Keys.Enter or Keys.Space) { e.SuppressKeyPress = true; OnClick(EventArgs.Empty); }
+        base.OnKeyDown(e);
     }
 
     public bool Speaking => Level > SpeakThreshold && !Muted && Connected;
@@ -119,7 +127,12 @@ public sealed class PeerTile : Control
             Pv.DrawTracked(g, status, Pv.Label, b, (Width - w) / 2f, ac.Bottom + 32, 1.4f);
         }
 
-        if (Large && Game.Length > 0)
+        if (Sharing)
+        {
+            using var live = new SolidBrush(Pv.Green);
+            g.DrawString("AO VIVO", Pv.Label, live, 14, 12);
+        }
+        else if (Large && Game.Length > 0)
             using (var b = new SolidBrush(Pv.BoneDim))
                 g.DrawString("jogando " + Game, Pv.Label, b, new RectangleF(12,14,Width-24,28));
 
@@ -155,7 +168,12 @@ public sealed class PeerTile : Control
         using var format = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
         g.DrawString(IsMe ? Nick + " (você)" : Nick, Pv.BodyBold, light,
             new RectangleF(14, Height - 30, Math.Max(1, Width - 54), 24), format);
-        if (Large && Game.Length > 0)
+        if (Sharing)
+        {
+            using var live = new SolidBrush(Pv.Green);
+            g.DrawString("AO VIVO", Pv.Label, live, 14, 12);
+        }
+        else if (Large && Game.Length > 0)
             g.DrawString("Jogando " + Game, Pv.Label, dim, new RectangleF(14, 12, Math.Max(1, Width - 85), 20), format);
         if (JamJoined)
         {
