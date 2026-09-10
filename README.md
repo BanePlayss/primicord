@@ -2,7 +2,7 @@
 
 O app de comunidade dos primitivos — cliente nativo de Windows com uma interface
 inspirada na organização do Discord e identidade visual do escudo Primitivão.
-Versão publicada: **0.9.5**.
+Versão publicada: **0.9.6**.
 
 ## 0.9.6 — pacing estável de transmissão
 

@@ -105,7 +105,7 @@ public sealed partial class MainForm : Form
         _dir = new RoomDirectory(_fs);
         _cfg = Config.Load();
 
-        Text = "PRIMICORD · 0.9.5";
+        Text = "PRIMICORD · 0.9.6";
         try
         {
             string? exe = Environment.ProcessPath;
