@@ -53,6 +53,10 @@ public sealed class SettingsDialog : Form
     private readonly Label _musicLabel = new();
     private readonly PrimCheck _tray = new("Fechar minimiza pra bandeja (continua na call)");
     private readonly PrimCheck _joinSound = new("Bipe quando alguem entra ou sai da sala");
+    private PrimButton _updateBtn = null!;
+    private readonly Label _updateStatus = new();
+    private UpdateInfoView? _pendingUpdate;
+    private bool _updateBusy;
 
     private void UpdateMusicLabel()
         => _musicLabel.Text = _music.Value == 0
@@ -227,10 +231,32 @@ public sealed class SettingsDialog : Form
         _joinSound.Size = new Size(412, 26);
         _joinSound.Checked = cfg.JoinLeaveSound;
 
-        var save = new PrimButton("SALVAR") { Location = new Point(24, 1140), Size = new Size(200, 40) };
+        var titleUpdate = new Label
+        {
+            Text = "ATUALIZAÇÃO", Font = Pv.DisplaySm, ForeColor = Pv.Bone,
+            Location = new Point(24, 1140), AutoSize = true,
+        };
+        var version = new Label
+        {
+            Text = $"você está na versão {Updater.CurrentVersion}",
+            Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(24, 1178), AutoSize = true,
+        };
+        _updateBtn = new PrimButton("PROCURAR ATUALIZAÇÃO")
+        { Location = new Point(24, 1204), Size = new Size(270, 38) };
+        _updateBtn.AccessibleName = "Procurar atualização do Primicord";
+        _updateBtn.Click += async (_, _) => await CheckOrInstallAsync();
+        _updateStatus.Location = new Point(24, 1250);
+        _updateStatus.Size = new Size(412, 52);
+        _updateStatus.Font = Pv.Body;
+        _updateStatus.ForeColor = Pv.BoneDim;
+        _updateStatus.Text = Updater.CanSelfUpdate
+            ? $"canal público · github.com/{Updater.DefaultRepo}"
+            : "instale pelo Setup para ativar atualizações automáticas";
+
+        var save = new PrimButton("SALVAR") { Location = new Point(24, 1320), Size = new Size(200, 40) };
         save.Click += (_, _) => Apply();
         var cancel = new PrimButton("CANCELAR", PrimButton.Style.Ghost)
-        { Location = new Point(236, 1140), Size = new Size(200, 40) };
+        { Location = new Point(236, 1320), Size = new Size(200, 40) };
         cancel.Click += (_, _) => Close();
 
         Controls.AddRange(new Control[]
@@ -238,10 +264,55 @@ public sealed class SettingsDialog : Form
               titleClip, lblKey, _hotkeyBox, lblSecs, _secs, _secsLabel, _autoBuf,
               titleScr, lblBw, _bw, bwHint, lblFps, _fps, lblWidth, _width, _tailnet, netHint,
               titleApp, _siteTheme, themeHint, lblMusic, _music, _musicLabel, _tray, _joinSound,
+              titleUpdate, version, _updateBtn, _updateStatus,
               save, cancel });
 
         Shown += (_, _) => RestartMonitor();
         FormClosed += (_, _) => { _monitor?.Dispose(); _monitor = null; };
+    }
+
+    private async Task CheckOrInstallAsync()
+    {
+        if (_updateBusy) return;
+        _updateBusy = true;
+        _updateBtn.Enabled = false;
+        try
+        {
+            if (_pendingUpdate == null)
+            {
+                _updateStatus.Text = "procurando no canal público...";
+                var found = await Updater.CheckAsync().ConfigureAwait(true);
+                if (found == null)
+                {
+                    _updateStatus.Text = $"você já está na versão mais recente ({Updater.CurrentVersion}).";
+                    return;
+                }
+                _pendingUpdate = found;
+                string notes = found.Notes.Replace("\r", "").Replace("\n", " ");
+                if (notes.Length > 120) notes = notes[..120] + "...";
+                _updateStatus.Text = $"versão {found.Version} disponível · "
+                    + (found.IsDelta ? $"download {found.SizeLabel}" : $"pacote completo {found.SizeLabel}")
+                    + (notes.Length > 0 ? "\n" + notes : "");
+                _updateBtn.Text = "INSTALAR " + found.Version;
+                return;
+            }
+
+            _updateStatus.Text = "baixando atualização... 0%";
+            var progress = new Progress<int>(p => _updateStatus.Text = $"baixando atualização... {p}%");
+            await Updater.DownloadAndApplyAsync(progress).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            Log.Write("update falhou: " + ex);
+            _updateStatus.Text = "não consegui atualizar: " + ex.Message;
+            _pendingUpdate = null;
+            _updateBtn.Text = "PROCURAR ATUALIZAÇÃO";
+        }
+        finally
+        {
+            _updateBusy = false;
+            if (!IsDisposed) _updateBtn.Enabled = true;
+        }
     }
 
     private int IndexOfMic(int deviceNumber)

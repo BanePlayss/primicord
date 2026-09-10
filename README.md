@@ -2,7 +2,14 @@
 
 O app de comunidade dos primitivos — cliente nativo de Windows com uma interface
 inspirada na organização do Discord e identidade visual do escudo Primitivão.
-Versão publicada: **0.9.0**.
+Versão publicada: **0.9.1**.
+
+## 0.9.1 — atualizações pelo próprio app
+
+- configurações agora mostram a versão instalada e o canal público;
+- o botão procura primeiro e só baixa depois da confirmação;
+- download mostra progresso e o Primicord reinicia sozinho após instalar;
+- builds instalados pelo Setup continuam no mesmo canal de atualização das versões antigas.
 
 ## 0.9.0 — UX da call
 

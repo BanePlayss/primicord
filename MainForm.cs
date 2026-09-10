@@ -102,7 +102,7 @@ public sealed class MainForm : Form
         _dir = new RoomDirectory(_fs);
         _cfg = Config.Load();
 
-        Text = "PRIMICORD · 0.9.0";
+        Text = "PRIMICORD · 0.9.1";
         try
         {
             string? exe = Environment.ProcessPath;
