@@ -2,7 +2,23 @@
 
 O app de comunidade dos primitivos — cliente nativo de Windows com uma interface
 inspirada na organização do Discord e identidade visual do escudo Primitivão.
-Versão publicada: **0.9.2**.
+Versão publicada: **0.9.3**.
+
+## 0.9.3 — transmissão contínua e recuperação de pacotes
+
+- cada quadro de tela agora leva uma paridade XOR: um fragmento UDP perdido é
+  reconstruído no receptor sem esperar a próxima atualização completa;
+- a ressincronização de blocos foi acelerada para remover artefatos em menos de
+  meio segundo numa tela 1080p;
+- o perfil Máxima passa a ser descrito como 1080p/60 adaptativo, com orçamento
+  de 32 Mbps e recuperação de pacotes;
+- a prévia local e os indicadores de FPS, resolução, qualidade e bitrate da
+  0.9.2 continuam disponíveis.
+
+> Nota técnica: a camada atual continua sendo um transporte P2P de tiles com
+> PNG/JPEG. O Discord usa codecs de vídeo H.264/VP8/VP9/AV1 e SFU/WebRTC; para
+> chegar a essa equivalência literal será necessária uma etapa futura de codec
+> nativo, além destas correções de transporte.
 
 ## 0.9.2 — transmissão nítida e prévia local
 

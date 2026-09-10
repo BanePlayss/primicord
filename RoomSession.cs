@@ -68,10 +68,14 @@ public sealed class RoomSession : IDisposable
     public const byte TypeMusic = 5;   // áudio do sistema junto da transmissão
     public const byte TypeCinemaCtl = 6;   // controle do cinema (oferta, nack, play)
     public const byte TypeCinemaData = 7;   // pedaco do arquivo de video
+    public const byte TypeScreenParity = 8; // paridade XOR de um quadro de tela
 
     // Um quadro de tela nao cabe num datagrama, entao vai picado. Sub-cabecalho de
     // 10 bytes depois do cabecalho comum: frameId, indice, total, largura, altura.
     private const int ScreenSubHeader = 10;
+    // frameId, total, largura, altura e tamanho original do quadro. A paridade
+    // permite reconstruir um unico datagrama perdido sem esperar um keyframe.
+    private const int ScreenParitySubHeader = 12;
     private const int ChunkPayload = 1100;   // total ~1119 bytes, abaixo do MTU
 
     private const int PunchIntervalMs = 250;   // enquanto nao conectou
@@ -472,11 +476,12 @@ public sealed class RoomSession : IDisposable
 
         ushort frameId = _screenFrameId++;
         int chunks = (length + ChunkPayload - 1) / ChunkPayload;
-        if (chunks == 0 || chunks > ushort.MaxValue) return;
+        if (chunks == 0 || chunks > ushort.MaxValue || length > int.MaxValue) return;
 
         var targets = Peers.Where(p => p.Locked != null).Select(p => p.Locked!).ToList();
         if (targets.Count == 0) return;
 
+        var parity = new byte[ChunkPayload];
         for (int i = 0; i < chunks; i++)
         {
             int off = i * ChunkPayload;
@@ -493,12 +498,36 @@ public sealed class RoomSession : IDisposable
             WriteUInt16(packet, 17, (ushort)height);
             Buffer.BlockCopy(jpeg, off, packet, HeaderBytes + ScreenSubHeader, len);
 
+            // XOR por posição: todos os pedaços, inclusive o ultimo, ocupam a
+            // mesma janela para a paridade. O tamanho real continua no pacote
+            // de paridade, portanto nao existe lixo no quadro reconstruido.
+            for (int p = 0; p < len; p++) parity[p] ^= jpeg[off + p];
+
             foreach (var ep in targets)
             {
                 try { sock.SendTo(packet, ep); }
                 catch (SocketException) { }
                 catch (ObjectDisposedException) { return; }
             }
+        }
+
+        // Um datagrama extra recupera exatamente uma perda por quadro. Em redes
+        // normais isso elimina o “quadrado velho” que antes só sumia no refresh.
+        byte[] parityPacket = new byte[HeaderBytes + ScreenParitySubHeader + ChunkPayload];
+        parityPacket[0] = TypeScreenParity;
+        WriteUInt32(parityPacket, 1, _mySenderId);
+        WriteUInt32(parityPacket, 5, frameId);
+        WriteUInt16(parityPacket, 9, frameId);
+        WriteUInt16(parityPacket, 11, (ushort)chunks);
+        WriteUInt16(parityPacket, 13, (ushort)width);
+        WriteUInt16(parityPacket, 15, (ushort)height);
+        WriteUInt32(parityPacket, 17, (uint)length);
+        Buffer.BlockCopy(parity, 0, parityPacket, HeaderBytes + ScreenParitySubHeader, ChunkPayload);
+        foreach (var ep in targets)
+        {
+            try { sock.SendTo(parityPacket, ep); }
+            catch (SocketException) { }
+            catch (ObjectDisposedException) { return; }
         }
     }
 
@@ -587,6 +616,10 @@ public sealed class RoomSession : IDisposable
                     HandleScreenChunk(peer, buf, len);
                     break;
 
+                case TypeScreenParity:
+                    HandleScreenParity(peer, buf, len);
+                    break;
+
                 case TypeCinemaCtl:
                     try
                     {
@@ -626,8 +659,10 @@ public sealed class RoomSession : IDisposable
     {
         public ushort FrameId;
         public byte[]?[] Chunks = Array.Empty<byte[]?>();
+        public byte[]? Parity;
         public int Have;
         public int Total;
+        public int DataLength;
         public int Width, Height;
         public long StartedTicks;
     }
@@ -668,7 +703,9 @@ public sealed class RoomSession : IDisposable
                 asm.FrameId = frameId;
                 asm.Total = total;
                 asm.Chunks = new byte[total][];
+                asm.Parity = null;
                 asm.Have = 0;
+                asm.DataLength = 0;
                 asm.Width = w;
                 asm.Height = h;
                 asm.StartedTicks = DateTime.UtcNow.Ticks;
@@ -680,14 +717,12 @@ public sealed class RoomSession : IDisposable
             asm.Chunks[idx] = slice;
             asm.Have++;
 
-            if (asm.Have != asm.Total) return;
-
-            // Completo: TIRA o array daqui de dentro e ja deixa um vazio no lugar.
-            // Montar fora do lock lendo asm.Chunks seria corrida — o proximo quadro
-            // pode trocar o array no meio da copia.
+            if (!TryCompleteWithParity(asm)) return;
             ready = asm.Chunks;
-            asm.Chunks = new byte[asm.Total][];
+            asm.Chunks = Array.Empty<byte[]?>();
+            asm.Parity = null;
             asm.Have = 0;
+            asm.Total = 0;
             width = asm.Width;
             height = asm.Height;
         }
@@ -702,6 +737,102 @@ public sealed class RoomSession : IDisposable
             pos += c.Length;
         }
         ScreenFrameReceived?.Invoke(peer.SenderId, jpeg, width, height);
+    }
+
+    private void HandleScreenParity(RemotePeer peer, byte[] buf, int len)
+    {
+        if (len < HeaderBytes + ScreenParitySubHeader) return;
+
+        ushort frameId = ReadUInt16(buf, 9);
+        ushort total = ReadUInt16(buf, 11);
+        ushort w = ReadUInt16(buf, 13);
+        ushort h = ReadUInt16(buf, 15);
+        uint dataLength = ReadUInt32(buf, 17);
+        int parityLen = len - HeaderBytes - ScreenParitySubHeader;
+        if (total == 0 || parityLen <= 0 || parityLen > ChunkPayload ||
+            dataLength == 0 || dataLength > (uint)total * ChunkPayload) return;
+
+        byte[]?[] ready;
+        int width, height;
+        lock (_assembling)
+        {
+            FrameAssembly asm;
+            if (!_assembling.TryGetValue(peer.SenderId, out asm!))
+            {
+                asm = new FrameAssembly();
+                _assembling[peer.SenderId] = asm;
+            }
+
+            if (asm.FrameId != frameId || asm.Total != total)
+            {
+                bool newer = asm.Chunks.Length == 0 || (ushort)(frameId - asm.FrameId) < 32768;
+                if (!newer) return;
+                asm.FrameId = frameId;
+                asm.Total = total;
+                asm.Chunks = new byte[total][];
+                asm.Have = 0;
+                asm.DataLength = 0;
+                asm.Width = w;
+                asm.Height = h;
+                asm.StartedTicks = DateTime.UtcNow.Ticks;
+            }
+
+            var parity = new byte[parityLen];
+            Buffer.BlockCopy(buf, HeaderBytes + ScreenParitySubHeader, parity, 0, parityLen);
+            asm.Parity = parity;
+            asm.DataLength = (int)dataLength;
+            if (!TryCompleteWithParity(asm)) return;
+
+            ready = asm.Chunks;
+            asm.Chunks = Array.Empty<byte[]?>();
+            asm.Parity = null;
+            asm.Have = 0;
+            asm.Total = 0;
+            width = asm.Width;
+            height = asm.Height;
+        }
+
+        int size = 0;
+        foreach (var c in ready) size += c!.Length;
+        var frame = new byte[size];
+        int pos = 0;
+        foreach (var c in ready)
+        {
+            Buffer.BlockCopy(c!, 0, frame, pos, c!.Length);
+            pos += c.Length;
+        }
+        ScreenFrameReceived?.Invoke(peer.SenderId, frame, width, height);
+    }
+
+    /// <summary>Completa o quadro inteiro ou reconstroi uma unica perda via XOR.</summary>
+    private static bool TryCompleteWithParity(FrameAssembly asm)
+    {
+        if (asm.Have == asm.Total) return true;
+        if (asm.Parity == null || asm.Have != asm.Total - 1 || asm.DataLength <= 0) return false;
+
+        int missing = -1;
+        for (int i = 0; i < asm.Total; i++)
+            if (asm.Chunks[i] == null) { missing = i; break; }
+        if (missing < 0) return true;
+
+        int missingLength = missing == asm.Total - 1
+            ? asm.DataLength - (asm.Total - 1) * ChunkPayload
+            : ChunkPayload;
+        if (missingLength <= 0 || missingLength > ChunkPayload || asm.Parity.Length < missingLength)
+            return false;
+
+        var recovered = new byte[missingLength];
+        Buffer.BlockCopy(asm.Parity, 0, recovered, 0, missingLength);
+        for (int i = 0; i < asm.Total; i++)
+        {
+            var chunk = asm.Chunks[i];
+            if (chunk == null) continue;
+            int count = Math.Min(missingLength, chunk.Length);
+            for (int p = 0; p < count; p++) recovered[p] ^= chunk[p];
+        }
+        asm.Chunks[missing] = recovered;
+        asm.Have++;
+        return true;
     }
 
     // ─── UTIL ────────────────────────────────────────────────────────────────

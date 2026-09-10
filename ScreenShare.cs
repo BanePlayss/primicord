@@ -45,7 +45,10 @@ public sealed class ScreenSender : IDisposable
     /// bloco que se perdeu no caminho volta sozinho, sem precisar de quadro completo
     /// (que e grande demais pra passar de uma vez).
     /// </summary>
-    private const int RefreshTilesPerFrame = 2;
+    // Seis blocos por quadro fecham um ciclo de ressincronização em ~0,4 s
+    // numa tela 1080p (135 blocos), em vez de deixar artefatos por vários
+    // segundos quando um datagrama UDP se perde.
+    private const int RefreshTilesPerFrame = 6;
 
     /// <summary>
     /// Teto TOTAL de subida da tela (bytes/s), dividido entre os espectadores.

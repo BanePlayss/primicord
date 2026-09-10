@@ -34,7 +34,7 @@ public sealed class SettingsDialog : Form
         (450,  "Econômico — 3,5 Mbps  ·  800x450 até 30 FPS"),
         (900,  "Equilibrado — 7 Mbps  ·  1280x720 até 30 FPS"),
         (2000, "Alta — 16 Mbps  ·  1920x1080 até 60 FPS"),
-        (4000, "Máxima — 32 Mbps  ·  1920x1080 com folga para 60 FPS"),
+        (4000, "Máxima — 32 Mbps  ·  1080p/60 adaptativo + recuperação de pacotes"),
     };
 
     private static int NearestBandwidthIndex(int kb)
@@ -164,8 +164,8 @@ public sealed class SettingsDialog : Form
 
         var bwHint = new Label
         {
-            Text = "A captura usa a GPU; o orçamento é dividido pelos espectadores.\n"
-                 + "Se a voz começar a picotar, sua subida não aguenta — desça um degrau.",
+            Text = "A captura usa a GPU; Máxima prioriza 1080p/60 e recupera perdas de rede.\n"
+                 + "O orçamento é dividido pelos espectadores; se a voz picotar, desça um degrau.",
             Font = Pv.Body, ForeColor = Pv.BoneDim, Location = new Point(24, 612),
             Size = new Size(412, 40),
         };
