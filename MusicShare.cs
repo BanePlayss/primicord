@@ -3,16 +3,11 @@ using NAudio.Wave;
 namespace Primicord;
 
 /// <summary>
-/// Modo DJ: transmite o audio do SISTEMA (Spotify, YouTube, o que estiver tocando)
-/// pra tela compartilhada inteira ou apenas para a escuta DJ selecionada.
+/// Compartilha o audio do sistema junto com uma transmissão de tela.
 /// </summary>
 /// <remarks>
-/// POR QUE NAO E UMA "JAM DO SPOTIFY": o Jam nao tem API publica — nao da pra criar
-/// nem entrar numa sessao por programa. Entao em vez de sincronizar players, um cara
-/// vira DJ e manda o proprio audio. Vantagem: funciona com QUALQUER fonte (Spotify,
-/// YouTube, SoundCloud) e ninguem precisa de Premium. Desvantagem: e uma transmissao,
-/// entao cada um ouve com o atraso da rede e nao controla o player (so o DJ).
-/// O nome da faixa vai junto, lido do Windows (ver NowPlaying).
+/// A escuta conjunta agora é uma Jam real do Spotify: fila e play vivem no Spotify;
+/// o Primicord só publica a presença confirmada no subgrupo da sala.
 ///
 /// ECO: usa ProcessLoopbackCapture EXCLUINDO o proprio processo, senao o audio das
 /// vozes que o Primicord esta tocando seria recapturado e devolvido pra sala — todo
@@ -36,12 +31,6 @@ public sealed class MusicShare : IDisposable
     public bool Running { get; private set; }
     public float Peak { get; private set; }
 
-    /// <summary>
-    /// true: somente quem entrou na camada DJ recebe. false: audio acompanha a
-    /// tela compartilhada e vai para toda a sala.
-    /// </summary>
-    public bool DjOnly { get; set; }
-
     public MusicShare(RoomSession session) => _session = session;
 
     public void Start(AudioCaptureTarget? target = null)
@@ -62,7 +51,7 @@ public sealed class MusicShare : IDisposable
         proc.Prepare();
         _capture = proc;
         EchoRisk = false;
-        Log.Write("DJ: process loopback explícito — " + target.Name);
+        Log.Write("tela: process loopback explícito — " + target.Name);
 
         _capture.DataAvailable += OnData;
         _capture.StartRecording();
@@ -81,7 +70,7 @@ public sealed class MusicShare : IDisposable
         }
         _acc.Reset();
         Peak = 0;
-        Log.Write("DJ: parou");
+        Log.Write("áudio da tela: parou");
     }
 
     private void OnData(object? sender, WaveInEventArgs a)
@@ -152,11 +141,10 @@ public sealed class MusicShare : IDisposable
             _acc.Append(_pcmBuf, 0, outFrames * 2);
             while (_acc.TryDequeueFrame(_frame, 0, FrameBytes))
             {
-                if (DjOnly) _session.SendDjMusic(_frame, 0, FrameBytes);
-                else _session.SendMusic(_frame, 0, FrameBytes);
+                _session.SendMusic(_frame, 0, FrameBytes);
             }
         }
-        catch (Exception ex) { Log.Write("DJ: erro no audio: " + ex.Message); }
+        catch (Exception ex) { Log.Write("áudio da tela: erro: " + ex.Message); }
     }
 }
 

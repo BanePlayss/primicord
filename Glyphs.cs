@@ -216,7 +216,7 @@ public static class Glyphs
         g.DrawLine(p, x + s * 0.78f, y + s * 0.66f, x + s * 0.18f, y + s * 0.10f);
     }
 
-    /// <summary>Nota musical — modo DJ.</summary>
+    /// <summary>Nota musical — presença na Jam do Spotify.</summary>
     public static void Music(Graphics g, RectangleF r, Color c, float w = 1.8f)
     {
         using var p = P(c, w);

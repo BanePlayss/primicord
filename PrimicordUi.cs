@@ -27,10 +27,10 @@ public static class Pv
     }
     // Paleta inspirada no escudo enviado: fuligem, madeira queimada, osso e
     // laranja de pigmento. O destaque continua legível em telas escuras.
-    public static readonly Color Charcoal = Color.FromArgb(0x1C, 0x16, 0x12);
-    public static readonly Color Char2 = Color.FromArgb(0x25, 0x1A, 0x13);
-    public static readonly Color Char3 = Color.FromArgb(0x43, 0x2A, 0x1B);
-    public static readonly Color SurfaceLow = Color.FromArgb(0x2D, 0x1D, 0x14);
+    public static readonly Color Charcoal = Color.FromArgb(0x16, 0x16, 0x14);
+    public static readonly Color Char2 = Color.FromArgb(0x22, 0x22, 0x1F);
+    public static readonly Color Char3 = Color.FromArgb(0x3C, 0x3B, 0x35);
+    public static readonly Color SurfaceLow = Color.FromArgb(0x29, 0x28, 0x23);
     public static readonly Color SurfaceLowest = Color.FromArgb(0x11, 0x0E, 0x0B);
     public static readonly Color SurfaceHover = Color.FromArgb(0x4A, 0x2D, 0x1B);
     public static readonly Color Input = Color.FromArgb(0x32, 0x21, 0x17);
@@ -155,7 +155,7 @@ public sealed class PrimButton : Control
         if (bg != Color.Transparent)
             using (var b = new SolidBrush(bg))
             using (var path = Pv.RoundRect(r, 4)) g.FillPath(b, path);
-        if (Kind != Style.Ghost || _hover)
+        if (true)
             using (var p = new Pen(border, 1))
             using (var path = Pv.RoundRect(r, 4)) g.DrawPath(p, path);
 

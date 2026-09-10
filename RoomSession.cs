@@ -11,9 +11,9 @@ public sealed class RemotePeer
     public string Nick = "";
     public bool Muted;
     public bool Sharing;
-    public bool DjJoined;
-    public bool DjHost;
-    public string DjTrack = "";
+    public bool JamJoined;
+    public string JamLink = "";
+    public string Game = "";
 
     /// <summary>Enderecos onde ele PODE estar (publico + todos os locais).</summary>
     public readonly List<IPEndPoint> Candidates = new();
@@ -65,10 +65,9 @@ public sealed class RoomSession : IDisposable
     public const byte TypePunchAck = 2;   // "te ouvi"
     public const byte TypeBye = 3;   // saida limpa
     public const byte TypeScreen = 4;   // quadro de tela (fragmentado)
-    public const byte TypeMusic = 5;   // audio do sistema do DJ
+    public const byte TypeMusic = 5;   // áudio do sistema junto da transmissão
     public const byte TypeCinemaCtl = 6;   // controle do cinema (oferta, nack, play)
     public const byte TypeCinemaData = 7;   // pedaco do arquivo de video
-    public const byte TypeDjMusic = 8;   // musica so para quem entrou na escuta DJ
 
     // Um quadro de tela nao cabe num datagrama, entao vai picado. Sub-cabecalho de
     // 10 bytes depois do cabecalho comum: frameId, indice, total, largura, altura.
@@ -103,9 +102,16 @@ public sealed class RoomSession : IDisposable
     public bool Muted { get; set; }
     public bool Sharing { get; set; }
     public bool TailscaleOnly { get; set; }
-    public bool DjJoined { get; private set; }
-    public bool DjHost { get; private set; }
-    public string DjTrack { get; private set; } = "";
+    public bool JamJoined { get; private set; }
+    public string JamLink { get; private set; } = "";
+    public string Game { get; set; } = "";
+
+    public void SetJam(bool joined, string link)
+    {
+        JamJoined = joined;
+        JamLink = SpotifyJam.TryInvite(link, out var uri) ? uri!.AbsoluteUri : "";
+        if (_running && _firestoreBacked) _ = PublishJamStateAsync();
+    }
 
     public string RoomId => _roomId;
     public string PeerId => _peerId;
@@ -114,7 +120,7 @@ public sealed class RoomSession : IDisposable
     /// <summary>Voz recebida de alguem (thread de rede — nao toque na UI daqui).</summary>
     public event Action<uint, byte[], int, int>? VoiceReceived;
 
-    /// <summary>Audio do sistema do DJ (modo musica).</summary>
+    /// <summary>Audio do sistema associado à transmissão de tela.</summary>
     public event Action<uint, byte[], int, int>? MusicReceived;
 
     /// <summary>Quadro de tela COMPLETO ja remontado: (quem, jpeg, largura, altura).</summary>
@@ -146,29 +152,10 @@ public sealed class RoomSession : IDisposable
         get { lock (_peersLock) return _peers.Values.ToList(); }
     }
 
-    /// <summary>
-    /// Atualiza a camada DJ sem sair da chamada. A presenca continua no mesmo peer;
-    /// so estes campos dizem quem recebe musica e quem esta transmitindo.
-    /// </summary>
-    public void SetDjState(bool joined, bool host, string track = "")
-    {
-        DjJoined = joined;
-        DjHost = joined && host;
-        DjTrack = DjHost ? track : "";
-        if (_running && _firestoreBacked) _ = PublishDjStateAsync();
-    }
-
-    public void SetDjTrack(string track)
-    {
-        if (!DjHost) return;
-        DjTrack = track ?? "";
-        if (_running && _firestoreBacked) _ = PublishDjStateAsync();
-    }
-
-    private async Task PublishDjStateAsync()
+    private async Task PublishJamStateAsync()
     {
         try { await PublishPresenceAsync(full: false).ConfigureAwait(false); }
-        catch (Exception ex) { Log.Write("DJ: publicar estado falhou: " + ex.Message); }
+        catch (Exception ex) { Log.Write("Jam: publicar estado falhou: " + ex.Message); }
     }
 
     /// <summary>
@@ -312,9 +299,9 @@ public sealed class RoomSession : IDisposable
             ["lastSeen"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             ["muted"] = Muted,
             ["sharing"] = Sharing,
-            ["djJoined"] = DjJoined,
-            ["djHost"] = DjHost,
-            ["djTrack"] = DjTrack,
+            ["jamJoined"] = JamJoined,
+            ["jamLink"] = JamLink,
+            ["game"] = Game,
         };
         if (full)
         {
@@ -356,14 +343,16 @@ public sealed class RoomSession : IDisposable
                 string nick = Firestore.Str(f, "nick", id);
                 bool muted = Firestore.Flag(f, "muted");
                 bool sharing = Firestore.Flag(f, "sharing");
-                bool djJoined = Firestore.Flag(f, "djJoined");
-                bool djHost = Firestore.Flag(f, "djHost");
-                string djTrack = Firestore.Str(f, "djTrack");
-                if (p.Nick != nick || p.Muted != muted || p.Sharing != sharing ||
-                    p.DjJoined != djJoined || p.DjHost != djHost || p.DjTrack != djTrack)
+                bool jamJoined = Firestore.Flag(f, "jamJoined");
+                string jamLink = Firestore.Str(f, "jamLink");
+                string game = Firestore.Str(f, "game");
+                if (p.JamJoined != jamJoined || p.JamLink != jamLink || p.Game != game) changed = true;
+                p.JamJoined = jamJoined;
+                p.JamLink = SpotifyJam.TryInvite(jamLink, out var invite) ? invite!.AbsoluteUri : "";
+                p.Game = game;
+                if (p.Nick != nick || p.Muted != muted || p.Sharing != sharing)
                     changed = true;
                 p.Nick = nick; p.Muted = muted; p.Sharing = sharing;
-                p.DjJoined = djJoined; p.DjHost = djHost; p.DjTrack = djTrack;
                 p.LastSeenMs = lastSeen;
 
                 RefreshCandidates(p, f);
@@ -449,24 +438,9 @@ public sealed class RoomSession : IDisposable
         SendToAll(TypeVoice, payload, offset, count, Interlocked.Increment(ref _voiceSeq));
     }
 
-    /// <summary>Manda um frame do audio do sistema (modo DJ).</summary>
+    /// <summary>Manda um frame do áudio do sistema junto da transmissão.</summary>
     public void SendMusic(byte[] payload, int offset, int count)
         => SendToAll(TypeMusic, payload, offset, count, Interlocked.Increment(ref _musicSeq));
-
-    /// <summary>
-    /// Manda musica apenas aos participantes que aderiram a escuta conjunta. A voz
-    /// continua indo para toda a sala pelo fluxo normal e nao e afetada.
-    /// </summary>
-    public void SendDjMusic(byte[] payload, int offset, int count)
-    {
-        uint seq = Interlocked.Increment(ref _musicSeq);
-        foreach (var p in Peers)
-        {
-            if (!p.DjJoined) continue;
-            var ep = p.Locked;
-            if (ep != null) SendTo(ep, TypeDjMusic, payload, offset, count, seq);
-        }
-    }
 
     /// <summary>Mensagem de controle do cinema (cabe num datagrama).</summary>
     public void SendCinemaControl(string json)
@@ -607,12 +581,6 @@ public sealed class RoomSession : IDisposable
 
                 case TypeMusic:
                     MusicReceived?.Invoke(senderId, buf, HeaderBytes, len - HeaderBytes);
-                    break;
-
-                case TypeDjMusic:
-                    // A checagem local impede musica para quem apenas esta na call.
-                    if (DjJoined && peer.DjHost)
-                        MusicReceived?.Invoke(senderId, buf, HeaderBytes, len - HeaderBytes);
                     break;
 
                 case TypeScreen:

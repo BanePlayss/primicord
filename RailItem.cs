@@ -178,7 +178,7 @@ public sealed class MemberRow : Control
         if (twoLines)
         {
             using var b = new SolidBrush(Pv.Green);
-            g.DrawString("na " + Room, Pv.Label, b, tx, r.Y + 24);
+            g.DrawString(Room, Pv.Label, b, tx, r.Y + 24);
         }
     }
 }

@@ -65,7 +65,7 @@ public sealed record AudioCaptureTarget
             process.ProcessName, process.StartTime.ToUniversalTime().Ticks);
     }
 
-    /// <summary>Includes minimized applications, which remain useful DJ sources.</summary>
+    /// <summary>Includes minimized applications, useful as explicit screen-audio sources.</summary>
     public static List<AudioCaptureTarget> ListApplications()
     {
         var result = new List<AudioCaptureTarget>();

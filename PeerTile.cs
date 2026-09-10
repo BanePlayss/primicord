@@ -12,11 +12,12 @@ public sealed class PeerTile : Control
     public bool IsMe;
     public bool Muted;
     public bool Sharing;
-    public bool DjJoined;
-    public bool DjHost;
+    public bool JamJoined;
     public bool Connected = true;
     public bool Punching;      // ainda furando o NAT
     public float Level;        // 0..1 nivel de voz agora
+    public bool Large;
+    public string Game = "";
 
     private const float SpeakThreshold = 0.045f;
 
@@ -42,19 +43,20 @@ public sealed class PeerTile : Control
         Color border = Speaking ? Pv.Green : (Punching ? Pv.OrangeDim : Pv.Char3);
         using (var p = new Pen(border, 2)) g.DrawRectangle(p, r);
 
-        if (DjJoined)
+        if (JamJoined)
         {
             var badge = new Rectangle(Width - 48, 8, 38, 20);
-            using (var b = new SolidBrush(DjHost ? Pv.NitroPink : Pv.Char3))
+            using (var b = new SolidBrush(Pv.Char3))
             using (var path = Pv.RoundRect(badge, 6)) g.FillPath(b, path);
             Glyphs.Music(g, new RectangleF(badge.X + 5, badge.Y + 4, 12, 12), Pv.Bone, 1.5f);
             using var text = new SolidBrush(Pv.Bone);
-            g.DrawString(DjHost ? "DJ" : "♫", Pv.Label, text, badge.X + 20, badge.Y + 5);
+            g.DrawString("JAM", Pv.Label, text, badge.X + 20, badge.Y + 5);
         }
 
         // Avatar: a MESMA foto que o jogador usa no site; sem foto, cai na inicial.
-        int av = 52;
-        var ac = new Rectangle((Width - av) / 2, 16, av, av);
+        int av = Large ? Math.Min(92, Width / 2) : 52;
+        int avatarY = Large ? Math.Max(44, Height / 2 - 72) : 16;
+        var ac = new Rectangle((Width - av) / 2, avatarY, av, av);
         var photo = Primitivao.AvatarFor(Nick);
 
         if (photo != null)
@@ -85,7 +87,7 @@ public sealed class PeerTile : Control
         }
 
         if (Speaking)
-            using (var p = new Pen(Pv.Green, 3))
+            using (var p = new Pen(Pv.Orange, Large ? 5 : 3))
                 g.DrawEllipse(p, Rectangle.Inflate(ac, 4, 4));
 
         // Nick.
@@ -100,21 +102,25 @@ public sealed class PeerTile : Control
                 name += "...";
                 w = Pv.TrackedWidth(g, name, Pv.Label, 1.2f);
             }
-            Pv.DrawTracked(g, name, Pv.Label, b, (Width - w) / 2f, 76, 1.2f);
+            Pv.DrawTracked(g, name, Pv.Label, b, (Width - w) / 2f, ac.Bottom + 12, 1.2f);
         }
 
         // Estado embaixo.
         string status = !Connected ? (Punching ? "CONECTANDO" : "SEM SINAL")
                       : Muted ? "MUDO"
-                      : Sharing ? "NA TELA" : "";
+                      : Sharing ? "NA TELA" : Speaking ? "FALANDO" : "";
         if (status.Length > 0)
         {
             Color c = !Connected ? (Punching ? Pv.OrangeDim : Pv.Red)
                     : Muted ? Pv.Red : Pv.Orange;
             using var b = new SolidBrush(c);
             float w = Pv.TrackedWidth(g, status, Pv.Label, 1.4f);
-            Pv.DrawTracked(g, status, Pv.Label, b, (Width - w) / 2f, 95, 1.4f);
+            Pv.DrawTracked(g, status, Pv.Label, b, (Width - w) / 2f, ac.Bottom + 32, 1.4f);
         }
+
+        if (Large && Game.Length > 0)
+            using (var b = new SolidBrush(Pv.BoneDim))
+                g.DrawString("jogando " + Game, Pv.Label, b, new RectangleF(12,14,Width-24,28));
 
         // Barrinha de nivel (so quando conectado e sem mute).
         if (Connected && !Muted && Level > 0.01f)

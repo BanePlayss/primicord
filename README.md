@@ -2,7 +2,7 @@
 
 O app de comunidade dos primitivos — cliente nativo de Windows com uma interface
 inspirada na organização do Discord e identidade visual do escudo Primitivão.
-Versão publicada: **0.8.1**.
+Versão publicada: **0.8.5**.
 
 ## O que já funciona
 
@@ -12,8 +12,8 @@ Versão publicada: **0.8.1**.
 - compartilhamento de tela/janela com seleção independente de áudio (sem fallback
   silencioso), Desktop Duplication pela GPU para monitores e perfis de 15/30/60 FPS;
 - buffer rolante limitado e exportação assíncrona de clipes por atalho global;
-- Sala DJ paralela à voz: só quem entra ouve a música, sem sair da call;
-- um participante transmite Spotify, YouTube ou qualquer áudio do sistema;
+- Jam do Spotify paralela à voz: o Spotify controla a fila e o play, enquanto o
+  Primicord mostra o subgrupo confirmado na Jam sem criar uma segunda sala;
 - sessão Cinema sincronizada;
 - troca de dispositivos durante a call, bandeja do Windows e tema do usuário;
 - painel de servidores abertos cadastrados pelo usuário, com sonda real de Minecraft
@@ -45,6 +45,10 @@ Para revisar o shell sem login, Firestore, microfone ou Tailscale:
 O modo é explicitamente rotulado como prévia e não publica presença nem usa dados
 de servidores reais.
 
+A prévia visual da 0.8.5 também pode renderizar Acampamento, call sem
+transmissão, Jam confirmada e transmissão ativa em 1440x900 e 1280x720 usando
+o argumento --preview --render-preview <pasta>.
+
 ### Eco
 
 Não tem cancelamento de eco acústico. **Todo mundo de fone.** Quem usar caixa de
@@ -75,7 +79,7 @@ dotnet run --project Primicord.csproj
 - [x] canais de texto, DMs e presença
 - [x] compartilhar janela/monitor com áudio de aplicativo escolhido e perfis de FPS
 - [x] clipes (buffer rolante + hotkey global)
-- [x] Sala DJ seletiva, paralela à chamada, e Cinema sincronizado
+- [x] Jam do Spotify seletiva, paralela à chamada, e Cinema sincronizado
 - [x] shell visual com canais, chat, palco, membros e dashboard em uma comunidade única
 - [x] Tailscale-only para salas normais e diagnóstico de conexão
 - [x] cadastro local e sondagem de servidores abertos

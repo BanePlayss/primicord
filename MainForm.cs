@@ -29,7 +29,7 @@ public sealed class MainForm : Form
     private string _voiceRoomId = "";
     private string _voiceRoomName = "";
 
-    // tela, clipe e DJ
+    // tela, clipe e Jam do Spotify
     private ScreenSender? _screenSender;
     private readonly ScreenReceiver _screens = new();
     private ClipRecorder? _clips;
@@ -38,8 +38,6 @@ public sealed class MainForm : Form
     private uint _focusedSharer;          // 0 = minha propria tela
     private bool _iAmSharing;
     private long _nextPeerClipAt;
-    private Label? _djLabel;
-    private string _nowPlaying = "";
 
     private readonly HotkeyBinding _clipHotkey = new(1);
     private ToastOverlay? _toast;
@@ -54,11 +52,17 @@ public sealed class MainForm : Form
 
     private Panel? _railList, _voiceStrip, _userPanel, _membersList, _membersPanel, _contentHost;
     private ChatView? _chatView;
-    private DjView? _djView;
+    private JamPanel? _jamPanel;
+    private Panel? _stageActions;
+    private PrimButton? _profileShare, _profileLeave;
+    private Label? _shellTitle;
+    private bool _previewSharing, _previewJam;
+    private InviteTile? _inviteTile;
     private DashboardView? _dashboard;
     private Panel? _roomPanel;
     private FlowLayoutPanel? _tiles;
     private readonly Dictionary<uint, PeerTile> _peerTiles = new();
+    private int _rosterTick;
     private PeerTile? _myTile;
     private Label? _roomStatus;
     private bool _deafened;
@@ -70,7 +74,7 @@ public sealed class MainForm : Form
     {
         (ChatService.GeneralChannel, "geral", "Conversa principal da comunidade."),
         ("clipes", "clipes", "Jogadas, cortes e momentos que merecem replay."),
-        ("musica", "musica", "Faixas, playlists e combinados do DJ."),
+        ("musica", "musica", "Faixas, playlists e convites de Jam."),
         ("off-topic", "off-topic", "O papo que nao cabe nos outros canais."),
     };
     private List<RoomInfo> _rooms = new();
@@ -97,7 +101,7 @@ public sealed class MainForm : Form
         _dir = new RoomDirectory(_fs);
         _cfg = Config.Load();
 
-        Text = "PRIMICORD";
+        Text = "PRIMICORD · 0.8.5";
         try
         {
             string? exe = Environment.ProcessPath;
@@ -105,7 +109,7 @@ public sealed class MainForm : Form
         }
         catch (Exception ex) { Log.Write("icone da janela: " + ex.Message); }
 
-        ClientSize = new Size(1280, 760);
+        ClientSize = new Size(1440, 900);
         MinimumSize = new Size(960, 600);
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Pv.Charcoal;
@@ -123,7 +127,7 @@ public sealed class MainForm : Form
             OnLoggedIn(new PrimitivaoUser { Nick = "bane", Pc = 12500, ThemeId = "breu" });
         }
         else ShowLogin();
-        if (!string.IsNullOrWhiteSpace(_cfg.Nick) && !string.IsNullOrWhiteSpace(_cfg.SenhaHash))
+        if (!_preview && !string.IsNullOrWhiteSpace(_cfg.Nick) && !string.IsNullOrWhiteSpace(_cfg.SenhaHash))
             _ = TryAutoLoginAsync();
     }
 
@@ -189,7 +193,7 @@ public sealed class MainForm : Form
                 g.DrawString(title, Pv.DisplaySm, b, (card.Width - size.Width) / 2f, 116);
             }
             using (var b = new SolidBrush(Pv.Orange))
-                Pv.DrawTracked(g, "PRIMITIVÃO · VOZ / TELA / DJ", Pv.Label, b, 78, 143, 1.2f);
+                Pv.DrawTracked(g, "PRIMITIVÃO · VOZ / TELA / SPOTIFY JAM", Pv.Label, b, 78, 143, 1.2f);
         };
 
         var hint = new Label
@@ -288,10 +292,11 @@ public sealed class MainForm : Form
             _rooms = new List<RoomInfo>
             {
                 new() { Id = "arena", Name = "ARENA PRINCIPAL", CreatedBy = "bane" },
-                new() { Id = "ranqueada", Name = "RANQUEADA", CreatedBy = "mohamed" },
+                new() { Id = "fogueira", Name = "FOGUEIRA", CreatedBy = "mohamed" },
+                new() { Id = "caverna", Name = "CAVERNA", CreatedBy = "angu" },
             };
             _rooms[0].Occupants.AddRange(new[] { "bane", "mohamed", "ricle", "vitinho", "angu" });
-            _rooms[0].LiveStreams = 1;
+            _rooms[0].LiveStreams = 0;
             _members = new List<string> { "bane", "mohamed", "ricle", "vitinho", "angu", "jessica", "pedro" };
             long previewNow = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             _presence = _members.ToDictionary(n => n,
@@ -331,7 +336,7 @@ public sealed class MainForm : Form
         var host = new Panel { BackColor = Pv.Charcoal };
 
         // ── CANAIS DA COMUNIDADE UNICA ──
-        var rail = new Panel { Dock = DockStyle.Left, Width = 240, BackColor = Pv.Char2 };
+        var rail = new Panel { Dock = DockStyle.Left, Width = 184, BackColor = Pv.Char2 };
         rail.Paint += (_, e) =>
         {
             using var p = new Pen(Pv.Border, 1);
@@ -346,7 +351,7 @@ public sealed class MainForm : Form
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
             BrandAssets.Draw(g, new Rectangle(12, 8, 49, 48));
             using (var b = new SolidBrush(Pv.Bone))
-                g.DrawString("PRIMITIVÃO", Pv.DisplaySm, b, 69, 13);
+                g.DrawString("PRIMICORD", Pv.BodyBold, b, 66, 16);
             using (var b = new SolidBrush(Pv.Orange))
                 Pv.DrawTracked(g, "ACAMPAMENTO", Pv.Label, b, 71, 39, 1.3f);
             using (var p = new Pen(Pv.Border, 1))
@@ -367,11 +372,11 @@ public sealed class MainForm : Form
         rail.Controls.Add(_railList);   // Fill primeiro
         rail.Controls.Add(_voiceStrip);
         rail.Controls.Add(_userPanel);
-        rail.Controls.Add(nitro);
+        nitro.Dispose();
         rail.Controls.Add(brand);
 
         // ── MEMBROS (direita) ──
-        var members = new Panel { Dock = DockStyle.Right, Width = 232, BackColor = Pv.Char2 };
+        var members = new Panel { Dock = DockStyle.Right, Width = 270, BackColor = Pv.Char2 };
         _membersPanel = members;
         members.Paint += (_, e) =>
         {
@@ -384,7 +389,7 @@ public sealed class MainForm : Form
             var g = e.Graphics;
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
             using var b = new SolidBrush(Pv.Bone);
-            g.DrawString("Membros", Pv.BodyBold, b, 18, 18);
+            g.DrawString(_voiceRoomId.Length > 0 ? "NA SALA DE VOZ" : "A TRIBO", Pv.BodyBold, b, 18, 18);
         };
         _membersList = new Panel
         {
@@ -393,6 +398,10 @@ public sealed class MainForm : Form
         };
         members.Controls.Add(_membersList);
         members.Controls.Add(mHead);
+        _jamPanel = new JamPanel { Dock = DockStyle.Bottom };
+        _jamPanel.JoinRequested += ToggleDjMembership;
+        _jamPanel.LinkRequested += ConfigureJamLink;
+        members.Controls.Add(_jamPanel);
 
         // ── CONTEUDO ──
         _contentHost = new Panel { Dock = DockStyle.Fill, BackColor = Pv.Charcoal };
@@ -400,13 +409,18 @@ public sealed class MainForm : Form
         host.Controls.Add(_contentHost);   // Fill primeiro
         host.Controls.Add(members);
         host.Controls.Add(rail);
+        _shellTitle = new Label { Dock = DockStyle.Top, Height = 46, Font = Pv.BodyBold,
+            ForeColor = Pv.Bone, BackColor = Pv.SurfaceLowest, Padding = new Padding(20, 14, 0, 0) };
+        host.Controls.Add(_shellTitle);
         SetBody(host);
 
         _chatView = new ChatView { Dock = DockStyle.Fill };
         _chatView.Send += OnSendMessageAsync;
         _chatView.ToggleMembers += ToggleMembersPanel;
 
-        SelectView(_preview ? "home" : "geral");
+        SelectView("home");
+        RefreshMembers();
+        SyncDjView();
         RebuildRail();
 
         if (!_preview)
@@ -444,7 +458,7 @@ public sealed class MainForm : Form
             using (var b = new SolidBrush(Pv.Bone))
                 g.DrawString("Tailscale · " + status, Pv.BodyBold, b, r.X + 12, r.Y + 31);
             using (var b = new SolidBrush(Pv.BoneDim))
-                g.DrawString("voz, tela e DJ no mesmo acampamento", Pv.Label, b, r.X + 12, r.Y + 50);
+                g.DrawString("voz, tela e Jam do Spotify no mesmo acampamento", Pv.Label, b, r.X + 12, r.Y + 50);
             using (var b = new SolidBrush(_preview || ConnectionPolicy.TailnetAddresses().Count > 0 ? Pv.Green : Pv.Red))
                 g.FillEllipse(b, r.Right - 22, r.Y + 28, 8, 8);
         };
@@ -459,75 +473,46 @@ public sealed class MainForm : Form
 
     private Panel BuildUserPanel()
     {
-        var p = new Panel { Dock = DockStyle.Bottom, Height = 56, BackColor = Pv.SurfaceLow };
+        var p = new Panel { Dock = DockStyle.Bottom, Height = 164, BackColor = Pv.SurfaceLow };
         p.Paint += (_, e) =>
         {
-            var g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-            if (_me == null) return;
-
-            var box = new Rectangle(8, (p.Height - 34) / 2, 34, 34);
-            Glyphs.Avatar(g, box, _me.Nick, Pv.Orange, Pv.Charcoal);
-            Glyphs.StatusDot(g, new RectangleF(box.Right - 10, box.Bottom - 10, 12, 12), Pv.Green, Pv.SurfaceLow);
-
-            using (var b = new SolidBrush(Pv.Bone))
-            using (var sf = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
-                g.DrawString(_me.Nick, Pv.BodyBold, b,
-                    new RectangleF(box.Right + 7, box.Y, 79, 18), sf);
-            string sub = _me.Badge.Length > 0 ? _me.Badge : _me.PcShort + " PC";
-            using (var b = new SolidBrush(_me.Badge.Length > 0 ? Pv.NitroPink : Pv.BoneDim))
-            using (var sf = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
-                g.DrawString(sub, Pv.Label, b, new RectangleF(box.Right + 7, box.Y + 19, 79, 16), sf);
+            Glyphs.Avatar(e.Graphics, new Rectangle(12, 12, 34, 34), Nick, Pv.Orange, Pv.Bone);
+            using var b = new SolidBrush(Pv.Bone);
+            e.Graphics.DrawString(Nick, Pv.BodyBold, b, 54, 12);
+            using var muted = new SolidBrush(Pv.BoneDim);
+            e.Graphics.DrawString(_voiceRoomId.Length > 0 ? "na call" : "no acampamento", Pv.Label, muted, 54, 32);
         };
-
-        var mic = new GlyphButton((g, r, c, w) => Glyphs.Mic(g, r, c, _session?.Muted == true))
-        { Size = new Size(32, 32) };
-        mic.ToolTipText = "Mutar microfone";
-        mic.Click += (_, _) =>
-        {
-            if (_session == null) { OpenSettings(); return; }
-            ToggleMute();
-            mic.Accent = _session.Muted ? Pv.Red : Pv.Bone;
-            mic.ToolTipText = _session.Muted ? "Desmutar microfone" : "Mutar microfone";
-            mic.Invalidate();
-            UpdateVoiceStrip();
+        var mic = new GlyphButton((g,r,c,w) => Glyphs.Mic(g,r,c,_session?.Muted == true))
+            { Size = new Size(44,44), Location = new Point(12,54), ToolTipText = "Microfone · entre na call para usar" };
+        mic.Click += (_,_) => { ToggleMute(); p.Invalidate(true); };
+        var phones = new GlyphButton((g,r,c,w) => Glyphs.Headphones(g,r,c,_deafened))
+            { Size = new Size(44,44), Location = new Point(64,54), ToolTipText = "Fone · ensurdecer" };
+        phones.Click += (_,_) => { ToggleDeafen(); p.Invalidate(true); };
+        var gear = new GlyphButton(Glyphs.Gear)
+            { Size = new Size(44,44), Location = new Point(116,54), ToolTipText = "Configurações" };
+        gear.Click += (_,_) => OpenSettings();
+        _profileShare = new PrimButton("TRANSMITIR") { Location = new Point(10,108), Size = new Size(110,44) };
+        _profileShare.Click += (_,_) => {
+            if (_preview) { _previewSharing = !_previewSharing; SelectView("room:" + _voiceRoomId); }
+            else if (_session == null) ShowBanner("Entre em uma sala para transmitir.");
+            else { SelectView("room:" + _voiceRoomId); ToggleScreenShare(); }
         };
-
-        var headphones = new GlyphButton((g, r, c, w) => Glyphs.Headphones(g, r, c, _deafened))
-        { Size = new Size(32, 32) };
-        headphones.ToolTipText = "Ensurdecer";
-        headphones.Click += (_, _) =>
-        {
-            ToggleDeafen();
-            headphones.Accent = _deafened ? Pv.Red : Pv.Bone;
-            headphones.ToolTipText = _deafened ? "Desensurdecer" : "Ensurdecer";
-            headphones.Invalidate();
-            UpdateVoiceStrip();
-        };
-
-        var gear = new GlyphButton(Glyphs.Gear) { Size = new Size(32, 32) };
-        gear.ToolTipText = "Configuracoes do usuario";
-        gear.Click += (_, _) => OpenSettings();
-
-        void Layout()
-        {
-            gear.Location = new Point(p.ClientSize.Width - 36, (p.Height - gear.Height) / 2);
-            headphones.Location = new Point(p.ClientSize.Width - 70, (p.Height - headphones.Height) / 2);
-            mic.Location = new Point(p.ClientSize.Width - 104, (p.Height - mic.Height) / 2);
-        }
-        p.Resize += (_, _) => Layout();
-        p.Controls.AddRange(new Control[] { mic, headphones, gear });
-
-        var menu = new ContextMenuStrip { BackColor = Pv.SurfaceLow, ForeColor = Pv.Bone };
-        menu.Items.Add("Configuracoes", null, (_, _) => OpenSettings());
-        menu.Items.Add("Trocar de conta", null, (_, _) => Logout());
-        p.ContextMenuStrip = menu;
-        Layout();
+        _profileLeave = new PrimButton("SAIR", PrimButton.Style.Ghost) { Location = new Point(124,108), Size = new Size(50,44) };
+        _profileLeave.Click += (_,_) => { LeaveVoice(); SelectView("home"); };
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("O que estou jogando", null, (_,_) => {
+            if (_session == null) { ShowBanner("Entre na call para definir seu jogo."); return; }
+            string? game = PromptDialog.Ask(this, "ATIVIDADE", "O que você está jogando? (vazio para limpar)", _session.Game);
+            if (game == null) return;
+            _session.Game = game.Trim()[..Math.Min(game.Trim().Length, 60)];
+            if (_myTile != null) { _myTile.Game = _session.Game; _myTile.Invalidate(); }
+        });
+        gear.ContextMenuStrip = menu;
+        gear.ToolTipText = "Configurações · botão direito para definir jogo";
+        p.Controls.AddRange(new Control[] { mic, phones, gear, _profileShare, _profileLeave });
         return p;
     }
 
-    /// <summary>Faixa "voce esta numa call" no rodape do rail (some fora de call).</summary>
     private Panel BuildVoiceStrip()
     {
         var p = new Panel { Dock = DockStyle.Bottom, Height = 0, BackColor = Pv.Char2, Visible = false };
@@ -546,33 +531,11 @@ public sealed class MainForm : Form
 
     private void UpdateVoiceStrip()
     {
+        if (_voiceStrip != null) { _voiceStrip.Visible = false; _voiceStrip.Height = 0; }
         _userPanel?.Invalidate(true);
-        if (_voiceStrip == null) return;
-        bool on = _session != null;
-        _voiceStrip.Visible = on;
-        _voiceStrip.Height = on ? 92 : 0;
-        _voiceStrip.Controls.Clear();
-        if (!on) return;
-
-        var mute = new GlyphButton((g, r, c, w) => Glyphs.Mic(g, r, c, _session!.Muted))
-        { Size = new Size(34, 34), Location = new Point(14, 48) };
-        mute.Accent = _session!.Muted ? Pv.Red : Pv.Bone;
-        mute.ToolTipText = _session.Muted ? "Desmutar" : "Mutar";
-        mute.Click += (_, _) => { ToggleMute(); UpdateVoiceStrip(); };
-
-        var deafen = new GlyphButton((g, r, c, w) => Glyphs.Headphones(g, r, c, _deafened))
-        { Size = new Size(34, 34), Location = new Point(54, 48) };
-        deafen.Accent = _deafened ? Pv.Red : Pv.Bone;
-        deafen.ToolTipText = _deafened ? "Desensurdecer" : "Ensurdecer";
-        deafen.Click += (_, _) => { ToggleDeafen(); UpdateVoiceStrip(); };
-
-        var leave = new GlyphButton(Glyphs.Exit) { Size = new Size(34, 34), Location = new Point(94, 48) };
-        leave.Accent = Pv.Red;
-        leave.ToolTipText = "Sair da call";
-        leave.Click += (_, _) => LeaveVoice();
-
-        _voiceStrip.Controls.AddRange(new Control[] { mute, deafen, leave });
-        _voiceStrip.Invalidate();
+        if (_profileLeave != null) _profileLeave.Visible = _voiceRoomId.Length > 0;
+        if (_profileShare != null) _profileShare.Text = _iAmSharing || _previewSharing ? "PARAR TELA" : "TRANSMITIR";
+        SyncDjView();
     }
 
     private void OpenSettings()
@@ -626,117 +589,45 @@ public sealed class MainForm : Form
         _railList.SuspendLayout();
         foreach (Control c in _railList.Controls.Cast<Control>().ToList()) c.Dispose();
         _railList.Controls.Clear();
-
-        // Dock=Top empilha ao contrario: montamos a lista e adicionamos invertida.
         var items = new List<Control>();
-
-        var camp = new RailItem("Acampamento", RailItem.Kind.Action)
-        { Dock = DockStyle.Top, Active = _view == "home" };
-        camp.Click += (_, _) => SelectView("home");
-        items.Add(camp);
-
-        items.Add(RailHeader("CANAIS DE TEXTO"));
-        foreach (var channel in TextChannels)
+        void Add(string text, string route, RailItem.Kind kind)
         {
-            string view = channel.Id == ChatService.GeneralChannel ? "geral" : "channel:" + channel.Id;
-            var item = new RailItem(channel.Name, RailItem.Kind.TextChannel)
-            { Dock = DockStyle.Top, Active = _view == view };
-            item.Click += (_, _) => SelectView(view);
+            var item = new RailItem(text, kind) { Dock = DockStyle.Top, Height = 48,
+                Active = _view == route || route == "rooms" && _view.StartsWith("room:") };
+            item.Click += (_,_) => {
+                if (route == "rooms" && _voiceRoomId.Length > 0) SelectView("room:" + _voiceRoomId);
+                else SelectView(route);
+            };
             items.Add(item);
         }
-
-        items.Add(RailHeader("ESCUTA CONJUNTA"));
-        int djCount = (_session?.DjJoined == true ? 1 : 0)
-                    + (_session?.Peers.Count(p => p.DjJoined) ?? 0);
-        var dj = new RailItem("Sala DJ", RailItem.Kind.Music)
-        {
-            Dock = DockStyle.Top, Active = _view == "dj",
-            Suffix = djCount > 0 ? djCount.ToString() : "",
+        Add("Acampamento", "home", RailItem.Kind.Action);
+        Add("Salas", "rooms", RailItem.Kind.Voice);
+        Add("Transmissões", "streams", RailItem.Kind.Voice);
+        Add("Jam", "dj", RailItem.Kind.Music);
+        Add("Clipes", "channel:clipes", RailItem.Kind.TextChannel);
+        Add("Servidores", "servers", RailItem.Kind.Action);
+        Add("Atividade", "geral", RailItem.Kind.TextChannel);
+        var create = new RailItem("Nova sala", RailItem.Kind.Action) { Dock = DockStyle.Top, Height = 44 };
+        create.Click += async (_,_) => { if (!_preview) await CreateRoomAsync(); };
+        items.Add(create);
+        var code = new RailItem("Entrar por código", RailItem.Kind.Voice) { Dock = DockStyle.Top, Height = 44 };
+        code.Click += async (_,_) => {
+            if (_preview) return;
+            string? id = PromptDialog.Ask(this, "ENTRAR NA SALA", "Código da sala", "");
+            if (string.IsNullOrWhiteSpace(id)) return;
+            var room = _rooms.FirstOrDefault(r => r.Id == id.Trim());
+            if (room == null) { ShowBanner("Sala não encontrada. Atualize a lista e confira o código."); return; }
+            await OnRoomClickedAsync(room.Id, room.Name);
         };
-        dj.Click += (_, _) => SelectView("dj");
-        items.Add(dj);
-
-        if (_session?.DjJoined == true)
+        items.Add(code);
+        foreach (var other in _openDms)
         {
-            var me = new RailItem(Nick, RailItem.Kind.Dm)
-            {
-                Dock = DockStyle.Top, Height = 30, AvatarNick = Nick,
-                Online = true, Indent = 14, Suffix = _session.DjHost ? "DJ" : "",
-            };
-            items.Add(me);
+            var dm = new RailItem(other, RailItem.Kind.Dm) { Dock = DockStyle.Top, AvatarNick = other };
+            dm.Click += (_,_) => OpenDm(other);
+            items.Add(dm);
         }
-        if (_session != null)
-        {
-            foreach (var listener in _session.Peers.Where(p => p.DjJoined)
-                         .OrderByDescending(p => p.DjHost)
-                         .ThenBy(p => p.Nick, StringComparer.OrdinalIgnoreCase))
-            {
-                var person = new RailItem(listener.Nick, RailItem.Kind.Dm)
-                {
-                    Dock = DockStyle.Top, Height = 30, AvatarNick = listener.Nick,
-                    Online = true, Indent = 14, Suffix = listener.DjHost ? "DJ" : "",
-                };
-                string nick = listener.Nick;
-                person.Click += (_, _) => OpenDm(nick);
-                items.Add(person);
-            }
-        }
-
-        items.Add(RailHeader("SALAS DE VOZ"));
-        foreach (var room in _rooms)
-        {
-            var it = new RailItem(room.Name, RailItem.Kind.Voice)
-            {
-                Dock = DockStyle.Top,
-                Active = _view == "room:" + room.Id,
-                Suffix = room.Count > 0 ? room.Count.ToString() : "",
-            };
-            string id = room.Id, name = room.Name;
-            it.Click += async (_, _) => await OnRoomClickedAsync(id, name);
-            items.Add(it);
-
-            foreach (string occupant in room.Occupants.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
-            {
-                var person = new RailItem(occupant, RailItem.Kind.Dm)
-                {
-                    Dock = DockStyle.Top, Height = 30, AvatarNick = occupant,
-                    Online = true, Indent = 14,
-                };
-                string nick = occupant;
-                person.Click += (_, _) => OpenDm(nick);
-                items.Add(person);
-            }
-        }
-        var novaSala = new RailItem("Nova sala", RailItem.Kind.Action) { Dock = DockStyle.Top };
-        novaSala.Click += async (_, _) => await CreateRoomAsync();
-        items.Add(novaSala);
-
-        items.Add(RailHeader("ATIVIDADES"));
-        var servers = new RailItem("Servidores abertos", RailItem.Kind.Action)
-        { Dock = DockStyle.Top, Active = _view == "servers" };
-        servers.Click += (_, _) => SelectView("servers");
-        items.Add(servers);
-
-        if (_openDms.Count > 0)
-        {
-            items.Add(RailHeader("CONVERSAS"));
-            foreach (string other in _openDms)
-            {
-                var it = new RailItem(other, RailItem.Kind.Dm)
-                {
-                    Dock = DockStyle.Top,
-                    Active = _view == "dm:" + other,
-                    AvatarNick = other,
-                    Online = _presence.TryGetValue(other, out var pr) && pr.Online,
-                };
-                string o = other;
-                it.Click += (_, _) => SelectView("dm:" + o);
-                items.Add(it);
-            }
-        }
-
         items.Reverse();
-        foreach (var c in items) _railList.Controls.Add(c);
+        foreach (var item in items) _railList.Controls.Add(item);
         _railList.ResumeLayout();
     }
 
@@ -765,7 +656,7 @@ public sealed class MainForm : Form
         _contentHost.SuspendLayout();
         _contentHost.Controls.Clear();
 
-        if (view == "home")
+        if (view is "home" or "rooms" or "streams")
         {
             _contentHost.Controls.Add(EnsureDashboard());
             SyncDashboard();
@@ -777,7 +668,11 @@ public sealed class MainForm : Form
         }
         else if (view == "dj")
         {
-            _contentHost.Controls.Add(EnsureDjView());
+            if (_voiceRoomId.Length > 0) {
+                _contentHost.Controls.Add(EnsureRoomPanel());
+                if (_preview) ConfigurePreviewRoom();
+            } else { _contentHost.Controls.Add(EnsureDashboard()); SyncDashboard(); }
+            if (_membersPanel != null) _membersPanel.Visible = true;
             SyncDjView();
         }
         else if (view.StartsWith("room:"))
@@ -806,6 +701,14 @@ public sealed class MainForm : Form
             _ = RefreshChatAsync();
         }
         _contentHost.ResumeLayout();
+        if (_membersPanel != null) _membersPanel.Visible = view != "home" && view != "rooms" && view != "streams" && view != "servers";
+        if (_shellTitle != null) _shellTitle.Text = "PRIMICORD   /   " +
+            (view.StartsWith("room:") ? _voiceRoomName : view == "home" ? "ACAMPAMENTO" : view.ToUpperInvariant()) +
+            "     ·     " + (_preview ? "PRÉVIA LOCAL" : "TAILSCALE · " + ConnectionPolicy.Summary);
+        RefreshMembers();
+        SyncDjView();
+        SyncStageLayout();
+        UpdateVoiceStrip();
         RebuildRail();
     }
 
@@ -813,6 +716,11 @@ public sealed class MainForm : Form
     {
         if (_dashboard != null && !_dashboard.IsDisposed) return _dashboard;
         _dashboard = new DashboardView { Dock = DockStyle.Fill };
+        _dashboard.JoinRequested += async () => {
+            var room = _rooms.FirstOrDefault(r => r.Id == _voiceRoomId) ?? _rooms.FirstOrDefault();
+            if (room != null) await OnRoomClickedAsync(room.Id, room.Name);
+            else ShowBanner("Use Nova sala para abrir a primeira call.");
+        };
         _dashboard.RoomRequested += async (id, name) =>
         {
             await OnRoomClickedAsync(id, name);
@@ -833,8 +741,10 @@ public sealed class MainForm : Form
     {
         if (_dashboard == null || _dashboard.IsDisposed) return;
         int online = _presence.Count(p => p.Value.Online);
-        _dashboard.Configure(_rooms, _preview ? "prévia isolada" : ConnectionPolicy.Summary,
+        _dashboard.Configure((_view == "streams" ? _rooms.Where(r => r.LiveStreams > 0).ToList() : _rooms), _preview ? "prévia isolada" : ConnectionPolicy.Summary,
             online, _preview);
+        try { _dashboard.SetServers(_gameServers.Load(), _serverStatuses); }
+        catch (Exception ex) { Log.Write("dashboard servidores: " + ex.Message); }
     }
 
     private GameServersPanel EnsureServerPanel()
@@ -905,43 +815,25 @@ public sealed class MainForm : Form
         catch (Exception ex) { ShowBanner("Não consegui remover o servidor: " + ex.Message); }
     }
 
-    private DjView EnsureDjView()
+    private void ConfigureJamLink()
     {
-        if (_djView != null && !_djView.IsDisposed) return _djView;
-        _djView = new DjView { Dock = DockStyle.Fill };
-        _djView.JoinToggled += ToggleDjMembership;
-        _djView.HostToggled += ToggleDjHost;
-        _djView.BackToVoice += () =>
-        {
-            if (_session != null) SelectView("room:" + _session.RoomId);
-        };
-        return _djView;
+        if (_session == null) { Toast("JAM DO SPOTIFY", "Entre em uma call para compartilhar o convite."); return; }
+        string? value = PromptDialog.Ask(this, "CONVITE DA JAM", "Crie a Jam no Spotify e cole o link de convite", "https://spotify.link/...");
+        if (value == null) return;
+        if (!SpotifyJam.TryInvite(value, out var uri)) { ShowBanner("Use um convite HTTPS do Spotify (spotify.link ou open.spotify.com)."); return; }
+        _session.SetJam(false, uri!.AbsoluteUri);
+        SyncDjView();
     }
 
     private void SyncDjView()
     {
-        if (_djView == null || _djView.IsDisposed) return;
-        var session = _session;
-        if (session == null)
-        {
-            _djView.Configure(false, false, false, "", "", "",
-                Array.Empty<DjParticipant>());
-            return;
-        }
-
-        var people = new List<DjParticipant>();
-        if (session.DjJoined)
-            people.Add(new DjParticipant(Nick, session.DjHost, true));
-        people.AddRange(session.Peers.Where(p => p.DjJoined)
-            .Select(p => new DjParticipant(p.Nick, p.DjHost, false)));
-        people = people.OrderByDescending(p => p.IsHost)
-                       .ThenBy(p => p.Nick, StringComparer.OrdinalIgnoreCase).ToList();
-
-        var remoteHost = session.Peers.FirstOrDefault(p => p.DjHost);
-        string hostNick = session.DjHost ? Nick : remoteHost?.Nick ?? "";
-        string track = session.DjHost ? _nowPlaying : remoteHost?.DjTrack ?? "";
-        _djView.Configure(true, session.DjJoined, session.DjHost,
-            _voiceRoomName, track, hostNick, people);
+        if (_jamPanel == null || _jamPanel.IsDisposed) return;
+        var members = new List<string>();
+        if (_session?.JamJoined == true) members.Add(Nick);
+        if (_session != null) members.AddRange(_session.Peers.Where(p => p.JamJoined).Select(p => p.Nick));
+        if (_preview && _previewJam) members.AddRange(new[] { "Bane", "Mohamed", "Vitinho" });
+        _jamPanel.Configure(_session != null || _preview && _voiceRoomId.Length > 0,
+            _session?.JamJoined == true || _previewJam, members);
     }
 
     private async Task OnRoomClickedAsync(string roomId, string roomName)
@@ -1033,6 +925,7 @@ public sealed class MainForm : Form
 
     private async Task RefreshChatAsync()
     {
+        if (_preview || !(_view == "geral" || _view.StartsWith("channel:") || _view.StartsWith("dm:"))) return;
         if (_chat == null || _chatView == null || _chatView.IsDisposed) return;
         if (_view.StartsWith("room:") || _view == "dj") return;
         try
@@ -1052,14 +945,25 @@ public sealed class MainForm : Form
     {
         if (_membersList == null || _membersList.IsDisposed) return;
 
-        var ordered = _members
+        var roomNicks = _voiceRoomId.Length > 0
+            ? (_session != null ? _session.Peers.Select(p => p.Nick).Append(Nick).ToList()
+                : _rooms.FirstOrDefault(r => r.Id == _voiceRoomId)?.Occupants ?? new List<string>()) : _members;
+        var ordered = roomNicks
             .OrderByDescending(n => _presence.TryGetValue(n, out var p) && p.Online)
             .ThenBy(n => n, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        // Recria so quando a composicao muda (o poll roda a cada 2s).
+        string Status(string n)
+        {
+            var tile = _tiles?.Controls.OfType<PeerTile>().FirstOrDefault(t => t.Nick.Equals(n,StringComparison.OrdinalIgnoreCase));
+            if (_voiceRoomId.Length > 0 && tile != null)
+                return (tile.Speaking ? "falando" : tile.Muted ? "mic fechado" : tile.Game.Length > 0 ? tile.Game : "na call")
+                    + (tile.JamJoined ? " · ♪ Jam" : "");
+            return _presence.TryGetValue(n,out var pr) ? pr.Room : "";
+        }
+        // Refresh only when displayed roster state changes.
         string sig = string.Join(",", ordered.Select(n =>
-            n + (_presence.TryGetValue(n, out var p) && p.Online ? "+" + p.Room : "-")));
+            n + Status(n) + (_presence.TryGetValue(n, out var p) && p.Online ? "+" + p.Room : "-")));
         if ((string?)_membersList.Tag == sig) return;
         _membersList.Tag = sig;
 
@@ -1073,7 +977,7 @@ public sealed class MainForm : Form
         bool addedOffline = false;
         foreach (string n in ordered)
         {
-            bool isOn = _presence.TryGetValue(n, out var pr) && pr.Online;
+            bool isOn = _voiceRoomId.Length > 0 || _presence.TryGetValue(n, out var pr) && pr.Online;
             if (!isOn && !addedOffline)
             {
                 rows.Add(RailHeader($"OFFLINE — {ordered.Count - online}"));
@@ -1082,7 +986,7 @@ public sealed class MainForm : Form
             var row = new MemberRow
             {
                 Dock = DockStyle.Top, Nick = n, Online = isOn,
-                Room = isOn ? (pr!.Room ?? "") : "",
+                Room = isOn ? Status(n) : "",
                 IsMe = string.Equals(n, Nick, StringComparison.OrdinalIgnoreCase),
             };
             string target = n;
@@ -1125,64 +1029,58 @@ public sealed class MainForm : Form
     private Panel EnsureRoomPanel()
     {
         if (_roomPanel != null && !_roomPanel.IsDisposed) return _roomPanel;
-
-        _roomPanel = new Panel { Dock = DockStyle.Fill, BackColor = Pv.Charcoal };
-
-        var head = new Panel { Dock = DockStyle.Top, Height = 56, BackColor = Pv.Charcoal };
-        head.Paint += (_, e) =>
-        {
-            var g = e.Graphics;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-            using (var p = new Pen(Pv.Char3, 2)) g.DrawLine(p, 0, head.Height - 1, head.Width, head.Height - 1);
-            var ic = new RectangleF(20, 18, 18, 18);
-            Glyphs.Speaker(g, ic, Pv.Bone);
-            using var b = new SolidBrush(Pv.Bone);
-            g.DrawString(_voiceRoomName, Pv.DisplaySm, b, 46, 12);
-        };
-
-        _roomStatus = new Label
-        {
-            Dock = DockStyle.Top, Height = 26, Font = Pv.Body, ForeColor = Pv.BoneDim,
-            Padding = new Padding(22, 4, 0, 0), Text = "conectando...",
-        };
-        // "tocando agora" vive na linha de status, que tem a largura toda — na barra
-        // de botoes ele era cortado pelo painel de membros.
-        _djLabel = new Label
-        {
-            Dock = DockStyle.Top, Height = 22, Font = Pv.Label, ForeColor = Pv.Green,
-            Padding = new Padding(22, 2, 0, 0), Text = "", Visible = false,
-        };
-
-        // Barra de acoes da sala: tela, clipe, gravar, DJ.
-        var actions = BuildRoomActions();
-
-        // Tiles embaixo; palco ocupa o resto. Altura = tile (124) + margem (12) +
-        // padding (16) + folga da barra de rolagem horizontal.
-        _tiles = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Bottom, Height = 168, AutoScroll = true, WrapContents = false,
-            BackColor = Pv.Charcoal, Padding = new Padding(16, 8, 16, 8),
-        };
-
+        _roomPanel = new Panel { Dock = DockStyle.Fill, BackColor = Pv.Charcoal, Padding = new Padding(16) };
+        var title = new Label { Dock = DockStyle.Top, Height = 44, Text = "A TRIBO TÁ NA CALL",
+            Font = Pv.Display, ForeColor = Pv.Bone };
+        _roomStatus = new Label { Dock = DockStyle.Top, Height = 32, Font = Pv.Body, ForeColor = Pv.BoneDim };
+        _stageActions = BuildRoomActions();
+        _stageActions.Dock = DockStyle.Bottom;
+        _tiles = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = true,
+            BackColor = Pv.Charcoal, Padding = new Padding(0,8,0,8) };
         _stage = new StageView { Dock = DockStyle.Fill };
-
-        // A barra de icones fica encostada nos participantes (Dock=Top dentro de um
-        // container que tambem segura os tiles), pra ficar claro que agem sobre a call.
-        var rodape = new Panel { Dock = DockStyle.Bottom, BackColor = Pv.Charcoal, AutoSize = true };
-        rodape.Paint += (_, e) =>
-        {
-            using var p = new Pen(Pv.Char3, 2);
-            e.Graphics.DrawLine(p, 16, 0, rodape.Width - 16, 0);
-        };
-        rodape.Controls.Add(_tiles);
-        rodape.Controls.Add(actions);
-
-        _roomPanel.Controls.Add(_stage);      // Fill primeiro
-        _roomPanel.Controls.Add(rodape);
-        _roomPanel.Controls.Add(_djLabel);
+        _roomPanel.Controls.Add(_tiles);
+        _roomPanel.Controls.Add(_stage);
+        _roomPanel.Controls.Add(_stageActions);
         _roomPanel.Controls.Add(_roomStatus);
-        _roomPanel.Controls.Add(head);
+        _roomPanel.Controls.Add(title);
+        _roomPanel.Resize += (_,_) => SyncStageLayout();
         return _roomPanel;
+    }
+
+    private void CopyRoomInvite()
+    {
+        if (_voiceRoomId.Length == 0) return;
+        // The code is pasteable in Salas > Entrar por código; no unregistered URI handler.
+        Clipboard.SetText(_voiceRoomId);
+        Toast("CONVITE COPIADO", "Envie o código. Na aba Salas, use Entrar por código.");
+    }
+
+    private void SyncStageLayout()
+    {
+        if (_tiles == null || _stage == null || _stageActions == null || _roomPanel == null) return;
+        bool live = _iAmSharing || _previewSharing || _session?.Peers.Any(p => p.Sharing) == true;
+        _stage.Visible = live;
+        _stageActions.Visible = live;
+        _tiles.Dock = live ? DockStyle.Bottom : DockStyle.Fill;
+        _tiles.Height = live ? 144 : Math.Max(150, _roomPanel.Height - 100);
+        _tiles.WrapContents = !live;
+        if (_inviteTile == null || _inviteTile.IsDisposed) {
+            _inviteTile = new InviteTile();
+            _inviteTile.Click += (_,_) => CopyRoomInvite();
+        }
+        if (!_tiles.Controls.Contains(_inviteTile)) _tiles.Controls.Add(_inviteTile);
+        _inviteTile.Visible = !live;
+        _tiles.Controls.SetChildIndex(_inviteTile, _tiles.Controls.Count - 1);
+        int count = _tiles.Controls.Count;
+        int columns = _tiles.ClientSize.Width >= 640 ? 3 : 2;
+        int rows = Math.Max(1, (int)Math.Ceiling(count / (double)columns));
+        int width = live ? 176 : Math.Max(140, (_tiles.ClientSize.Width - 22) / columns - 12);
+        int height = live ? 124 : Math.Clamp((_tiles.ClientSize.Height - 24) / rows - 12, 180, 340);
+        foreach (Control tile in _tiles.Controls) {
+            tile.Size = new Size(width, height);
+            if (tile is PeerTile peer) peer.Large = !live;
+        }
+        if (_previewSharing) { _stage.SelfPreview = true; _stage.SelfInfo = "PRÉVIA · 1440p / 60 FPS"; }
     }
 
     private void ConfigurePreviewRoom()
@@ -1197,18 +1095,19 @@ public sealed class MainForm : Form
             var tile = new PeerTile
             {
                 Nick = nick, IsMe = nick.Equals(Nick, StringComparison.OrdinalIgnoreCase),
-                Connected = true, Sharing = nick is "vitinho", DjJoined = nick is "bane" or "mohamed",
-                DjHost = nick == "bane", Margin = new Padding(6),
+                Connected = true, Sharing = false, JamJoined = _previewJam && nick is "bane" or "mohamed" or "vitinho",
+                Game = nick == "mohamed" ? "Minecraft" : nick == "vitinho" ? "Rust" : "", Level = nick == "bane" ? .2f : 0, Muted = nick == "ricle",
+                Margin = new Padding(6),
             };
             _tiles.Controls.Add(tile);
         }
         _tiles.ResumeLayout();
         if (_roomStatus != null) _roomStatus.Text = "5 na call · Tailscale P2P · modo de prévia visual";
-        if (_djLabel != null) { _djLabel.Text = "SALA DJ · Bane e Mohamed estão ouvindo juntos"; _djLabel.Visible = true; }
         SyncRoomButtons();
+        SyncStageLayout();
     }
 
-    private ActionIcon? _icMic, _icShare, _icRec, _icClip, _icDj, _icCinema, _icQuick, _icLeave;
+    private ActionIcon? _icShare, _icRec, _icClip;
     private Label? _lanBadge;
     private CinemaSession? _cinema;
     private Form? _cinemaWindow;
@@ -1219,64 +1118,27 @@ public sealed class MainForm : Form
     /// </summary>
     private Panel BuildRoomActions()
     {
-        var bar = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Top,
-            BackColor = Pv.Charcoal,
-            WrapContents = false,
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Padding = new Padding(18, 8, 18, 4),
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 80,
+            BackColor = Pv.SurfaceLowest, WrapContents = false, Padding = new Padding(12,8,12,4) };
+        _icShare = new ActionIcon((g,r,c,w) => Glyphs.Screen(g,r,c,_iAmSharing), "TRANSMITIR")
+            { ToolTipText = "Transmitir ou parar minha tela" };
+        _icShare.Click += (_,_) => {
+            if (_preview) { _previewSharing = !_previewSharing; SyncRoomButtons(); }
+            else ToggleScreenShare();
         };
-
-        _icMic = new ActionIcon((g, r, c, w) => Glyphs.Mic(g, r, c, _session?.Muted == true), "MIC")
-        { ToolTipText = "Mutar / desmutar o microfone" };
-        _icMic.Click += (_, _) => { ToggleMute(); SyncRoomButtons(); };
-
-        _icShare = new ActionIcon((g, r, c, w) => Glyphs.Screen(g, r, c, _iAmSharing), "TELA")
-        { ToolTipText = "Compartilhar tela ou janela (com som)" };
-        _icShare.Click += (_, _) => ToggleScreenShare();
-
-        _icRec = new ActionIcon(Glyphs.Record, "BUFFER")
-        { ToolTipText = "Liga o buffer que permite salvar o que ja passou" };
-        _icRec.Click += (_, _) => ToggleClipBuffer();
-
-        _icClip = new ActionIcon(Glyphs.Scissors, "CLIPE")
-        { ToolTipText = "Salvar os ultimos segundos" };
-        _icClip.Click += (_, _) => SaveClip();
-
-        _icDj = new ActionIcon(Glyphs.Music, "DJ")
-        { ToolTipText = "Abrir a escuta musical paralela a call" };
-        _icDj.Click += (_, _) => SelectView("dj");
-
-        _icCinema = new ActionIcon(Glyphs.Film, "CINEMA")
-        { ToolTipText = "Assistir um video junto, na qualidade original" };
-        _icCinema.Click += (_, _) => OpenCinema();
-
-        _icQuick = new ActionIcon(Glyphs.Gear, "AJUSTES")
-        { ToolTipText = "Microfone, saida e qualidade (sem sair da call)" };
-        _icQuick.Click += (_, _) => OpenQuickSettings();
-
-        _icLeave = new ActionIcon(Glyphs.Exit, "SAIR") { ToolTipText = "Sair da sala de voz" };
-        _icLeave.Click += (_, _) => LeaveVoice();
-
-        _lanBadge = new Label
-        {
-            Font = Pv.Label, ForeColor = Pv.Green, AutoSize = true, Text = "",
-            Margin = new Padding(14, 22, 0, 0), Visible = false,
-        };
-
-        foreach (var ic in new[] { _icMic, _icShare, _icRec, _icClip, _icDj, _icCinema, _icQuick, _icLeave })
-            ic!.Margin = new Padding(0, 0, 6, 0);
-        bar.Controls.AddRange(new Control[]
-            { _icMic, _icShare, _icRec, _icClip, _icDj, _icCinema, _icQuick, _icLeave, _lanBadge });
+        _icRec = new ActionIcon(Glyphs.Record, "BUFFER") { ToolTipText = "Ativar buffer de replay" };
+        _icRec.Click += (_,_) => ToggleClipBuffer();
+        _icClip = new ActionIcon(Glyphs.Scissors, "CLIPAR") { ToolTipText = "Salvar últimos segundos" };
+        _icClip.Click += (_,_) => SaveClip();
+        _lanBadge = new Label { Font = Pv.Label, ForeColor = Pv.BoneDim, AutoSize = true, Margin = new Padding(16,22,0,0) };
+        bar.Controls.AddRange(new Control[] { _icShare, _icRec, _icClip, _lanBadge });
         return bar;
     }
 
     private void OpenQuickSettings()
     {
-        if (_icQuick == null) return;
-        var pos = _icQuick.PointToScreen(new Point(_icQuick.Width / 2, 0));
+        if (_userPanel == null) return;
+        var pos = _userPanel.PointToScreen(new Point(_userPanel.Width / 2, 0));
         using var q = new QuickSettings(_cfg, pos);
         q.Applied += () =>
         {
@@ -1286,7 +1148,7 @@ public sealed class MainForm : Form
                 _screenSender.TargetFps = _cfg.ScreenFps;
                 _screenSender.MaxWidth = _cfg.ScreenMaxWidth;
             }
-            _screenAudio = !_djMode && _cfg.ShareAudioWithScreen;
+            _screenAudio = _cfg.ShareAudioWithScreen;
             SyncSystemAudio();
             // Dispositivo pode ter mudado: reabre o audio sem derrubar a sala.
             if (_voice != null && _session != null)
@@ -1348,6 +1210,7 @@ public sealed class MainForm : Form
         _tiles!.Controls.Clear();
         _myTile = new PeerTile { Nick = Nick, IsMe = true, Connected = true, Margin = new Padding(6) };
         _tiles.Controls.Add(_myTile);
+        SyncStageLayout();
 
         UpdateVoiceStrip();
 
@@ -1403,12 +1266,10 @@ public sealed class MainForm : Form
         _iAmSharing = false;
         try { _music?.Dispose(); } catch { }
         _music = null;
-        _djMode = false;
         try { _clips?.Dispose(); } catch { }
         _clips = null;
         _screens.Dispose();
         _focusedSharer = 0;
-        _nowPlaying = "";
 
         try { _voice?.Dispose(); } catch { }
         try { _session?.Dispose(); } catch { }
@@ -1418,8 +1279,10 @@ public sealed class MainForm : Form
         _mutedBeforeDeafen = false;
         _voiceRoomId = "";
         _voiceRoomName = "";
+        _previewSharing = false; _previewJam = false;
         _peerTiles.Clear();
         _myTile = null;
+        if (_tiles != null) { foreach (Control tile in _tiles.Controls.Cast<Control>().ToList()) tile.Dispose(); _tiles.Controls.Clear(); }
 
         UpdateVoiceStrip();
         _userPanel?.Invalidate(true);
@@ -1432,31 +1295,6 @@ public sealed class MainForm : Form
         if (_session == null) return;
 
         var peers = _session.Peers;
-        // Duas pessoas podem clicar em "transmitir" no mesmo intervalo de poll.
-        // Todos resolvem o empate pela mesma ordem, mantendo apenas um DJ no ar.
-        if (_session.DjHost)
-        {
-            var contender = peers.Where(p => p.DjHost)
-                .OrderBy(p => p.Nick, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(p => p.PeerId, StringComparer.Ordinal)
-                .FirstOrDefault();
-            if (contender != null)
-            {
-                int byNick = StringComparer.OrdinalIgnoreCase.Compare(contender.Nick, Nick);
-                bool remoteWins = byNick < 0 || (byNick == 0 &&
-                    StringComparer.Ordinal.Compare(contender.PeerId, _session.PeerId) < 0);
-                if (remoteWins)
-                {
-                    _djMode = false;
-                    _nowPlaying = "";
-                    _screenAudio = _iAmSharing && _cfg.ShareAudioWithScreen;
-                    _audioTarget = _screenAudioTarget;
-                    _session.SetDjState(true, false);
-                    SyncSystemAudio();
-                    Toast("SALA DJ", contender.Nick + " ficou no controle da musica.");
-                }
-            }
-        }
         SyncDjView();
         SyncRoomButtons();
         RebuildRail();
@@ -1474,8 +1312,8 @@ public sealed class MainForm : Form
             tile.Nick = p.Nick;
             tile.Muted = p.Muted;
             tile.Sharing = p.Sharing;
-            tile.DjJoined = p.DjJoined;
-            tile.DjHost = p.DjHost;
+            tile.JamJoined = p.JamJoined;
+            tile.Game = p.Game;
             tile.Connected = p.Connected;
             tile.Punching = p.Locked == null;
             // Clicar no tile de quem compartilha joga a tela dele no palco.
@@ -1507,13 +1345,15 @@ public sealed class MainForm : Form
             if (_focusedSharer == sid) _focusedSharer = 0;
         }
         UpdateRoomStatus();
+        SyncStageLayout();
+        RefreshMembers();
     }
 
-    private int _stageTick;
 
     private void TickStage()
     {
         if (_stage == null || _stage.IsDisposed || _session == null) return;
+        if ((_focusedSharer == 0 || !_session.Peers.Any(p => p.SenderId == _focusedSharer && p.Sharing)) && !_iAmSharing) _focusedSharer = _session.Peers.FirstOrDefault(p => p.Sharing)?.SenderId ?? 0;
         if (_focusedSharer != 0)
         {
             _stage.SetFrame(_screens.FrameOf(_focusedSharer));
@@ -1545,33 +1385,11 @@ public sealed class MainForm : Form
     {
         if (_voice == null || _session == null) return;
 
-        // "Tocando agora" a cada ~2s quando sou o DJ.
-        if (_djMode && _music != null && ++_stageTick % 20 == 0)
-        {
-            _ = NowPlaying.ReadAsync().ContinueWith(t =>
-            {
-                if (!t.IsCompletedSuccessfully || t.Result == _nowPlaying) return;
-                try
-                {
-                    BeginInvoke(() =>
-                    {
-                        if (!_djMode || _session == null) return;
-                        _nowPlaying = t.Result;
-                        _session.SetDjTrack(_nowPlaying);
-                        SyncRoomButtons();
-                        SyncDjView();
-                    });
-                }
-                catch { }
-            });
-        }
-
         if (_myTile != null && !_myTile.IsDisposed)
         {
             _myTile.Level = _session.Muted ? 0f : _voice.MyPeak;
             _myTile.Muted = _session.Muted;
-            _myTile.DjJoined = _session.DjJoined;
-            _myTile.DjHost = _session.DjHost;
+            _myTile.JamJoined = _session.JamJoined;
             _myTile.Invalidate();
         }
         foreach (var p in _session.Peers)
@@ -1587,6 +1405,7 @@ public sealed class MainForm : Form
             }
             tile.Invalidate();
         }
+        if (++_rosterTick % 10 == 0) RefreshMembers();
     }
 
     private void UpdateRoomStatus()
@@ -1600,13 +1419,13 @@ public sealed class MainForm : Form
                  : punching == 0 ? $"{connected + 1} na call · "
                     + (_session.TailscaleOnly ? "Tailscale P2P" : "conectado direto (P2P)")
                  : $"{connected + 1} na call · {punching} conectando...";
-        int djListeners = peers.Count(p => p.DjJoined) + (_session.DjJoined ? 1 : 0);
-        if (djListeners > 0) s += $" · {djListeners} na escuta DJ";
+        int djListeners = peers.Count(p => p.JamJoined) + (_session.JamJoined ? 1 : 0);
+        if (djListeners > 0) s += $" · {djListeners} na Jam do Spotify";
         if (!_session.TailscaleOnly && _session.PublicEndpoint == null)
             s += " · sem STUN (somente rede local)";
         if (_session.TailscaleOnly && ConnectionPolicy.TailnetAddresses().Count == 0)
             s += " · Tailscale desconectado";
-        _roomStatus.Text = s;
+        _roomStatus.Text = s + (_iAmSharing || peers.Any(p => p.Sharing) ? " · AO VIVO" : " · sem transmissão ativa");
     }
 
     private void ToggleMute()
@@ -1687,7 +1506,7 @@ public sealed class MainForm : Form
             _screenSender = null;
             _iAmSharing = false;
             _session.Sharing = false;
-            SyncSystemAudio();      // sem tela, o som do sistema so segue se for DJ
+            SyncSystemAudio();      // áudio do sistema acompanha apenas a transmissão
             SyncRoomButtons();
             return;
         }
@@ -1727,8 +1546,6 @@ public sealed class MainForm : Form
             _audioTarget = chosenAudio;
             // Tela sem som e tela pela metade: o pessoal veria o jogo mudo.
             _screenAudio = chosenAudio.Kind != AudioCaptureKind.Silent;
-            if (_djMode && _cfg.ShareAudioWithScreen)
-                Toast("SALA DJ", "O audio da tela ficou restrito a quem entrou na escuta DJ.");
             SyncSystemAudio();
             SyncRoomButtons();
         }
@@ -1809,6 +1626,8 @@ public sealed class MainForm : Form
 
     private async void SaveClip()
     {
+        if (!_iAmSharing && _session?.Peers.Any(p => p.Sharing) != true)
+        { ShowBanner("Sem transmissão ativa para clipar."); return; }
         if (_clips == null || !_clips.Active)
         {
             ShowBanner("Liga o GRAVAR primeiro — o clipe sai do que ficou no buffer.");
@@ -1833,123 +1652,52 @@ public sealed class MainForm : Form
         catch (Exception ex) { Log.Write("abrir pasta falhou: " + ex.Message); }
     }
 
-    // ─── MODO DJ ─────────────────────────────────────────────────────────────
+    // ─── JAM DO SPOTIFY ─────────────────────────────────────────────────────
 
-    private bool _djMode;
     private bool _screenAudio;
     private AudioCaptureTarget _audioTarget = AudioCaptureTarget.System;
     private AudioCaptureTarget _screenAudioTarget = AudioCaptureTarget.System;
 
     private void ToggleDjMembership()
     {
-        if (_session == null) { ShowBanner("Entra numa sala de voz primeiro."); return; }
-
-        if (_session.DjJoined)
-        {
-            _djMode = false;
-            _nowPlaying = "";
-            _screenAudio = _iAmSharing && _cfg.ShareAudioWithScreen;
-            _audioTarget = _screenAudioTarget;
-            _session.SetDjState(false, false);
-            _voice?.ClearMusicStreams();
-            Toast("SALA DJ", "Voce saiu da escuta. A call continua normal.");
+        if (_preview) { if (_voiceRoomId.Length == 0) return; _previewJam = !_previewJam; ConfigurePreviewRoom(); SyncDjView(); return; }
+        if (_session == null) { ShowBanner("Entre numa sala de voz primeiro."); return; }
+        if (_session.JamJoined) {
+            _session.SetJam(false, _session.JamLink);
+            Toast("JAM", "Presença removida. Para parar a música, saia também no Spotify.");
+        } else {
+            string link = _session.JamLink;
+            if (link.Length == 0) link = _session.Peers.Select(p => p.JamLink).FirstOrDefault(l => SpotifyJam.TryInvite(l, out _)) ?? "";
+            if (!SpotifyJam.TryInvite(link, out var uri)) { ConfigureJamLink(); return; }
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri!.AbsoluteUri) { UseShellExecute = true }); }
+            catch (Exception ex) { ShowBanner("Não consegui abrir o Spotify: " + ex.Message); return; }
+            if (MessageBox.Show(this, "Entre na Jam pelo Spotify. Já entrou? Sua presença aqui é confirmada por você.",
+                "JAM DO SPOTIFY", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                _session.SetJam(true, link);
         }
-        else
-        {
-            _session.SetDjState(true, false);
-            Toast("SALA DJ", "Voce entrou na escuta sem sair da call.");
-        }
-        SyncSystemAudio();
-        SyncRoomButtons();
         SyncDjView();
-        RebuildRail();
-        UpdateRoomStatus();
+        if (_myTile != null) { _myTile.JamJoined = _session.JamJoined; _myTile.Invalidate(); }
     }
 
-    private void ToggleDjHost()
-    {
-        if (_session == null) { ShowBanner("Entra numa sala de voz primeiro."); return; }
-        if (!_session.DjJoined) { ShowBanner("Entra na escuta DJ primeiro."); return; }
-
-        if (_session.DjHost)
-        {
-            _djMode = false;
-            _nowPlaying = "";
-            _screenAudio = _iAmSharing && _cfg.ShareAudioWithScreen;
-            _audioTarget = _screenAudioTarget;
-            _session.SetDjState(true, false);
-            Toast("SALA DJ", "Transmissao encerrada. Voce continua ouvindo a call.");
-        }
-        else
-        {
-            var current = _session.Peers.FirstOrDefault(p => p.DjHost);
-            if (current != null)
-            {
-                ShowBanner(current.Nick + " ja esta transmitindo musica nesta sala.");
-                return;
-            }
-            var djSource = ChooseAudioTarget(null, "FONTE DA ESCUTA DJ");
-            if (djSource == null || djSource.Kind == AudioCaptureKind.Silent)
-            {
-                ShowBanner("Escolha um aplicativo ou o áudio do PC para ser o DJ.");
-                return;
-            }
-            _audioTarget = djSource;
-            _djMode = true;
-            if (_iAmSharing && _screenAudio)
-            {
-                _screenAudio = false;
-                Toast("SALA DJ", "O audio do sistema agora vai somente para a escuta DJ.");
-            }
-            _session.SetDjState(true, true, _nowPlaying);
-        }
-
-        SyncSystemAudio();
-        SyncRoomButtons();
-        SyncDjView();
-        RebuildRail();
-        UpdateRoomStatus();
-    }
-
-    /// <summary>
-    /// Liga/desliga a captura do som do sistema. Existe UMA so, compartilhada entre
-    /// "tela com audio" e "modo DJ" — abrir duas capturas do mesmo dispositivo
-    /// duplicaria o audio na sala.
-    /// </summary>
     private void SyncSystemAudio()
     {
-        bool screenForEveryone = _screenAudio && _iAmSharing;
-        bool djForListeners = _djMode && _session?.DjHost == true;
-        bool querem = djForListeners || screenForEveryone;
-        bool djOnly = djForListeners && !screenForEveryone;
-
-        if (!querem)
+        if (!_screenAudio || !_iAmSharing)
         {
-            if (_music != null) { _music.Dispose(); _music = null; Log.Write("som do sistema: parou"); }
+            _music?.Dispose(); _music = null;
             return;
         }
-        if (_music != null)
-        {
-            _music.DjOnly = djOnly;
-            return;   // ja rodando; so muda o publico
-        }
-
+        if (_music != null) return;
         try
         {
-            _music = new MusicShare(_session!) { DjOnly = djOnly };
+            _music = new MusicShare(_session!);
             _music.Start(_audioTarget);
         }
         catch (Exception ex)
         {
-            Log.Write("som do sistema falhou: " + ex.Message);
-            ShowBanner("Nao consegui capturar o audio do sistema: " + ex.Message);
-            _music = null;
-            _djMode = false;
-            _session?.SetDjState(_session.DjJoined, false);
+            _music?.Dispose(); _music = null;
+            ShowBanner("Não consegui capturar o áudio da transmissão: " + ex.Message);
         }
     }
-
-    // ─── CINEMA ──────────────────────────────────────────────────────────────
 
     private void OpenCinema()
     {
@@ -1986,51 +1734,20 @@ public sealed class MainForm : Form
 
     private void SyncRoomButtons()
     {
-        if (_icMic == null) return;
-
-        bool muted = _session?.Muted == true || _voice == null;
-        _icMic.Alert = muted;
-        _icMic.Caption = muted ? "MUDO" : "MIC";
-        _icMic.Invalidate();
-
-        _icShare!.Active = _iAmSharing;
-        _icShare.Caption = _iAmSharing ? "NA TELA" : "TELA";
-        _icShare.Invalidate();
-
+        SyncStageLayout();
+        UpdateVoiceStrip();
+        if (_icShare == null || _icRec == null || _icClip == null) return;
+        bool sharing = _iAmSharing || _previewSharing;
+        _icShare.Active = sharing;
+        _icShare.Caption = sharing ? "PARAR TELA" : "TRANSMITIR";
         bool buffering = _clips?.Active == true;
-        _icRec!.Alert = buffering;
-        _icRec.Caption = buffering ? "GRAVANDO" : "BUFFER";
-        _icRec.Invalidate();
-
-        // A tecla aparece no proprio icone — e assim que o atalho e descoberto.
-        var (hkMods, hkKey) = HotkeyBinding.Parse(_cfg.ClipHotkey, HotkeyBinding.Mods.None, Keys.F9);
-        _icClip!.Enabled = buffering;
-        _icClip.Badge = _clipHotkey.IsRegistered ? HotkeyBinding.Format(hkMods, hkKey) : "";
-        _icClip.Invalidate();
-
-        bool djJoined = _session?.DjJoined == true;
-        bool djHosting = _session?.DjHost == true;
-        _icDj!.Active = djJoined;
-        _icDj.Caption = djHosting ? "NO AR" : djJoined ? "OUVINDO" : "DJ";
-        _icDj.Invalidate();
-
-        if (_djLabel != null)
-        {
-            var remoteHost = _session?.Peers.FirstOrDefault(p => p.DjHost);
-            string track = djHosting ? _nowPlaying : remoteHost?.DjTrack ?? "";
-            bool show = djJoined && track.Length > 0;
-            _djLabel.Text = show ? "SALA DJ · TOCANDO AGORA: " + track.ToUpperInvariant() : "";
-            _djLabel.Visible = show;
-        }
-
-        // Selo de sessao local: avisa que a qualidade esta liberada.
-        if (_lanBadge != null)
-        {
-            bool tailnet = _session?.TailscaleOnly == true;
-            bool lan = !tailnet && _screenSender?.LanSession == true;
-            _lanBadge.Text = tailnet ? "TAILSCALE · REDE PRIVADA" : lan ? "LAN · QUALIDADE LIBERADA" : "";
-            _lanBadge.Visible = tailnet || lan;
-        }
+        _icRec.Active = buffering;
+        _icRec.Caption = buffering ? "BUFFER ON" : "BUFFER OFF";
+        _icClip.Enabled = buffering;
+        _icClip.Caption = buffering ? "CLIPAR" : "SEM BUFFER";
+        _icClip.ToolTipText = buffering ? "Salvar últimos segundos" : "Ative o buffer para clipar";
+        if (_lanBadge != null) _lanBadge.Text = buffering ? "REPLAY PRONTO" : "Ative o buffer para clipar";
+        _icShare.Invalidate(); _icRec.Invalidate(); _icClip.Invalidate();
     }
 
     private void StopTimers()
@@ -2099,6 +1816,8 @@ public sealed class MainForm : Form
     /// </summary>
     private async void OnClipHotkey()
     {
+        if (!_iAmSharing && _session?.Peers.Any(p => p.Sharing) != true)
+        { Toast("SEM TRANSMISSÃO", "Sem transmissão ativa para clipar."); return; }
         if (_clips == null || !_clips.Active)
         {
             Chime.Fail();
@@ -2164,13 +1883,46 @@ public sealed class MainForm : Form
         Activate();
     }
 
+    // Deterministic visual QA of the actual WinForms controls; preview never joins a network.
+    internal void RenderPreviewChecks(string directory)
+    {
+        if (!_preview) throw new InvalidOperationException("Visual checks require --preview.");
+        Directory.CreateDirectory(directory);
+        int failures = 0;
+        foreach (var size in new[] { new Size(1440,900), new Size(1280,720) })
+        {
+            ClientSize = size;
+            foreach (string scene in new[] { "acampamento", "call", "jam", "transmissao" })
+            {
+                _previewSharing = scene == "transmissao";
+                _previewJam = scene == "jam";
+                _voiceRoomId = scene == "acampamento" ? "" : "arena";
+                _voiceRoomName = _voiceRoomId.Length == 0 ? "" : "ARENA PRINCIPAL";
+                SelectView(scene == "acampamento" ? "home" : "room:arena");
+                PerformLayout();
+                SyncStageLayout();
+                if (scene != "acampamento") {
+                    bool live = scene == "transmissao";
+                    if (_stage!.Visible != live || _stageActions!.Visible != live || _inviteTile!.Visible == live) failures++;
+                    if (_tiles!.Controls.OfType<PeerTile>().Count() != 5) failures++;
+                }
+                using var bitmap = new Bitmap(Width, Height);
+                DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size));
+                bitmap.Save(Path.Combine(directory, scene + "-" + size.Width + ".png"));
+            }
+        }
+        File.WriteAllText(Path.Combine(directory,"result.txt"), failures == 0 ? "PASS: 8 layouts; stage/grid/actions/invite invariants." : "FAIL: " + failures);
+        _reallyClosing = true;
+        Close();
+    }
+
     private bool _reallyClosing;
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         // Fechar com uma call em andamento so minimiza — derrubar a voz por engano
         // no X e o tipo de coisa que irrita todo mundo na sala.
-        if (!_reallyClosing && _cfg.TrayOnClose && e.CloseReason == CloseReason.UserClosing && _me != null)
+        if (!_preview && !_reallyClosing && _cfg.TrayOnClose && e.CloseReason == CloseReason.UserClosing && _me != null)
         {
             e.Cancel = true;
             EnsureTray();
@@ -2183,7 +1935,7 @@ public sealed class MainForm : Form
         _clipHotkey.Unregister();
         try { _toast?.Dispose(); } catch { }
         StopTimers();
-        try { _chat?.ClearPresenceAsync().Wait(1200); } catch { }
+        if (!_preview) try { _chat?.ClearPresenceAsync().Wait(1200); } catch { }
         // Libera também a captura de tela, o process loopback e o buffer de replay;
         // fechar a janela não pode deixar um worker de áudio preso em segundo plano.
         try { LeaveVoice(); } catch (Exception ex) { Log.Write("encerramento da call: " + ex.Message); }

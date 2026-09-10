@@ -56,10 +56,10 @@ public sealed class VoiceEngine : IDisposable
     /// <summary>PCM do meu microfone (o gravador de clipe escuta aqui).</summary>
     public event Action<byte[], int, int>? MicPcm;
 
-    /// <summary>PCM do que EU ouço — vozes dos outros + musica do DJ, ja mixado.</summary>
+    /// <summary>PCM do que EU ouço — vozes dos outros + áudio compartilhado, já mixado.</summary>
     public event Action<byte[], int, int>? HeardPcm;
 
-    /// <summary>Volume da musica do DJ (0..2), separado do volume das vozes.</summary>
+    /// <summary>Volume do áudio compartilhado (0..2), separado do volume das vozes.</summary>
     public float MusicVolume
     {
         get => _musicVolume;
@@ -95,7 +95,7 @@ public sealed class VoiceEngine : IDisposable
     private bool _deafened;
 
     /// <summary>
-    /// Bit que separa a musica da voz da MESMA pessoa. O DJ manda dois fluxos ao
+    /// Bit que separa o áudio compartilhado da voz da MESMA pessoa. A tela manda dois fluxos ao
     /// mesmo tempo; sem isso eles cairiam no mesmo jitter buffer e picotariam.
     /// </summary>
     private const uint MusicFlag = 0x8000_0000;
@@ -310,7 +310,7 @@ public sealed class VoiceEngine : IDisposable
     }
 
     /// <summary>
-    /// Remove apenas os fluxos de musica. Usado ao sair da escuta DJ sem tocar na
+    /// Remove apenas os fluxos de áudio compartilhado. Usado ao desligar a transmissão sem tocar na
     /// voz dos mesmos participantes, que continua ativa na sala principal.
     /// </summary>
     public void ClearMusicStreams()

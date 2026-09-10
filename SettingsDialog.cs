@@ -56,8 +56,8 @@ public sealed class SettingsDialog : Form
 
     private void UpdateMusicLabel()
         => _musicLabel.Text = _music.Value == 0
-            ? "musica do DJ desligada"
-            : $"musica do DJ em {_music.Value}% (a voz nao muda)";
+            ? "áudio da transmissão desligado"
+            : $"áudio da transmissão em {_music.Value}% (a voz não muda)";
 
     private void UpdateSecsLabel()
         => _secsLabel.Text = $"o clipe salva os ultimos {_secs.Value} segundos";
@@ -207,7 +207,7 @@ public sealed class SettingsDialog : Form
             Size = new Size(400, 44),
         };
 
-        var lblMusic = Section("VOLUME DA MUSICA DO DJ", new Point(24, 990));
+        var lblMusic = Section("VOLUME DO ÁUDIO DA TRANSMISSÃO", new Point(24, 990));
         _music.Location = new Point(24, 1008);
         _music.Size = new Size(412, 30);
         _music.Minimum = 0; _music.Maximum = 200;

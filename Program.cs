@@ -31,7 +31,14 @@ internal static class Program
             Log.Write("EXCECAO NA UI: " + e.Exception);
 
         Log.Write("=== Primicord iniciando ===");
-        try { Application.Run(new MainForm(preview)); }
+        try
+        {
+            var form = new MainForm(preview);
+            int render = Array.IndexOf(args, "--render-preview");
+            if (preview && render >= 0 && render + 1 < args.Length)
+                form.Shown += (_,_) => form.BeginInvoke(() => form.RenderPreviewChecks(Path.GetFullPath(args[render + 1])));
+            Application.Run(form);
+        }
         finally
         {
             Log.Write("=== Primicord encerrado ===");

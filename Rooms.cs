@@ -10,6 +10,7 @@ public sealed class RoomInfo
     public readonly List<string> Occupants = new();
     public int Count => Occupants.Count;
     public int LiveStreams;
+    public int JamCount;
 }
 
 /// <summary>Lista/cria/apaga salas no Firestore — o "lobby".</summary>
@@ -45,6 +46,7 @@ public sealed class RoomDirectory
                     {
                         room.Occupants.Add(Firestore.Str(pf, "nick", "?"));
                         if (Firestore.Flag(pf, "sharing")) room.LiveStreams++;
+                        if (Firestore.Flag(pf, "jamJoined")) room.JamCount++;
                     }
             }
             catch (Exception ex) { Log.Write($"peers da sala {id}: " + ex.Message); }
@@ -138,7 +140,7 @@ public sealed class Config
     /// <summary>Usar o tema (cor) que o jogador escolheu no site do Primitivao.</summary>
     public bool UseSiteTheme = false;
 
-    /// <summary>Volume da musica do DJ (0..200%), separado do volume das vozes.</summary>
+    /// <summary>Volume do áudio compartilhado junto da tela (0..200%).</summary>
     public int MusicVolume = 70;
 
     /// <summary>Minimizar pra bandeja em vez de fechar.</summary>
