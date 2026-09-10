@@ -45,10 +45,24 @@ public sealed class RailItem : Control
         Height = 32;
         Cursor = Cursors.Hand;
         BackColor = Pv.Char2;   // MESMA cor do rail: senao aparece emenda vertical
+        TabStop = true;
+        AccessibleRole = AccessibleRole.PushButton;
+        AccessibleName = text;
     }
 
     protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
     protected override void OnMouseLeave(EventArgs e) { _hover = false; Invalidate(); base.OnMouseLeave(e); }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (e.KeyCode is Keys.Enter or Keys.Space)
+        {
+            e.SuppressKeyPress = true;
+            OnClick(EventArgs.Empty);
+            return;
+        }
+        base.OnKeyDown(e);
+    }
 
     protected override void OnPaint(PaintEventArgs e)
     {

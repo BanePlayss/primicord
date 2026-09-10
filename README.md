@@ -2,7 +2,17 @@
 
 O app de comunidade dos primitivos — cliente nativo de Windows com uma interface
 inspirada na organização do Discord e identidade visual do escudo Primitivão.
-Versão publicada: **0.8.5**.
+Versão publicada: **0.9.0**.
+
+## 0.9.0 — UX da call
+
+- avisos de conexão e atalho somem sozinhos e podem ser dispensados com um clique;
+- transmitir fica desabilitado fora de uma sala, com o estado explicado no perfil;
+- a barra de transmissão informa ao vivo se a tela, o FPS e o buffer de clipes estão prontos;
+- a Jam mostra cada participante em uma linha, com contagem e indicação clara de que fila/play
+  continuam no Spotify;
+- rail, ações de transmissão e botões principais aceitam teclado e expõem rótulos de acessibilidade;
+- a prévia visual valida também os estados de perfil e transmissão, além da composição da sala.
 
 ## O que já funciona
 
@@ -45,7 +55,7 @@ Para revisar o shell sem login, Firestore, microfone ou Tailscale:
 O modo é explicitamente rotulado como prévia e não publica presença nem usa dados
 de servidores reais.
 
-A prévia visual da 0.8.5 também pode renderizar Acampamento, call sem
+A prévia visual da 0.9.0 também pode renderizar Acampamento, call sem
 transmissão, Jam confirmada e transmissão ativa em 1440x900 e 1280x720 usando
 o argumento --preview --render-preview <pasta>.
 

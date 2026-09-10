@@ -49,6 +49,9 @@ public sealed class ActionIcon : Control
         Size = new Size(66, 58);
         Cursor = Cursors.Hand;
         BackColor = Pv.Charcoal;
+        TabStop = true;
+        AccessibleRole = AccessibleRole.PushButton;
+        AccessibleName = caption;
     }
 
     public void SetPainter(Painter p) { _paint = p; Invalidate(); }
@@ -57,6 +60,17 @@ public sealed class ActionIcon : Control
     protected override void OnMouseLeave(EventArgs e) { _hover = false; _down = false; Invalidate(); base.OnMouseLeave(e); }
     protected override void OnMouseDown(MouseEventArgs e) { _down = true; Invalidate(); base.OnMouseDown(e); }
     protected override void OnMouseUp(MouseEventArgs e) { _down = false; Invalidate(); base.OnMouseUp(e); }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (e.KeyCode is Keys.Enter or Keys.Space)
+        {
+            e.SuppressKeyPress = true;
+            if (Enabled) OnClick(EventArgs.Empty);
+            return;
+        }
+        base.OnKeyDown(e);
+    }
 
     protected override void OnPaint(PaintEventArgs e)
     {

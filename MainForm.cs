@@ -49,6 +49,7 @@ public sealed class MainForm : Form
         Dock = DockStyle.Top, Height = 0, BackColor = Pv.Red, ForeColor = Pv.Bone,
         TextAlign = ContentAlignment.MiddleCenter, Font = Pv.Body, Visible = false,
     };
+    private System.Windows.Forms.Timer? _bannerTimer;
 
     private Panel? _railList, _voiceStrip, _userPanel, _membersList, _membersPanel, _contentHost;
     private ChatView? _chatView;
@@ -101,7 +102,7 @@ public sealed class MainForm : Form
         _dir = new RoomDirectory(_fs);
         _cfg = Config.Load();
 
-        Text = "PRIMICORD · 0.8.5";
+        Text = "PRIMICORD · 0.9.0";
         try
         {
             string? exe = Environment.ProcessPath;
@@ -146,8 +147,30 @@ public sealed class MainForm : Form
     {
         if (InvokeRequired) { BeginInvoke(() => ShowBanner(msg)); return; }
         _banner.Text = msg;
+        _banner.BackColor = msg.Contains("falhou", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("não consegui", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("nao consegui", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("recusou", StringComparison.OrdinalIgnoreCase)
+            ? Pv.Red : Pv.OrangeDim;
         _banner.Height = 42;
         _banner.Visible = true;
+        _banner.Cursor = Cursors.Hand;
+        _banner.Click -= DismissBanner;
+        _banner.Click += DismissBanner;
+        _bannerTimer?.Stop();
+        _bannerTimer?.Dispose();
+        _bannerTimer = new System.Windows.Forms.Timer { Interval = 8000 };
+        _bannerTimer.Tick += (_, _) => DismissBanner(this, EventArgs.Empty);
+        _bannerTimer.Start();
+    }
+
+    private void DismissBanner(object? sender, EventArgs e)
+    {
+        _bannerTimer?.Stop();
+        _bannerTimer?.Dispose();
+        _bannerTimer = null;
+        _banner.Visible = false;
+        _banner.Height = 0;
     }
 
     private static Label SectionLabel(string text) => new()
@@ -477,10 +500,13 @@ public sealed class MainForm : Form
         p.Paint += (_, e) =>
         {
             Glyphs.Avatar(e.Graphics, new Rectangle(12, 12, 34, 34), Nick, Pv.Orange, Pv.Bone);
+            using (var dot = new SolidBrush(_voiceRoomId.Length > 0 ? Pv.Green : Pv.Orange))
+                e.Graphics.FillEllipse(dot, 39, 39, 8, 8);
             using var b = new SolidBrush(Pv.Bone);
             e.Graphics.DrawString(Nick, Pv.BodyBold, b, 54, 12);
             using var muted = new SolidBrush(Pv.BoneDim);
-            e.Graphics.DrawString(_voiceRoomId.Length > 0 ? "na call" : "no acampamento", Pv.Label, muted, 54, 32);
+            e.Graphics.DrawString(_voiceRoomId.Length > 0 ? "na call · " + _voiceRoomName : "fora da call · escolha sala",
+                Pv.Label, muted, 54, 32);
         };
         var mic = new GlyphButton((g,r,c,w) => Glyphs.Mic(g,r,c,_session?.Muted == true))
             { Size = new Size(44,44), Location = new Point(12,54), ToolTipText = "Microfone · entre na call para usar" };
@@ -492,12 +518,14 @@ public sealed class MainForm : Form
             { Size = new Size(44,44), Location = new Point(116,54), ToolTipText = "Configurações" };
         gear.Click += (_,_) => OpenSettings();
         _profileShare = new PrimButton("TRANSMITIR") { Location = new Point(10,108), Size = new Size(110,44) };
+        _profileShare.AccessibleName = "Transmitir tela";
         _profileShare.Click += (_,_) => {
             if (_preview) { _previewSharing = !_previewSharing; SelectView("room:" + _voiceRoomId); }
             else if (_session == null) ShowBanner("Entre em uma sala para transmitir.");
             else { SelectView("room:" + _voiceRoomId); ToggleScreenShare(); }
         };
         _profileLeave = new PrimButton("SAIR", PrimButton.Style.Ghost) { Location = new Point(124,108), Size = new Size(50,44) };
+        _profileLeave.AccessibleName = "Sair da sala de voz";
         _profileLeave.Click += (_,_) => { LeaveVoice(); SelectView("home"); };
         var menu = new ContextMenuStrip();
         menu.Items.Add("O que estou jogando", null, (_,_) => {
@@ -534,7 +562,12 @@ public sealed class MainForm : Form
         if (_voiceStrip != null) { _voiceStrip.Visible = false; _voiceStrip.Height = 0; }
         _userPanel?.Invalidate(true);
         if (_profileLeave != null) _profileLeave.Visible = _voiceRoomId.Length > 0;
-        if (_profileShare != null) _profileShare.Text = _iAmSharing || _previewSharing ? "PARAR TELA" : "TRANSMITIR";
+        if (_profileShare != null)
+        {
+            _profileShare.Enabled = _voiceRoomId.Length > 0;
+            _profileShare.Text = _iAmSharing || _previewSharing ? "PARAR TELA" : "TRANSMITIR";
+            _profileShare.Invalidate();
+        }
         SyncDjView();
     }
 
@@ -1131,6 +1164,7 @@ public sealed class MainForm : Form
         _icClip = new ActionIcon(Glyphs.Scissors, "CLIPAR") { ToolTipText = "Salvar últimos segundos" };
         _icClip.Click += (_,_) => SaveClip();
         _lanBadge = new Label { Font = Pv.Label, ForeColor = Pv.BoneDim, AutoSize = true, Margin = new Padding(16,22,0,0) };
+        _lanBadge.AccessibleName = "Status da transmissão e do buffer de clipes";
         bar.Controls.AddRange(new Control[] { _icShare, _icRec, _icClip, _lanBadge });
         return bar;
     }
@@ -1746,7 +1780,13 @@ public sealed class MainForm : Form
         _icClip.Enabled = buffering;
         _icClip.Caption = buffering ? "CLIPAR" : "SEM BUFFER";
         _icClip.ToolTipText = buffering ? "Salvar últimos segundos" : "Ative o buffer para clipar";
-        if (_lanBadge != null) _lanBadge.Text = buffering ? "REPLAY PRONTO" : "Ative o buffer para clipar";
+        if (_lanBadge != null)
+        {
+            _lanBadge.Text = sharing ? $"VOCÊ TRANSMITE · {_cfg.ScreenFps} FPS" : "TRANSMISSÃO AO VIVO";
+            if (buffering) _lanBadge.Text += " · CLIPE PRONTO";
+            else _lanBadge.Text += " · BUFFER DESLIGADO";
+            _lanBadge.ForeColor = buffering ? Pv.Green : Pv.BoneDim;
+        }
         _icShare.Invalidate(); _icRec.Invalidate(); _icClip.Invalidate();
     }
 
@@ -1794,7 +1834,7 @@ public sealed class MainForm : Form
     /// <summary>(Re)registra o atalho lido do config. Avisa se o Windows recusar.</summary>
     private void ApplyClipHotkey()
     {
-        if (!IsHandleCreated) return;
+        if (_preview || !IsHandleCreated) return;
         var (mods, key) = HotkeyBinding.Parse(_cfg.ClipHotkey, HotkeyBinding.Mods.None, Keys.F9);
         if (!_clipHotkey.Register(Handle, mods, key))
         {
@@ -1906,12 +1946,16 @@ public sealed class MainForm : Form
                     if (_stage!.Visible != live || _stageActions!.Visible != live || _inviteTile!.Visible == live) failures++;
                     if (_tiles!.Controls.OfType<PeerTile>().Count() != 5) failures++;
                 }
+                bool inCall = scene != "acampamento";
+                if (_profileShare == null || _profileShare.Enabled != inCall) failures++;
                 using var bitmap = new Bitmap(Width, Height);
                 DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size));
                 bitmap.Save(Path.Combine(directory, scene + "-" + size.Width + ".png"));
             }
         }
-        File.WriteAllText(Path.Combine(directory,"result.txt"), failures == 0 ? "PASS: 8 layouts; stage/grid/actions/invite invariants." : "FAIL: " + failures);
+        File.WriteAllText(Path.Combine(directory,"result.txt"), failures == 0
+            ? "PASS: 8 layouts; stage/grid/actions/invite/profile UX invariants."
+            : "FAIL: " + failures);
         _reallyClosing = true;
         Close();
     }

@@ -20,6 +20,7 @@ public static class SpotifyJam
 public sealed class JamPanel : Panel
 {
     private readonly Label _people = new() { Dock = DockStyle.Fill, Font = Pv.Body, ForeColor = Pv.BoneDim };
+    private readonly Label _title = new() { Dock = DockStyle.Top, Height = 30, Font = Pv.BodyBold, ForeColor = Pv.Bone };
     private readonly PrimButton _join = new("ENTRAR NA JAM") { Dock = DockStyle.Bottom, Height = 44 };
     private readonly PrimButton _link = new("COMPARTILHAR CONVITE", PrimButton.Style.Ghost) { Dock = DockStyle.Bottom, Height = 38 };
     public event Action? JoinRequested;
@@ -28,12 +29,10 @@ public sealed class JamPanel : Panel
     public JamPanel()
     {
         Height = 242; Padding = new Padding(16); BackColor = Pv.SurfaceLow;
-        var title = new Label { Text = "♪  JAM DO SPOTIFY", Font = Pv.BodyBold,
-            ForeColor = Pv.Bone, Dock = DockStyle.Top, Height = 30 };
         Controls.Add(_people);
         Controls.Add(_link);
         Controls.Add(_join);
-        Controls.Add(title);
+        Controls.Add(_title);
         _join.Click += (_,_) => JoinRequested?.Invoke();
         _link.Click += (_,_) => LinkRequested?.Invoke();
         Paint += (_,e) => { using var p = new Pen(Pv.OrangeDim); e.Graphics.DrawLine(p,0,0,Width,0); };
@@ -41,9 +40,13 @@ public sealed class JamPanel : Panel
 
     public void Configure(bool inVoice, bool joined, IReadOnlyList<string> people)
     {
-        _people.Text = !inVoice ? "Entre em uma call para participar."
+        _title.Text = !inVoice ? "♪  JAM DO SPOTIFY · ENTRE NA CALL"
+            : people.Count == 0 ? "♪  JAM DO SPOTIFY · VAZIA"
+            : $"♪  JAM DO SPOTIFY · {people.Count} OUVINDO";
+        _people.Text = !inVoice ? "Entre em uma sala de voz para ouvir junto."
             : people.Count == 0 ? "Ninguém na jam ainda. Bora abrir?\n\nFila e play ficam no Spotify."
-            : string.Join(" · ", people) + "\n\nPresença confirmada pelos participantes.\nFila e play no Spotify.";
+            : string.Join("\n", people.Select(p => "♪  " + p))
+              + "\n\nFila e play continuam no Spotify.";
         _join.Enabled = inVoice;
         _join.Text = !inVoice ? "ENTRE EM UMA CALL" : joined ? "SAIR DA JAM" : "ENTRAR NA JAM";
         _link.Enabled = inVoice;
