@@ -21,8 +21,9 @@ namespace Primicord;
 /// A cada ~3s (ou quando entra gente nova) vai um quadro COMPLETO, pra consertar
 /// bloco que tenha se perdido no caminho e pra quem acabou de chegar ver a tela toda.
 ///
-/// Continua sendo JPEG e nao H.264 porque H.264 exigiria Media Foundation por COM ou
-/// FFmpeg junto do exe. O ganho do delta cobre boa parte da diferenca.
+/// Em modo de nitidez máxima, blocos estáticos usam PNG sem perda e blocos em
+/// movimento usam JPEG 100 para não transformar texto em borrão. O delta continua
+/// sendo necessário para que esse ganho não exploda a banda a cada quadro.
 /// </remarks>
 public sealed class ScreenSender : IDisposable
 {
@@ -58,6 +59,8 @@ public sealed class ScreenSender : IDisposable
     public int TotalUploadBudget { get; set; } = 900_000;
     public int TargetFps { get; set; } = 60;
     public int MaxWidth { get; set; } = 1920;
+    /// <summary>Não reduzir resolução automaticamente e priorizar nitidez.</summary>
+    public bool MaxQuality { get; set; } = true;
     public string CaptureBackend => _target.UsingGpu ? "DXGI Desktop Duplication" : "GDI window compatibility";
     public string? LastError { get; private set; }
 
@@ -77,13 +80,15 @@ public sealed class ScreenSender : IDisposable
     private volatile bool _running;
 
     private readonly ImageCodecInfo _jpegCodec;
-    private long _quality = 80;
+    private long _quality = 100;
     private volatile bool _sceneBusy;
 
     /// <summary>Liga a producao de quadros inteiros (custa um encode a mais) pro clipe.</summary>
     public bool NeedFullFrames { get; set; }
 
     public event Action<byte[], int, int>? FullFrameProduced;
+    /// <summary>Prévia local desacoplada da rede, limitada a alguns quadros por segundo.</summary>
+    public event Action<Bitmap>? PreviewFrameProduced;
 
     public int Fps { get; private set; }
     public int KbPerSecond { get; private set; }
@@ -152,14 +157,15 @@ public sealed class ScreenSender : IDisposable
         var sw = System.Diagnostics.Stopwatch.StartNew();
         long lastStat = Environment.TickCount64;
         long nextFullFrameAt = 0;
+        long nextPreviewAt = 0;
         int framesSec = 0, bytesSec = 0;
         int overBudgetStreak = 0, underBudgetStreak = 0;
 
         void Rebuild(int targetW, int targetH, int ladderIdx)
         {
             int w = targetW, h = targetH;
-            int maxW = WidthLadder[ladderIdx];
-            if (MaxWidth > 0) maxW = maxW == 0 ? MaxWidth : Math.Min(maxW, MaxWidth);
+            int maxW = MaxQuality ? 0 : WidthLadder[ladderIdx];
+            if (!MaxQuality && MaxWidth > 0) maxW = maxW == 0 ? MaxWidth : Math.Min(maxW, MaxWidth);
             // 0 = nativo (sem reduzir). Tambem nao amplia: se a fonte ja e menor
             // que o degrau, fica no tamanho dela.
             if (maxW > 0 && w > maxW) { h = (int)Math.Round(h * (maxW / (double)w)); w = maxW; }
@@ -236,6 +242,16 @@ public sealed class ScreenSender : IDisposable
                 tScale.Stop();
                 MsScale = (int)tScale.ElapsedMilliseconds;
 
+                // A prévia é local: não volta pela rede e não participa do palco
+                // dos outros. Cinco quadros/s dão feedback imediato sem duplicar
+                // o custo de captura a 60 FPS.
+                long previewNow = Environment.TickCount64;
+                if (PreviewFrameProduced != null && previewNow >= nextPreviewAt)
+                {
+                    nextPreviewAt = previewNow + 200;
+                    try { PreviewFrameProduced(new Bitmap(scaled)); } catch { }
+                }
+
                 int viewers = Math.Max(1, _session.Peers.Count(p => p.Locked != null));
                 bool newViewer = viewers > lastViewers;
                 lastViewers = viewers;
@@ -298,7 +314,28 @@ public sealed class ScreenSender : IDisposable
                                      new Rectangle(tx, ty, tw, th), GraphicsUnit.Pixel);
 
                     tileMs.SetLength(0);
-                    if (tw == TileSize && th == TileSize) tile.Save(tileMs, _jpegCodec, ep);
+                    if (MaxQuality && !_sceneBusy)
+                    {
+                        // Texto, HUD e janelas paradas ficam realmente sem perda.
+                        // Em movimento, PNG custaria mais que o orçamento inteiro.
+                        if (tw == TileSize && th == TileSize) tile.Save(tileMs, ImageFormat.Png);
+                        else
+                        {
+                            using var edgePng = tile.Clone(new Rectangle(0, 0, tw, th), tile.PixelFormat);
+                            edgePng.Save(tileMs, ImageFormat.Png);
+                        }
+                        if (tileMs.Length > ushort.MaxValue)
+                        {
+                            tileMs.SetLength(0);
+                            if (tw == TileSize && th == TileSize) tile.Save(tileMs, _jpegCodec, ep);
+                            else
+                            {
+                                using var edgeJpeg = tile.Clone(new Rectangle(0, 0, tw, th), tile.PixelFormat);
+                                edgeJpeg.Save(tileMs, _jpegCodec, ep);
+                            }
+                        }
+                    }
+                    else if (tw == TileSize && th == TileSize) tile.Save(tileMs, _jpegCodec, ep);
                     else
                     {
                         using var edge = tile.Clone(new Rectangle(0, 0, tw, th), tile.PixelFormat);
@@ -359,7 +396,11 @@ public sealed class ScreenSender : IDisposable
                     if (++overBudgetStreak > 6)
                     {
                         overBudgetStreak = 0;
-                        if (_quality > 45) _quality -= 8;
+                        if (MaxQuality)
+                        {
+                            if (_quality > 92) _quality -= 2;
+                        }
+                        else if (_quality > 45) _quality -= 8;
                         else if (ladder < WidthLadder.Length - 1)
                         {
                             ladder++;
@@ -374,7 +415,11 @@ public sealed class ScreenSender : IDisposable
                     if (++underBudgetStreak > 25)
                     {
                         underBudgetStreak = 0;
-                        if (_quality < 92) _quality += 4;
+                        if (MaxQuality)
+                        {
+                            if (_quality < 100) _quality += 2;
+                        }
+                        else if (_quality < 92) _quality += 4;
                         else if (ladder > 0)
                         {
                             ladder--;

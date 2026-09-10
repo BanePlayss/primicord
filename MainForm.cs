@@ -32,6 +32,9 @@ public sealed class MainForm : Form
     // tela, clipe e Jam do Spotify
     private ScreenSender? _screenSender;
     private readonly ScreenReceiver _screens = new();
+    private readonly object _selfPreviewLock = new();
+    private Bitmap? _pendingSelfPreview;
+    private int _selfPreviewQueued;
     private ClipRecorder? _clips;
     private MusicShare? _music;
     private StageView? _stage;
@@ -102,7 +105,7 @@ public sealed class MainForm : Form
         _dir = new RoomDirectory(_fs);
         _cfg = Config.Load();
 
-        Text = "PRIMICORD · 0.9.1";
+        Text = "PRIMICORD · 0.9.2";
         try
         {
             string? exe = Environment.ProcessPath;
@@ -581,6 +584,7 @@ public sealed class MainForm : Form
             if (_screenSender != null)
             {
                 _screenSender.TotalUploadBudget = Math.Clamp(_cfg.ScreenBudgetKb, 200, 6000) * 1000;
+                _screenSender.MaxQuality = _cfg.ScreenBudgetKb >= 4000;
                 _screenSender.TargetFps = _cfg.ScreenFps;
                 _screenSender.MaxWidth = _cfg.ScreenMaxWidth;
             }
@@ -1179,6 +1183,7 @@ public sealed class MainForm : Form
             if (_screenSender != null)
             {
                 _screenSender.TotalUploadBudget = Math.Clamp(_cfg.ScreenBudgetKb, 200, 6000) * 1000;
+                _screenSender.MaxQuality = _cfg.ScreenBudgetKb >= 4000;
                 _screenSender.TargetFps = _cfg.ScreenFps;
                 _screenSender.MaxWidth = _cfg.ScreenMaxWidth;
             }
@@ -1297,6 +1302,8 @@ public sealed class MainForm : Form
 
         try { _screenSender?.Dispose(); } catch { }
         _screenSender = null;
+        lock (_selfPreviewLock) { _pendingSelfPreview?.Dispose(); _pendingSelfPreview = null; }
+        _stage?.SetSelfFrame(null);
         _iAmSharing = false;
         try { _music?.Dispose(); } catch { }
         _music = null;
@@ -1402,12 +1409,13 @@ public sealed class MainForm : Form
         bool self = _iAmSharing && _focusedSharer == 0;
         _stage.SelfPreview = self;
         _stage.SelfInfo = self && _screenSender != null
-            ? $"{_screenSender.OutWidth}x{_screenSender.OutHeight} · {_screenSender.Fps} FPS · {_screenSender.KbPerSecond} KB/s"
+            ? $"{_screenSender.OutWidth}x{_screenSender.OutHeight} · {_screenSender.Fps} FPS · {_screenSender.KbPerSecond} KB/s · Q{_screenSender.Quality}"
             : "";
         bool buffering = _clips?.Active == true;
         _stage.Recording = buffering;
         string net = _iAmSharing && _screenSender != null
             ? $"{_screenSender.Fps}FPS · Q{_screenSender.Quality} · {_screenSender.KbPerSecond}KB/s"
+              + (_screenSender.MaxQuality ? " · MÁX" : "")
             : "";
         _stage.StatusRight = buffering
             ? $"BUFFER {_clips!.BufferSeconds}s" + (net.Length > 0 ? " · " + net : "")
@@ -1538,6 +1546,8 @@ public sealed class MainForm : Form
         {
             _screenSender?.Dispose();
             _screenSender = null;
+            lock (_selfPreviewLock) { _pendingSelfPreview?.Dispose(); _pendingSelfPreview = null; }
+            _stage?.SetSelfFrame(null);
             _iAmSharing = false;
             _session.Sharing = false;
             SyncSystemAudio();      // áudio do sistema acompanha apenas a transmissão
@@ -1564,8 +1574,10 @@ public sealed class MainForm : Form
                 TotalUploadBudget = Math.Clamp(_cfg.ScreenBudgetKb, 200, 6000) * 1000,
                 TargetFps = _cfg.ScreenFps,
                 MaxWidth = _cfg.ScreenMaxWidth,
+                MaxQuality = _cfg.ScreenBudgetKb >= 4000,
             };
             _screenSender.FullFrameProduced += OnMyFrame;
+            _screenSender.PreviewFrameProduced += OnSelfPreviewFrame;
             _screenSender.TargetLost += () =>
             {
                 try { BeginInvoke(() => { if (_iAmSharing) ToggleScreenShare(); }); } catch { }
@@ -1600,6 +1612,36 @@ public sealed class MainForm : Form
     {
         AutoStartBuffer();
         _clips?.PushFrame(jpeg, w, h);
+    }
+
+    private void OnSelfPreviewFrame(Bitmap frame)
+    {
+        lock (_selfPreviewLock)
+        {
+            _pendingSelfPreview?.Dispose();
+            _pendingSelfPreview = frame;
+        }
+        if (Interlocked.Exchange(ref _selfPreviewQueued, 1) != 0) return;
+        try { BeginInvoke(ApplySelfPreviewFrame); }
+        catch { Interlocked.Exchange(ref _selfPreviewQueued, 0); }
+    }
+
+    private void ApplySelfPreviewFrame()
+    {
+        Bitmap? frame;
+        lock (_selfPreviewLock)
+        {
+            frame = _pendingSelfPreview;
+            _pendingSelfPreview = null;
+        }
+        Interlocked.Exchange(ref _selfPreviewQueued, 0);
+        if (frame == null || IsDisposed || _stage == null || _stage.IsDisposed)
+        {
+            frame?.Dispose();
+            return;
+        }
+        if (_iAmSharing) _stage.SetSelfFrame(frame);
+        else frame.Dispose();
     }
 
     private void OnPeerFrame(uint senderId, byte[] payload, int w, int h)
@@ -1934,6 +1976,7 @@ public sealed class MainForm : Form
             ClientSize = size;
             foreach (string scene in new[] { "acampamento", "call", "jam", "transmissao" })
             {
+                _stage?.SetSelfFrame(null);
                 _previewSharing = scene == "transmissao";
                 _previewJam = scene == "jam";
                 _voiceRoomId = scene == "acampamento" ? "" : "arena";
@@ -1941,6 +1984,8 @@ public sealed class MainForm : Form
                 SelectView(scene == "acampamento" ? "home" : "room:arena");
                 PerformLayout();
                 SyncStageLayout();
+                if (scene == "transmissao" && _stage != null)
+                    _stage.SetSelfFrame(BuildPreviewFrame());
                 if (scene != "acampamento") {
                     bool live = scene == "transmissao";
                     if (_stage!.Visible != live || _stageActions!.Visible != live || _inviteTile!.Visible == live) failures++;
@@ -1958,6 +2003,23 @@ public sealed class MainForm : Form
             : "FAIL: " + failures);
         _reallyClosing = true;
         Close();
+    }
+
+    private static Bitmap BuildPreviewFrame()
+    {
+        var bitmap = new Bitmap(960, 540);
+        using var g = Graphics.FromImage(bitmap);
+        g.Clear(Color.FromArgb(19, 24, 31));
+        using var accent = new SolidBrush(Pv.Orange);
+        using var bone = new SolidBrush(Pv.Bone);
+        using var dim = new SolidBrush(Pv.BoneDim);
+        g.FillRectangle(accent, 0, 0, bitmap.Width, 12);
+        g.DrawString("PRÉVIA DA FONTE · 1920×1080", Pv.DisplaySm, bone, 34, 34);
+        g.DrawString("nitidez máxima · quadro local", Pv.Body, dim, 36, 82);
+        using var grid = new Pen(Color.FromArgb(55, Pv.OrangeDim), 1);
+        for (int x = 0; x < bitmap.Width; x += 80) g.DrawLine(grid, x, 130, x, bitmap.Height);
+        for (int y = 130; y < bitmap.Height; y += 60) g.DrawLine(grid, 0, y, bitmap.Width, y);
+        return bitmap;
     }
 
     private bool _reallyClosing;

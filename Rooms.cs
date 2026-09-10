@@ -132,7 +132,7 @@ public sealed class Config
     /// os espectadores). Depois que a captura passou a ser pela GPU, ESTE virou o
     /// unico limite da qualidade — nao ha mais gargalo de CPU pra contornar.
     /// </summary>
-    public int ScreenBudgetKb = 2000;
+    public int ScreenBudgetKb = 4000;
     public int ScreenFps = 60;
     public int ScreenMaxWidth = 1920;
     public bool TailscaleOnly = true;

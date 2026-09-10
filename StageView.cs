@@ -10,6 +10,7 @@ namespace Primicord;
 public sealed class StageView : Control
 {
     private Bitmap? _frame;
+    private Bitmap? _selfFrame;
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public string SharerNick { get; set; } = "";
@@ -34,6 +35,14 @@ public sealed class StageView : Control
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public string SelfInfo { get; set; } = "";
 
+    /// <summary>Quadro local da fonte, usado apenas na prévia de quem transmite.</summary>
+    public void SetSelfFrame(Bitmap? frame)
+    {
+        try { _selfFrame?.Dispose(); } catch { }
+        _selfFrame = frame;
+        Invalidate();
+    }
+
     public StageView()
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
@@ -52,7 +61,13 @@ public sealed class StageView : Control
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { try { _frame?.Dispose(); } catch { } _frame = null; }
+        if (disposing)
+        {
+            try { _frame?.Dispose(); } catch { }
+            try { _selfFrame?.Dispose(); } catch { }
+            _frame = null;
+            _selfFrame = null;
+        }
         base.Dispose(disposing);
     }
 
@@ -103,7 +118,9 @@ public sealed class StageView : Control
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
-        int cw = Math.Min(520, Width - 60), ch = 190;
+        var preview = _selfFrame;
+        int cw = preview != null ? Math.Min(760, Width - 60) : Math.Min(520, Width - 60);
+        int ch = preview != null ? Math.Min(430, Height - 80) : 190;
         var card = new Rectangle((Width - cw) / 2, (Height - ch) / 2, cw, ch);
         using (var b = new SolidBrush(Pv.Char2))
         using (var p = Pv.RoundRect(card, 8))
@@ -112,7 +129,14 @@ public sealed class StageView : Control
         using (var p = Pv.RoundRect(card, 8))
             g.DrawPath(pen, p);
 
-        // Monitor estilizado, so pra dar cara de "transmitindo".
+        if (preview != null)
+        {
+            DrawLocalPreview(g, card, preview);
+            return;
+        }
+
+        // Monitor estilizado, so pra dar cara de "transmitindo" quando o primeiro
+        // quadro ainda está sendo capturado.
         var icon = new RectangleF(card.X + (cw - 56) / 2f, card.Y + 26, 56, 56);
         Glyphs.Speaker(g, icon, Pv.Orange, 2f);
 
@@ -136,6 +160,27 @@ public sealed class StageView : Control
             }
 
         if (StatusRight.Length > 0) DrawTag(g, StatusRight, false);
+    }
+
+    private void DrawLocalPreview(Graphics g, Rectangle card, Bitmap preview)
+    {
+        int margin = 18;
+        var area = new Rectangle(card.X + margin, card.Y + margin,
+            Math.Max(1, card.Width - margin * 2), Math.Max(1, card.Height - margin * 2));
+        double scale = Math.Min(area.Width / (double)preview.Width, area.Height / (double)preview.Height);
+        int w = Math.Max(1, (int)(preview.Width * scale));
+        int h = Math.Max(1, (int)(preview.Height * scale));
+        var dest = new Rectangle(area.X + (area.Width - w) / 2, area.Y + (area.Height - h) / 2, w, h);
+        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+        try { g.DrawImage(preview, dest); } catch { }
+        using var shade = new SolidBrush(Color.FromArgb(170, Pv.Charcoal));
+        g.FillRectangle(shade, dest.X, dest.Y, Math.Min(dest.Width, 250), 27);
+        using var p = new Pen(Pv.Orange, 2);
+        g.DrawRectangle(p, dest);
+        using var b = new SolidBrush(Pv.Bone);
+        g.DrawString("PRÉVIA LOCAL · VOCÊ TRANSMITE", Pv.Label, b, dest.X + 10, dest.Y + 7);
+        if (SelfInfo.Length > 0) DrawTag(g, SelfInfo, false);
     }
 
     private void DrawTag(Graphics g, string text, bool left)

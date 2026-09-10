@@ -11,10 +11,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Primicord</AssemblyName>
     <RootNamespace>Primicord</RootNamespace>
-    <Version>0.9.1</Version>
-    <AssemblyVersion>0.9.1.0</AssemblyVersion>
-    <FileVersion>0.9.1.0</FileVersion>
-    <InformationalVersion>0.9.1</InformationalVersion>
+    <Version>0.9.2</Version>
+    <AssemblyVersion>0.9.2.0</AssemblyVersion>
+    <FileVersion>0.9.2.0</FileVersion>
+    <InformationalVersion>0.9.2</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <ApplicationIcon>Primicord.ico</ApplicationIcon>
     <!-- Trimming quebra reflection do WinForms/NAudio — deixar desligado. -->

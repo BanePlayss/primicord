@@ -2,7 +2,15 @@
 
 O app de comunidade dos primitivos — cliente nativo de Windows com uma interface
 inspirada na organização do Discord e identidade visual do escudo Primitivão.
-Versão publicada: **0.9.1**.
+Versão publicada: **0.9.2**.
+
+## 0.9.2 — transmissão nítida e prévia local
+
+- modo de nitidez máxima mantém a resolução nativa e JPEG 100 em movimento;
+- blocos estáticos usam PNG sem perda para texto, HUD e janelas paradas;
+- o orçamento padrão de transmissão prioriza 32 Mbps quando selecionado;
+- quem transmite vê uma prévia local da fonte no palco, sem enviar esse quadro de volta pela rede;
+- a prévia visual inclui um quadro de teste para garantir que o palco não fique vazio ao iniciar.
 
 ## 0.9.1 — atualizações pelo próprio app
 
