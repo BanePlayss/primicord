@@ -373,17 +373,18 @@ public sealed partial class MainForm : Form
             e.Graphics.DrawLine(p, rail.Width - 1, 0, rail.Width - 1, rail.Height);
         };
 
-        var brand = new Panel { Dock = DockStyle.Top, Height = 62, BackColor = Pv.Char2, Cursor = Cursors.Hand };
+        var brand = new Panel { Dock = DockStyle.Top, Height = 52, BackColor = Pv.Char2, Cursor = Cursors.Hand };
         brand.Paint += (_, e) =>
         {
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-            BrandAssets.Draw(g, new Rectangle(12, 10, 38, 38));
+            BrandAssets.Draw(g, new Rectangle(12, 8, 34, 34));
             using (var b = new SolidBrush(Pv.Bone))
-                g.DrawString("Primitivos da Nova Era", Pv.BodyBold, b, 58, 11);
-            using (var b = new SolidBrush(Pv.Orange))
-                g.DrawString("PRIMICORD · ACAMPAMENTO", Pv.Label, b, 58, 34);
+                g.DrawString("Primitivos da Nova Era", Pv.BodyBold, b, 54, 10);
+            using (var b = new SolidBrush(Pv.BoneDim))
+                g.DrawString("⌄", Pv.BodyBold, b, 220, 10);
+            Glyphs.Users(g, new RectangleF(Math.Max(0, brand.Width - 34), 15, 18, 18), Pv.Bone);
             using (var p = new Pen(Pv.Border, 1))
                 g.DrawLine(p, 0, brand.Height - 1, brand.Width, brand.Height - 1);
         };
@@ -499,6 +500,7 @@ public sealed partial class MainForm : Form
     {
         if (_membersPanel == null) return;
         _membersPanel.Visible = !_membersPanel.Visible;
+        RebuildRail();
     }
 
     private Panel BuildUserPanel()
@@ -634,7 +636,7 @@ public sealed partial class MainForm : Form
     private void RebuildRail()
     {
         if (_railList == null || _railList.IsDisposed) return;
-        string signature = _view + "|" + _voiceRoomId + "|" + string.Join(",", _openDms) + "|" +
+        string signature = _view + "|" + _voiceRoomId + "|members=" + (_membersPanel?.Visible == true) + "|" + string.Join(",", _openDms) + "|" +
             string.Join(";", _rooms.Select(r => r.Id + ":" + r.Name + ":" + r.Count + ":" + r.LiveStreams)) + "|" +
             string.Join(",", _session?.Peers.Select(p => p.PeerId + ":" + p.Nick) ?? Enumerable.Empty<string>());
         if (_railSignature == signature && _railList.Controls.Count > 0) return;
@@ -654,15 +656,34 @@ public sealed partial class MainForm : Form
             };
             items.Add(item);
         }
+        // Atalhos fixos no topo, como no Discord: descoberta e pessoas ficam
+        // separadas dos canais para reduzir a caça por funções importantes.
+        Add("Eventos", "home", RailItem.Kind.Event);
+        var members = new RailItem("Membros", RailItem.Kind.Members)
+        {
+            Dock = DockStyle.Top, Height = 34, Active = _membersPanel?.Visible == true,
+        };
+        members.Click += (_, _) => ToggleMembersPanel();
+        items.Add(members);
+        var boosts = new RailItem("Impulsos de servidor", RailItem.Kind.Boost)
+        { Dock = DockStyle.Top, Height = 34 };
+        boosts.Click += (_, _) => ShowBanner("Impulsos de servidor ficam disponíveis em breve.");
+        items.Add(boosts);
+        items.Add(RailDivider());
+
+        items.Add(RailHeader("PILAR"));
         Add("Acampamento", "home", RailItem.Kind.Action);
         Add("Salas", "rooms", RailItem.Kind.Voice);
         Add("Transmissões", "streams", RailItem.Kind.Voice);
         Add("Jam", "dj", RailItem.Kind.Music);
         Add("Servidores", "servers", RailItem.Kind.Action);
-        items.Add(RailHeader("CANAIS DE TEXTO"));
+        items.Add(RailHeader("PRIMITIVOS DA NOVA ERA"));
         foreach (var channel in TextChannels)
             Add(channel.Name, channel.Id == ChatService.GeneralChannel ? "geral" : "channel:" + channel.Id, RailItem.Kind.TextChannel);
-        items.Add(RailHeader("CANAIS DE VOZ"));
+        items.Add(RailHeader("CANAIS DE VOZ", async () =>
+        {
+            if (!_preview) await CreateRoomAsync();
+        }));
         foreach (var room in _rooms)
         {
             var item = new RailItem(room.Name, RailItem.Kind.Voice) {
@@ -711,16 +732,31 @@ public sealed partial class MainForm : Form
         _railList.AutoScrollPosition = new Point(0, scrollY);
     }
 
-    private static Panel RailHeader(string text)
+    private static Panel RailDivider()
     {
-        var p = new Panel { Dock = DockStyle.Top, Height = 28, BackColor = Pv.Char2 };
+        var p = new Panel { Dock = DockStyle.Top, Height = 10, BackColor = Pv.Char2 };
+        p.Paint += (_, e) =>
+        {
+            using var pen = new Pen(Pv.Border, 1);
+            e.Graphics.DrawLine(pen, 16, 5, p.Width - 16, 5);
+        };
+        return p;
+    }
+
+    private static Panel RailHeader(string text, Func<Task>? onPlus = null)
+    {
+        var p = new Panel { Dock = DockStyle.Top, Height = 30, BackColor = Pv.Char2,
+            Cursor = onPlus == null ? Cursors.Default : Cursors.Hand };
         p.Paint += (_, e) =>
         {
             var g = e.Graphics;
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
             using var b = new SolidBrush(Pv.BoneDim);
-            g.DrawString(text, Pv.Label, b, 14, 10);
+            g.DrawString("⌄", Pv.Label, b, 10, 9);
+            g.DrawString(text, Pv.Label, b, 24, 10);
+            if (onPlus != null) Glyphs.Plus(g, new RectangleF(p.Width - 28, 8, 14, 14), Pv.BoneDim, 1.4f);
         };
+        if (onPlus != null) p.Click += async (_, _) => await onPlus();
         return p;
     }
 

@@ -10,7 +10,7 @@ namespace Primicord;
 /// </summary>
 public sealed class RailItem : Control
 {
-    public enum Kind { TextChannel, Voice, Music, Dm, Action }
+    public enum Kind { TextChannel, Voice, Music, Dm, Action, Event, Members, Boost }
 
     private bool _hover;
     private readonly MotionValue _hoverMotion;
@@ -108,6 +108,9 @@ public sealed class RailItem : Control
                 case Kind.Voice: Glyphs.Speaker(g, ic, fg); break;
                 case Kind.Music: Glyphs.Music(g, ic, fg); break;
                 case Kind.Action: Glyphs.Plus(g, ic, fg); break;
+                case Kind.Event: Glyphs.Bell(g, ic, fg); break;
+                case Kind.Members: Glyphs.Users(g, ic, fg); break;
+                case Kind.Boost: Glyphs.Compass(g, ic, fg); break;
             }
         }
 
