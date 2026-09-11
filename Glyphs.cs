@@ -60,6 +60,20 @@ public static class Glyphs
         g.DrawEllipse(p, cx - rIn * 0.62f, cy - rIn * 0.62f, rIn * 1.24f, rIn * 1.24f);
     }
 
+    public static void Gamepad(Graphics g, RectangleF r, Color c, float w = 1.8f)
+    {
+        using var pen = P(c, w);
+        float x = r.X, y = r.Y, s = Math.Min(r.Width, r.Height);
+        g.DrawClosedCurve(pen, new[] { new PointF(x+s*.22f,y+s*.28f), new PointF(x+s*.78f,y+s*.28f),
+            new PointF(x+s*.95f,y+s*.75f), new PointF(x+s*.7f,y+s*.68f),
+            new PointF(x+s*.3f,y+s*.68f), new PointF(x+s*.05f,y+s*.75f) }, .25f, System.Drawing.Drawing2D.FillMode.Winding);
+        g.DrawLine(pen, x+s*.22f,y+s*.48f,x+s*.42f,y+s*.48f);
+        g.DrawLine(pen, x+s*.32f,y+s*.38f,x+s*.32f,y+s*.58f);
+        using var b = new SolidBrush(c);
+        g.FillEllipse(b,x+s*.66f,y+s*.45f,s*.08f,s*.08f);
+        g.FillEllipse(b,x+s*.78f,y+s*.36f,s*.08f,s*.08f);
+    }
+
     public static void Plus(Graphics g, RectangleF r, Color c, float w = 1.8f)
     {
         using var p = P(c, w);

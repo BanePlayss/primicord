@@ -61,6 +61,7 @@ public sealed partial class MainForm : Form
     private JamPanel? _jamPanel;
     private Panel? _stageActions;
     private PrimButton? _profileShare, _profileLeave;
+    private GameActivityCard? _activityCard;
     private Label? _shellTitle;
     private bool _previewSharing, _previewJam;
     private InviteTile? _inviteTile;
@@ -402,6 +403,14 @@ public sealed partial class MainForm : Form
 
         rail.Controls.Add(_railList);   // Fill primeiro
         rail.Controls.Add(_voiceStrip);
+        _activityCard = new GameActivityCard(_preview) { Dock = DockStyle.Bottom };
+        _activityCard.ActivityChanged += game =>
+        {
+            if (_session != null) _session.Game = game;
+            if (_myTile != null) { _myTile.Game = game; _myTile.Invalidate(); }
+            _userPanel?.Invalidate();
+        };
+        rail.Controls.Add(_activityCard);
         rail.Controls.Add(_userPanel);
         nitro.Dispose();
         rail.Controls.Add(brand);
@@ -515,13 +524,13 @@ public sealed partial class MainForm : Form
             using var format = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
             e.Graphics.DrawString(Nick, Pv.BodyBold, b, new RectangleF(50, 65, 82, 21), format);
             using var muted = new SolidBrush(Pv.BoneDim);
-            e.Graphics.DrawString(_voiceRoomId.Length > 0 ? "Em voz" : "Escolha uma sala",
-                Pv.Label, muted, 50, 87);
+            e.Graphics.DrawString(_activityCard?.Game.Length > 0 ? "Jogando" : _voiceRoomId.Length > 0 ? "Em voz" : "Disponível",
+                Pv.Label, muted, new RectangleF(50, 87, 82, 18), format);
         };
-        var mic = new GlyphButton((g,r,c,w) => Glyphs.Mic(g,r,c,_session?.Muted == true))
+        var mic = new GlyphButton((g,r,c,w) => Glyphs.Mic(g,r,_session?.Muted == true ? Pv.Red : c,_session?.Muted == true))
             { Size = new Size(34,34), Location = new Point(138,66), ToolTipText = "Microfone · entre na call para usar", AccessibleName = "Ativar ou silenciar microfone" };
         mic.Click += (_,_) => { ToggleMute(); p.Invalidate(true); };
-        var phones = new GlyphButton((g,r,c,w) => Glyphs.Headphones(g,r,c,_deafened))
+        var phones = new GlyphButton((g,r,c,w) => Glyphs.Headphones(g,r,_deafened ? Pv.Red : c,_deafened))
             { Size = new Size(34,34), Location = new Point(176,66), ToolTipText = "Fone · ensurdecer", AccessibleName = "Ativar ou desativar fones" };
         phones.Click += (_,_) => { ToggleDeafen(); p.Invalidate(true); };
         var gear = new GlyphButton(Glyphs.Gear)
@@ -538,13 +547,8 @@ public sealed partial class MainForm : Form
         _profileLeave.AccessibleName = "Sair da sala de voz";
         _profileLeave.Click += (_,_) => { LeaveVoice(); SelectView("home"); };
         var menu = new ContextMenuStrip();
-        menu.Items.Add("O que estou jogando", null, (_,_) => {
-            if (_session == null) { ShowBanner("Entre na call para definir seu jogo."); return; }
-            string? game = PromptDialog.Ask(this, "ATIVIDADE", "O que você está jogando? (vazio para limpar)", _session.Game);
-            if (game == null) return;
-            _session.Game = game.Trim()[..Math.Min(game.Trim().Length, 60)];
-            if (_myTile != null) { _myTile.Game = _session.Game; _myTile.Invalidate(); }
-        });
+        menu.Items.Add("O que estou jogando", null, (_,_) => _activityCard?.ShowActivityMenu());
+        p.Disposed += (_, _) => menu.Dispose();
         gear.ContextMenuStrip = menu;
         gear.ToolTipText = "Configurações · botão direito para definir jogo";
         p.Controls.AddRange(new Control[] { mic, phones, gear, _profileShare, _profileLeave });
@@ -658,21 +662,16 @@ public sealed partial class MainForm : Form
         }
         // Atalhos fixos no topo, como no Discord: descoberta e pessoas ficam
         // separadas dos canais para reduzir a caça por funções importantes.
-        Add("Eventos", "home", RailItem.Kind.Event);
+        Add("Acampamento", "home", RailItem.Kind.Event);
         var members = new RailItem("Membros", RailItem.Kind.Members)
         {
             Dock = DockStyle.Top, Height = 34, Active = _membersPanel?.Visible == true,
         };
         members.Click += (_, _) => ToggleMembersPanel();
         items.Add(members);
-        var boosts = new RailItem("Impulsos de servidor", RailItem.Kind.Boost)
-        { Dock = DockStyle.Top, Height = 34 };
-        boosts.Click += (_, _) => ShowBanner("Impulsos de servidor ficam disponíveis em breve.");
-        items.Add(boosts);
         items.Add(RailDivider());
 
         items.Add(RailHeader("PILAR"));
-        Add("Acampamento", "home", RailItem.Kind.Action);
         Add("Salas", "rooms", RailItem.Kind.Voice);
         Add("Transmissões", "streams", RailItem.Kind.Voice);
         Add("Jam", "dj", RailItem.Kind.Music);
@@ -1232,7 +1231,7 @@ public sealed partial class MainForm : Form
             {
                 Nick = nick, IsMe = nick.Equals(Nick, StringComparison.OrdinalIgnoreCase),
                 Connected = true, Sharing = false, JamJoined = _previewJam && nick is "bane" or "mohamed" or "vitinho",
-                Game = nick == "mohamed" ? "Minecraft" : nick == "vitinho" ? "Rust" : "", Level = nick == "bane" ? .2f : 0, Muted = nick == "ricle",
+                Game = nick == Nick ? _activityCard?.Game ?? "" : nick == "mohamed" ? "Minecraft" : nick == "vitinho" ? "Rust" : "", Level = nick == "bane" ? .2f : 0, Muted = nick == "ricle",
                 Margin = new Padding(6),
             };
             _tiles.Controls.Add(tile);
@@ -1330,6 +1329,7 @@ public sealed partial class MainForm : Form
         _session = new RoomSession(_fs, roomId, peerId, Nick)
         {
             TailscaleOnly = _cfg.TailscaleOnly,
+            Game = _activityCard?.Game ?? "",
         };
         var joiningSession = _session;
         _session.PeersChanged += () => { if (ReferenceEquals(_session, joiningSession)) OnPeersChanged(); };
@@ -1354,7 +1354,8 @@ public sealed partial class MainForm : Form
         _peerTiles.Clear();
         EnsureRoomPanel();
         _tiles!.Controls.Clear();
-        _myTile = new PeerTile { Nick = Nick, IsMe = true, Connected = true, Margin = new Padding(6) };
+        _myTile = new PeerTile { Nick = Nick, IsMe = true, Connected = true,
+            Game = _activityCard?.Game ?? "", Margin = new Padding(6) };
         _myTile.Click += (_, _) => { if (_iAmSharing) WatchStream(0, (ModifierKeys & Keys.Control) != 0); };
         _tiles.Controls.Add(_myTile);
         SyncStageLayout();

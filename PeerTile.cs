@@ -187,7 +187,13 @@ public sealed class PeerTile : Control
             g.DrawString("AO VIVO", Pv.Label, live, 14, 12);
         }
         else if (Large && Game.Length > 0)
-            g.DrawString("Jogando " + Game, Pv.Label, dim, new RectangleF(14, 12, Math.Max(1, Width - 85), 20), format);
+        {
+            var badge = new Rectangle(12, 10, Math.Max(28, Width - (JamJoined ? 88 : 26)), 28);
+            using (var shape = Pv.RoundRect(badge, 7))
+            using (var fill = new SolidBrush(Color.FromArgb(80, 12, 10, 22))) g.FillPath(fill, shape);
+            Glyphs.Gamepad(g, new RectangleF(19, 15, 18, 18), Color.FromArgb(206, 185, 250));
+            g.DrawString(Game, Pv.Label, light, new RectangleF(44, 17, Math.Max(1, badge.Width - 40), 18), format);
+        }
         if (JamJoined)
         {
             Glyphs.Music(g, new RectangleF(Width - 61, 12, 14, 14), Pv.Green, 1.5f);

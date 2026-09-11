@@ -10,6 +10,7 @@ public sealed class GlyphButton : Control
 
     private readonly Painter _paint;
     private bool _hover, _down;
+    private readonly MotionValue _hoverMotion, _pressMotion;
     private readonly ToolTip _tip = new();
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
@@ -24,6 +25,8 @@ public sealed class GlyphButton : Control
 
     public GlyphButton(Painter painter)
     {
+        _hoverMotion = new MotionValue(this);
+        _pressMotion = new MotionValue(this);
         _paint = painter;
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
                  ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw |
@@ -44,24 +47,26 @@ public sealed class GlyphButton : Control
     protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
     protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
 
-    protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
-    protected override void OnMouseLeave(EventArgs e) { _hover = false; _down = false; Invalidate(); base.OnMouseLeave(e); }
-    protected override void OnMouseDown(MouseEventArgs e) { _down = true; Invalidate(); base.OnMouseDown(e); }
-    protected override void OnMouseUp(MouseEventArgs e) { _down = false; Invalidate(); base.OnMouseUp(e); }
+    protected override void OnMouseEnter(EventArgs e) { _hover = true; _hoverMotion.To(1); base.OnMouseEnter(e); }
+    protected override void OnMouseLeave(EventArgs e) { _hover = false; _down = false; _hoverMotion.To(0); _pressMotion.To(0); base.OnMouseLeave(e); }
+    protected override void OnMouseDown(MouseEventArgs e) { _down = true; _pressMotion.To(1, 80); base.OnMouseDown(e); }
+    protected override void OnMouseUp(MouseEventArgs e) { _down = false; _pressMotion.To(0, 240, spring: true); base.OnMouseUp(e); }
 
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
-        if (_hover)
+        if (_hoverMotion.Value > 0)
         {
-            using var b = new SolidBrush(Color.FromArgb(_down ? 90 : 60, Pv.Bone));
-            g.FillEllipse(b, 0, 0, Width - 1, Height - 1);
+            using var b = new SolidBrush(Color.FromArgb((int)((_down ? 48 : 30) * Math.Clamp(_hoverMotion.Value, 0, 1)), Pv.Bone));
+            using var shape = Pv.RoundRect(new Rectangle(1, 1, Width - 3, Height - 3), 9);
+            g.FillPath(b, shape);
         }
 
         float pad = Width * 0.24f;
         var box = new RectangleF(pad, pad, Width - pad * 2, Height - pad * 2);
+        box.Inflate(-(float)_pressMotion.Value, -(float)_pressMotion.Value);
         _paint(g, box, _hover ? Pv.Orange : Accent, 1.7f);
         if (Focused) { using var pen = new Pen(Pv.Orange, 2); g.DrawEllipse(pen, 2, 2, Width - 5, Height - 5); }
     }
@@ -76,7 +81,7 @@ public sealed class GlyphButton : Control
 /// <summary>Caixinha de texto modal — usada pra pedir o nome da sala nova.</summary>
 public static class PromptDialog
 {
-    public static string? Ask(IWin32Window owner, string title, string label, string placeholder)
+    public static string? Ask(IWin32Window owner, string title, string label, string placeholder, string confirm = "CRIAR")
     {
         using var dlg = new Form
         {
@@ -108,7 +113,7 @@ public static class PromptDialog
             Location = new Point(22, 58), AutoSize = true,
         };
         var input = new PrimInput(placeholder) { Location = new Point(22, 78), Width = 356 };
-        var ok = new PrimButton("CRIAR") { Location = new Point(22, 132), Size = new Size(172, 40) };
+        var ok = new PrimButton(confirm) { Location = new Point(22, 132), Size = new Size(172, 40) };
         var cancel = new PrimButton("CANCELAR", PrimButton.Style.Ghost)
         { Location = new Point(206, 132), Size = new Size(172, 40) };
 
@@ -132,7 +137,7 @@ public static class PromptDialog
 public static class PickDialog
 {
     /// <summary>Indice escolhido, ou -1 se cancelou.</summary>
-    public static int Choose(IWin32Window owner, string title, string label, List<string> options)
+    public static int Choose(IWin32Window owner, string title, string label, List<string> options, string confirm = "COMPARTILHAR")
     {
         using var dlg = new Form
         {
@@ -172,7 +177,7 @@ public static class PickDialog
         foreach (string o in options) combo.Items.Add(o);
         combo.SelectedIndex = 0;
 
-        var ok = new PrimButton("COMPARTILHAR") { Location = new Point(22, 132), Size = new Size(182, 40) };
+        var ok = new PrimButton(confirm) { Location = new Point(22, 132), Size = new Size(182, 40) };
         var cancel = new PrimButton("CANCELAR", PrimButton.Style.Ghost)
         { Location = new Point(216, 132), Size = new Size(182, 40) };
         ok.Click += (_, _) => { dlg.DialogResult = DialogResult.OK; dlg.Close(); };
