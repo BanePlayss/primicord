@@ -16,7 +16,6 @@ public sealed class RoomInfo
 /// <summary>Lista/cria/apaga salas no Firestore — o "lobby".</summary>
 public sealed class RoomDirectory
 {
-    private const int PeerStaleMs = 15000;
     private readonly Firestore _fs;
 
     public RoomDirectory(Firestore fs) => _fs = fs;
@@ -25,7 +24,6 @@ public sealed class RoomDirectory
     {
         var rooms = new List<RoomInfo>();
         var docs = await _fs.ListAsync("pc_rooms", ct: ct).ConfigureAwait(false);
-        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         foreach (var (id, f) in docs)
         {
@@ -38,22 +36,21 @@ public sealed class RoomDirectory
 
             // Quem esta dentro AGORA (heartbeat fresco). Presenca velha e sessao que
             // morreu sem despedida — fecharam o app no botao X, caiu a luz, etc.
-            try
             {
                 var peers = await _fs.ListAsync($"pc_rooms/{id}/peers", ct: ct).ConfigureAwait(false);
-                foreach (var (_, pf) in peers)
-                    if (now - Firestore.Num(pf, "lastSeen") <= PeerStaleMs)
+                foreach (var (_, pf) in RoomPresence.Current(peers, _fs.ServerNowMs))
                     {
                         room.Occupants.Add(Firestore.Str(pf, "nick", "?"));
                         if (Firestore.Flag(pf, "sharing")) room.LiveStreams++;
                         if (Firestore.Flag(pf, "jamJoined")) room.JamCount++;
                     }
             }
-            catch (Exception ex) { Log.Write($"peers da sala {id}: " + ex.Message); }
+            // An unavailable directory is not an empty room. Preserve the last
+            // good UI snapshot by propagating errors to its refresh boundary.
 
             rooms.Add(room);
         }
-        return rooms;
+        return rooms.OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase).ThenBy(r => r.Id, StringComparer.Ordinal).ToList();
     }
 
     public async Task<RoomInfo> CreateAsync(string name, string createdBy, CancellationToken ct = default)

@@ -28,11 +28,16 @@ public sealed class Firestore
         "https://firestore.googleapis.com/v1/projects/" + ProjectId + "/databases/(default)/documents";
 
     private readonly HttpClient _http;
+    private long _serverOffsetMs;
+    public long ServerNowMs => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + Interlocked.Read(ref _serverOffsetMs);
 
     public Firestore()
     {
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
     }
+
+    // Allows an isolated HTTP fixture to exercise the real presence lifecycle.
+    public Firestore(HttpClient http) => _http = http;
 
     private static string Url(string path, string? query = null)
     {
@@ -61,6 +66,8 @@ public sealed class Firestore
             if (pageToken != null) q += "&pageToken=" + Uri.EscapeDataString(pageToken);
 
             using var resp = await _http.GetAsync(Url(collectionPath, q), ct).ConfigureAwait(false);
+            if (resp.Headers.Date is { } serverDate)
+                Interlocked.Exchange(ref _serverOffsetMs, serverDate.ToUnixTimeMilliseconds() - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             if (!resp.IsSuccessStatusCode)
             {
                 // 404 = coleção ainda não existe (nenhum doc criado) — não é erro.
@@ -83,7 +90,10 @@ public sealed class Firestore
                     if (d is null) continue;
                     string name = d["name"]?.GetValue<string>() ?? "";
                     string id = name.Contains('/') ? name[(name.LastIndexOf('/') + 1)..] : name;
-                    outList.Add((id, ParseFields(d["fields"])));
+                    var fields = ParseFields(d["fields"]);
+                    if (DateTimeOffset.TryParse(d["updateTime"]?.GetValue<string>(), out var updated))
+                        fields["__serverUpdatedAt"] = updated.ToUnixTimeMilliseconds();
+                    outList.Add((id, fields));
                 }
             }
             pageToken = node?["nextPageToken"]?.GetValue<string>();

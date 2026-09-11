@@ -13,6 +13,7 @@ public sealed class RailItem : Control
     public enum Kind { TextChannel, Voice, Music, Dm, Action }
 
     private bool _hover;
+    private readonly MotionValue _hoverMotion;
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Kind ItemKind { get; set; } = Kind.TextChannel;
@@ -38,6 +39,7 @@ public sealed class RailItem : Control
 
     public RailItem(string text, Kind kind)
     {
+        _hoverMotion = new MotionValue(this);
         Text = text;
         ItemKind = kind;
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
@@ -50,8 +52,8 @@ public sealed class RailItem : Control
         AccessibleName = text;
     }
 
-    protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
-    protected override void OnMouseLeave(EventArgs e) { _hover = false; Invalidate(); base.OnMouseLeave(e); }
+    protected override void OnMouseEnter(EventArgs e) { _hover = true; _hoverMotion.To(1); base.OnMouseEnter(e); }
+    protected override void OnMouseLeave(EventArgs e) { _hover = false; _hoverMotion.To(0); base.OnMouseLeave(e); }
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
@@ -71,12 +73,19 @@ public sealed class RailItem : Control
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
         var r = new Rectangle(6 + Indent, 2, Width - 12 - Indent, Height - 4);
-        if (Active || _hover)
+        if (Active || _hoverMotion.Value > 0)
         {
             using var path = Pv.RoundRect(r, 6);
-            using var b = new SolidBrush(Active ? Pv.Char3 : Pv.SurfaceHover);
+            using var b = new SolidBrush(Active ? Pv.Char3 : UiMotion.Blend(BackColor, Pv.SurfaceHover, _hoverMotion.Value));
             g.FillPath(b, path);
         }
+        if (Active)
+        {
+            using var accent = new SolidBrush(Pv.Orange);
+            using var indicator = Pv.RoundRect(new Rectangle(r.X, r.Y + 6, 3, Math.Max(3, r.Height - 12)), 2);
+            g.FillPath(accent, indicator);
+        }
+        g.TranslateTransform((float)(_hoverMotion.Value * 2), 0);
 
         Color fg = Active ? Pv.Bone : _hover ? Pv.Bone : Pv.BoneDim;
         int iconBox = 18;

@@ -56,7 +56,7 @@ public sealed class RemotePeer
 /// caso so um servidor relay (TURN) resolve — nao temos um, entao o par nao conecta.
 /// O app avisa na UI em vez de ficar mudo sem explicacao.
 /// </remarks>
-public sealed class RoomSession : IDisposable
+public sealed class RoomSession : IDisposable, IAsyncDisposable
 {
     // ─── protocolo ───────────────────────────────────────────────────────────
     public const int HeaderBytes = 9;
@@ -81,7 +81,6 @@ public sealed class RoomSession : IDisposable
     private const int PunchIntervalMs = 250;   // enquanto nao conectou
     private const int KeepAliveMs = 1000;  // depois de conectado (mantem o NAT aberto)
     private const int PresenceSyncMs = 2000;  // poll do Firestore
-    private const int PeerStaleMs = 15000; // sem heartbeat no Firestore = saiu
 
     private readonly Firestore _fs;
     private readonly string _roomId;
@@ -94,6 +93,15 @@ public sealed class RoomSession : IDisposable
     private CancellationTokenSource? _cts;
     private volatile bool _running;
     private bool _firestoreBacked = true;   // false no harness (rede pura, sem presenca)
+    private readonly SemaphoreSlim _presenceGate = new(1, 1);
+    private Task? _presenceTask;
+    private Task _cleanupTask = Task.CompletedTask;
+    private int _disposed;
+    private long _joinedAt;
+    private long _lastPresenceSync;
+    public bool PresenceReady { get; private set; }
+    public bool PresenceHealthy => PresenceReady && Environment.TickCount64 - Interlocked.Read(ref _lastPresenceSync) < 12_000;
+    public string? PresenceError { get; private set; }
 
     private readonly object _peersLock = new();
     private readonly Dictionary<uint, RemotePeer> _peers = new();
@@ -159,6 +167,7 @@ public sealed class RoomSession : IDisposable
     private async Task PublishJamStateAsync()
     {
         try { await PublishPresenceAsync(full: false).ConfigureAwait(false); }
+        catch (OperationCanceledException) { }
         catch (Exception ex) { Log.Write("Jam: publicar estado falhou: " + ex.Message); }
     }
 
@@ -213,8 +222,10 @@ public sealed class RoomSession : IDisposable
 
     // ─── CICLO DE VIDA ───────────────────────────────────────────────────────
 
-    public async Task StartAsync(CancellationToken ct = default)
+    public async Task StartAsync(CancellationToken ct = default, bool useStun = true)
     {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        ct.ThrowIfCancellationRequested();
         var addresses = TailscaleOnly ? ConnectionPolicy.TailnetAddresses() : AppEnv.LocalIPv4();
         if (TailscaleOnly && addresses.Count == 0)
             throw new InvalidOperationException("Conecte o Tailscale à rede da tribo antes de entrar na sala.");
@@ -234,8 +245,8 @@ public sealed class RoomSession : IDisposable
         Log.Write($"sala {_roomId}: socket na porta {localPort}, locais=[{string.Join(",", _localEps)}]");
 
         // STUN ANTES do loop de recepcao (ele consome do mesmo socket).
-        _publicEp = TailscaleOnly ? null : await Stun.DiscoverAsync(_socket, ct: _cts.Token).ConfigureAwait(false);
-        if (_publicEp is null)
+        _publicEp = TailscaleOnly || !useStun ? null : await Stun.DiscoverAsync(_socket, ct: _cts.Token).ConfigureAwait(false);
+        if (_publicEp is null && !TailscaleOnly)
             Log.Write("sem endereco publico — so vai conectar com quem estiver na mesma rede");
 
         _rxThread = new Thread(ReceiveLoop) { IsBackground = true, Name = "primicord-rx" };
@@ -243,13 +254,22 @@ public sealed class RoomSession : IDisposable
 
         _punchTimer = new System.Threading.Timer(_ => PunchTick(), null, 0, PunchIntervalMs);
 
+        var token = _cts.Token;
+        // Use the server clock and verify the exact room before advertising a
+        // successful join. The room name is display-only; all peers share its ID.
+        var room = await _fs.GetAsync($"pc_rooms/{_roomId}", token).ConfigureAwait(false);
+        if (room == null) throw new InvalidOperationException("Essa sala não existe mais. Atualize a lista e escolha uma sala.");
+        token.ThrowIfCancellationRequested();
+        _joinedAt = _fs.ServerNowMs;
         await PublishPresenceAsync(full: true).ConfigureAwait(false);
-        _ = Task.Run(() => PresenceLoopAsync(_cts.Token));
+        await SyncPeersAsync(token).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+        _presenceTask = PresenceLoopAsync(token);
     }
 
     public void Dispose()
     {
-        if (!_running) return;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _running = false;
 
         try { SendToAll(TypeBye, Array.Empty<byte>(), 0, 0); } catch { }
@@ -260,12 +280,30 @@ public sealed class RoomSession : IDisposable
         try { _rxThread?.Join(500); } catch { }
         try { _socket?.Dispose(); } catch { }
 
-        // Melhor esforco: apaga minha presenca pra sala nao ficar com fantasma.
-        if (_firestoreBacked)
-            try { _fs.DeleteAsync($"pc_rooms/{_roomId}/peers/{_peerId}").Wait(1500); } catch { }
+        // Serialize cleanup after all writes. A late PATCH used to recreate a
+        // deleted peer and leave a second copy of the same person in the room.
+        if (_firestoreBacked) _cleanupTask = CleanupPresenceAsync();
 
         lock (_peersLock) _peers.Clear();
         Log.Write($"sala {_roomId}: encerrada");
+    }
+
+    public async ValueTask DisposeAsync() { Dispose(); await _cleanupTask.ConfigureAwait(false); }
+
+    private async Task CleanupPresenceAsync()
+    {
+        try
+        {
+            if (_presenceTask != null) await _presenceTask.ConfigureAwait(false);
+            await _presenceGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                await _fs.DeleteAsync($"pc_rooms/{_roomId}/peers/{_peerId}", timeout.Token).ConfigureAwait(false);
+            }
+            finally { _presenceGate.Release(); }
+        }
+        catch (Exception ex) { Log.Write("limpeza de presença: " + ex.Message); }
     }
 
     // ─── PRESENCA (Firestore) ────────────────────────────────────────────────
@@ -279,8 +317,10 @@ public sealed class RoomSession : IDisposable
                 await PublishPresenceAsync(full: false).ConfigureAwait(false);
                 await SyncPeersAsync(ct).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
             catch (FirestoreException ex)
             {
+                PresenceError = ex.Message;
                 Log.Write("presenca falhou: " + ex.Message);
                 if (ex.IsPermissionDenied)
                 {
@@ -289,7 +329,7 @@ public sealed class RoomSession : IDisposable
                     return;
                 }
             }
-            catch (Exception ex) { Log.Write("presenca falhou: " + ex.Message); }
+            catch (Exception ex) { PresenceError = ex.Message; Log.Write("presenca falhou: " + ex.Message); }
 
             try { await Task.Delay(PresenceSyncMs, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
@@ -298,38 +338,48 @@ public sealed class RoomSession : IDisposable
 
     private async Task PublishPresenceAsync(bool full)
     {
+        var ct = _cts?.Token ?? CancellationToken.None;
+        await _presenceGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+        if (!_running) return;
+        ct.ThrowIfCancellationRequested();
         var fields = new Dictionary<string, object?>
         {
-            ["lastSeen"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            ["lastSeen"] = _fs.ServerNowMs,
+            ["joinedAt"] = _joinedAt,
+            ["accountId"] = RoomPresence.AccountKey(_nick),
+            ["version"] = Application.ProductVersion,
             ["muted"] = Muted,
             ["sharing"] = Sharing,
             ["jamJoined"] = JamJoined,
             ["jamLink"] = JamLink,
             ["game"] = Game,
         };
-        if (full)
         {
             fields["nick"] = _nick;
             fields["pubIp"] = _publicEp?.Address.ToString() ?? "";
             fields["pubPort"] = (long)(_publicEp?.Port ?? 0);
             fields["locEps"] = string.Join(",", _localEps.Select(e => e.ToString()));
         }
-        await _fs.SetAsync($"pc_rooms/{_roomId}/peers/{_peerId}", fields, mergeFields: true)
+        await _fs.SetAsync($"pc_rooms/{_roomId}/peers/{_peerId}", fields, mergeFields: true, ct: ct)
                  .ConfigureAwait(false);
+        }
+        finally { _presenceGate.Release(); }
     }
 
     private async Task SyncPeersAsync(CancellationToken ct)
     {
         var docs = await _fs.ListAsync($"pc_rooms/{_roomId}/peers", ct: ct).ConfigureAwait(false);
-        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        ct.ThrowIfCancellationRequested();
+        if (!_running) return;
         bool changed = false;
         var alive = new HashSet<uint>();
 
-        foreach (var (id, f) in docs)
+        foreach (var (id, f) in RoomPresence.Current(docs, _fs.ServerNowMs))
         {
-            if (id == _peerId) continue;
-            long lastSeen = Firestore.Num(f, "lastSeen");
-            if (now - lastSeen > PeerStaleMs) continue;   // fantasma de sessao morta
+            if (id == _peerId || RoomPresence.AccountKey(Firestore.Str(f, "accountId", Firestore.Str(f, "nick"))) == RoomPresence.AccountKey(_nick)) continue;
+            long lastSeen = RoomPresence.SeenAt(f);
 
             uint sid = HashId(id);
             alive.Add(sid);
@@ -374,7 +424,11 @@ public sealed class RoomSession : IDisposable
             }
         }
 
-        if (changed) PeersChanged?.Invoke();
+        bool firstSync = !PresenceReady || PresenceError != null;
+        PresenceReady = true;
+        PresenceError = null;
+        Interlocked.Exchange(ref _lastPresenceSync, Environment.TickCount64);
+        if (changed || firstSync) PeersChanged?.Invoke();
     }
 
     /// <summary>Reconstroi a lista de enderecos candidatos publicada pelo peer.</summary>
@@ -392,11 +446,15 @@ public sealed class RoomSession : IDisposable
 
         if (TailscaleOnly) fresh.RemoveAll(e => !ConnectionPolicy.IsTailnetAddress(e.Address));
 
-        if (fresh.Count == 0) return;
         // So substitui se mudou de verdade (evita descartar o Locked a cada poll).
         if (p.Candidates.Count == fresh.Count && p.Candidates.All(fresh.Contains)) return;
         p.Candidates.Clear();
         p.Candidates.AddRange(fresh);
+        if (p.Locked != null && !fresh.Contains(p.Locked))
+        {
+            p.Locked = null;
+            Interlocked.Exchange(ref p.LastRecvTicks, 0);
+        }
     }
 
     // ─── HOLE PUNCHING + KEEPALIVE ───────────────────────────────────────────
@@ -429,7 +487,9 @@ public sealed class RoomSession : IDisposable
                 }
             }
 
-            foreach (var ep in p.Candidates) SendTo(ep, TypePunch, Array.Empty<byte>(), 0, 0);
+            IPEndPoint[] candidates;
+            lock (_peersLock) candidates = p.Candidates.ToArray();
+            foreach (var ep in candidates) SendTo(ep, TypePunch, Array.Empty<byte>(), 0, 0);
         }
     }
 

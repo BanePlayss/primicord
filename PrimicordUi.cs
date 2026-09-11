@@ -97,7 +97,7 @@ public sealed class PrimButton : Control
 {
     public enum Style { Solid, Ghost, Danger }
 
-    private bool _hover, _down;
+    private readonly MotionValue _hoverMotion, _pressMotion;
 
     // A UI e montada em codigo (sem designer), entao nada aqui precisa ser serializado.
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
@@ -108,6 +108,8 @@ public sealed class PrimButton : Control
 
     public PrimButton(string text, Style kind = Style.Solid)
     {
+        _hoverMotion = new MotionValue(this);
+        _pressMotion = new MotionValue(this);
         Text = text;
         Kind = kind;
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
@@ -120,10 +122,10 @@ public sealed class PrimButton : Control
         AccessibleName = text;
     }
 
-    protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
-    protected override void OnMouseLeave(EventArgs e) { _hover = false; _down = false; Invalidate(); base.OnMouseLeave(e); }
-    protected override void OnMouseDown(MouseEventArgs e) { _down = true; Invalidate(); base.OnMouseDown(e); }
-    protected override void OnMouseUp(MouseEventArgs e) { _down = false; Invalidate(); base.OnMouseUp(e); }
+    protected override void OnMouseEnter(EventArgs e) { _hoverMotion.To(1); base.OnMouseEnter(e); }
+    protected override void OnMouseLeave(EventArgs e) { _hoverMotion.To(0); _pressMotion.To(0, 280, spring:true); base.OnMouseLeave(e); }
+    protected override void OnMouseDown(MouseEventArgs e) { _pressMotion.To(1, 80); base.OnMouseDown(e); }
+    protected override void OnMouseUp(MouseEventArgs e) { _pressMotion.To(0, 280, spring:true); base.OnMouseUp(e); }
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
@@ -146,17 +148,17 @@ public sealed class PrimButton : Control
         switch (Kind)
         {
             case Style.Ghost:
-                bg = _hover ? Pv.Char3 : Color.Transparent;
-                fg = _hover ? Pv.Orange : Pv.Bone;
-                border = _hover ? Pv.Orange : Pv.Char3;
+                bg = UiMotion.Blend(Color.Transparent, Pv.Char3, _hoverMotion.Value);
+                fg = UiMotion.Blend(Pv.Bone, Pv.Orange, _hoverMotion.Value);
+                border = UiMotion.Blend(Pv.Char3, Pv.Orange, _hoverMotion.Value);
                 break;
             case Style.Danger:
-                bg = _hover ? Pv.Red : Color.Transparent;
-                fg = _hover ? Pv.Bone : Pv.Red;
+                bg = UiMotion.Blend(Color.Transparent, Pv.Red, _hoverMotion.Value);
+                fg = UiMotion.Blend(Pv.Red, Pv.Bone, _hoverMotion.Value);
                 border = Pv.Red;
                 break;
             default:
-                bg = Active || _hover ? Pv.Bone : Pv.Orange;
+                bg = UiMotion.Blend(Pv.Orange, Pv.Bone, Active ? 1 : _hoverMotion.Value);
                 fg = Pv.Charcoal;
                 border = bg;
                 break;
@@ -164,7 +166,7 @@ public sealed class PrimButton : Control
         if (!Enabled) { bg = Pv.Char2; fg = Pv.BoneDim; border = Pv.Char3; }
 
         var r = new Rectangle(1, 1, Width - 3, Height - 3);
-        if (_down && Enabled) r.Offset(0, 1);
+        if (Enabled) { int press = (int)Math.Round(_pressMotion.Value * 2); r.Inflate(-press, -press); r.Offset(0, press); }
 
         if (bg != Color.Transparent)
             using (var b = new SolidBrush(bg))

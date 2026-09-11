@@ -20,15 +20,25 @@ public sealed class PeerTile : Control
     public string Game = "";
 
     private const float SpeakThreshold = 0.045f;
+    private readonly MotionValue _arrival, _speech;
+    private bool _wasSpeaking;
 
     public PeerTile()
     {
+        _arrival = new MotionValue(this, 1);
+        _speech = new MotionValue(this);
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
                  ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
         Size = new Size(186, 124);
         BackColor = Pv.Charcoal;
         TabStop = true;
         AccessibleRole = AccessibleRole.PushButton;
+    }
+
+    protected override void OnParentChanged(EventArgs e)
+    {
+        base.OnParentChanged(e);
+        if (Parent != null) { _arrival.Snap(0); _arrival.To(1, 320, Math.Min(Parent.Controls.Count * 35, 175)); }
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
@@ -44,6 +54,8 @@ public sealed class PeerTile : Control
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        g.TranslateTransform(0, (float)((1-_arrival.Value)*12));
+        if (_wasSpeaking != Speaking) { _wasSpeaking = Speaking; _speech.To(Speaking ? 1 : 0, 180); }
         if (Large || Height < 120) { DrawCallCard(g); return; }
 
         var r = new Rectangle(0, 0, Width - 1, Height - 1);
@@ -155,14 +167,15 @@ public sealed class PeerTile : Control
         var rect = new Rectangle(2, 2, Math.Max(1, Width - 5), Math.Max(1, Height - 5));
         using var path = Pv.RoundRect(rect, 12);
         using (var fill = new SolidBrush(colors[hash % (uint)colors.Length])) g.FillPath(fill, path);
-        if (Speaking || Punching)
-            using (var pen = new Pen(Speaking ? Pv.Green : Pv.Orange, 3)) g.DrawPath(pen, path);
+        if (_speech.Value > .01 || Punching)
+            using (var pen = new Pen(Punching ? Pv.Orange : UiMotion.Blend(colors[hash % (uint)colors.Length], Pv.Green, _speech.Value), 3)) g.DrawPath(pen, path);
 
         int diameter = Math.Clamp(Height / 3, Large ? 44 : 32, 86);
         var avatar = new Rectangle((Width - diameter) / 2, (Height - diameter) / 2 - 2, diameter, diameter);
         Glyphs.Avatar(g, avatar, Nick, Pv.Orange, Pv.Bone);
-        if (Speaking)
-            using (var pen = new Pen(Pv.Green, 4)) g.DrawEllipse(pen, Rectangle.Inflate(avatar, 5, 5));
+        if (_speech.Value > .01)
+            using (var pen = new Pen(Color.FromArgb((int)(255*Math.Clamp(_speech.Value,0,1)), Pv.Green), (float)(2+2*_speech.Value)))
+                g.DrawEllipse(pen, Rectangle.Inflate(avatar, 5, 5));
         using var light = new SolidBrush(Pv.Bone);
         using var dim = new SolidBrush(Pv.BoneDim);
         using var format = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };

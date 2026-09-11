@@ -28,6 +28,8 @@ public sealed partial class MainForm : Form
     private VoiceEngine? _voice;
     private string _voiceRoomId = "";
     private string _voiceRoomName = "";
+    private CancellationTokenSource? _voiceJoinCts;
+    private bool _joiningVoice;
 
     // tela, clipe e Jam do Spotify
     private ScreenSender? _screenSender;
@@ -98,6 +100,7 @@ public sealed partial class MainForm : Form
     private System.Windows.Forms.Timer? _stageTimer;
     private int _pollTick;
     private bool _polling;
+    private string _railSignature = "";
 
     public MainForm(bool preview = false)
     {
@@ -556,7 +559,9 @@ public sealed partial class MainForm : Form
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
             using (var pen = new Pen(Pv.Border, 1)) g.DrawLine(pen, 0, 0, p.Width, 0);
             using (var b = new SolidBrush(Pv.Green))
-                g.DrawString(_preview ? "Prévia da call" : _session != null ? "Voz conectada" : "Conectando à voz…", Pv.BodyBold, b, 14, 8);
+                g.DrawString(_preview ? "Prévia da call" : _joiningVoice ? "Entrando na sala…" :
+                    _session?.PresenceHealthy != true ? "Reconectando presença…" :
+                    _session.Peers.Any(p => p.Connected) ? "Voz conectada" : "Na sala · aguardando voz", Pv.BodyBold, b, 14, 8);
             using (var b = new SolidBrush(Pv.Bone))
             {
                 using var format = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
@@ -629,6 +634,11 @@ public sealed partial class MainForm : Form
     private void RebuildRail()
     {
         if (_railList == null || _railList.IsDisposed) return;
+        string signature = _view + "|" + _voiceRoomId + "|" + string.Join(",", _openDms) + "|" +
+            string.Join(";", _rooms.Select(r => r.Id + ":" + r.Name + ":" + r.Count + ":" + r.LiveStreams)) + "|" +
+            string.Join(",", _session?.Peers.Select(p => p.PeerId + ":" + p.Nick) ?? Enumerable.Empty<string>());
+        if (_railSignature == signature && _railList.Controls.Count > 0) return;
+        _railSignature = signature;
         _railList.SuspendLayout();
         int scrollY = -_railList.AutoScrollPosition.Y;
         foreach (Control c in _railList.Controls.Cast<Control>().ToList()) c.Dispose();
@@ -921,7 +931,7 @@ public sealed partial class MainForm : Form
         }
         // Ja estou nessa call? So mostra os tiles. Senao, entra.
         if (_voiceRoomId != roomId) await JoinVoiceAsync(roomId, roomName);
-        SelectView("room:" + roomId);
+        if (_voiceRoomId == roomId && _session?.PresenceReady == true) SelectView("room:" + roomId);
     }
 
     private void OpenDm(string other)
@@ -1024,6 +1034,7 @@ public sealed partial class MainForm : Form
             ? (_session != null ? _session.Peers.Select(p => p.Nick).Append(Nick).ToList()
                 : _rooms.FirstOrDefault(r => r.Id == _voiceRoomId)?.Occupants ?? new List<string>()) : _members;
         var ordered = roomNicks
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderByDescending(n => _presence.TryGetValue(n, out var p) && p.Online)
             .ThenBy(n => n, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -1271,19 +1282,24 @@ public sealed partial class MainForm : Form
 
     private async Task JoinVoiceAsync(string roomId, string roomName)
     {
+        if (_voiceRoomId == roomId && _session != null) return;
         LeaveVoice();
+        var joinCts = new CancellationTokenSource();
+        _voiceJoinCts = joinCts;
+        _joiningVoice = true;
         _voiceRoomId = roomId;
         _voiceRoomName = roomName;
 
-        string peerId = Sanitize(Nick) + "-" + Random.Shared.Next(0x10000, 0xFFFFF).ToString("x5");
+        string peerId = Sanitize(Nick) + "-" + Guid.NewGuid().ToString("N");
         _session = new RoomSession(_fs, roomId, peerId, Nick)
         {
             TailscaleOnly = _cfg.TailscaleOnly,
         };
-        _session.PeersChanged += OnPeersChanged;
-        _session.Failed += ShowBanner;
-
-        _session.ScreenFrameReceived += OnPeerFrame;
+        var joiningSession = _session;
+        _session.PeersChanged += () => { if (ReferenceEquals(_session, joiningSession)) OnPeersChanged(); };
+        _session.Failed += message => { if (ReferenceEquals(_session, joiningSession)) ShowBanner(message); };
+        _session.ScreenFrameReceived += (id, payload, w, h) =>
+        { if (ReferenceEquals(_session, joiningSession)) OnPeerFrame(id, payload, w, h); };
 
         _voice = new VoiceEngine
         {
@@ -1313,17 +1329,25 @@ public sealed partial class MainForm : Form
         {
             _voice.Start(_cfg.MicDevice,
                 string.IsNullOrEmpty(_cfg.OutputDeviceId) ? null : _cfg.OutputDeviceId);
-            await _session.StartAsync();
+            await joiningSession.StartAsync(joinCts.Token);
+            if (joinCts.IsCancellationRequested || !ReferenceEquals(_session, joiningSession))
+            { joiningSession.Dispose(); return; }
+            _joiningVoice = false;
+            UpdateVoiceStrip();
             UpdateRoomStatus();
         }
+        catch (OperationCanceledException) when (joinCts.IsCancellationRequested)
+        { joiningSession.Dispose(); return; }
         catch (FirestoreException ex) when (ex.IsPermissionDenied)
         {
+            if (!ReferenceEquals(_session, joiningSession)) { joiningSession.Dispose(); return; }
             ShowBanner("O Firestore recusou a escrita — falta publicar as rules do pc_rooms no Console.");
             LeaveVoice();
             return;
         }
         catch (Exception ex)
         {
+            if (!ReferenceEquals(_session, joiningSession)) { joiningSession.Dispose(); return; }
             Log.Write("entrar na sala falhou: " + ex.Message);
             ShowBanner("Nao consegui entrar: " + ex.Message);
             LeaveVoice();
@@ -1344,6 +1368,9 @@ public sealed partial class MainForm : Form
 
     private void LeaveVoice()
     {
+        _voiceJoinCts?.Cancel();
+        _voiceJoinCts = null;
+        _joiningVoice = false;
         if (_watchFullscreen) SetWatchFullscreen(false);
         _secondSharer = null;
         _secondStage?.SetFrame(null);
@@ -1518,7 +1545,7 @@ public sealed partial class MainForm : Form
             }
             tile.Invalidate();
         }
-        if (++_rosterTick % 10 == 0) RefreshMembers();
+        if (++_rosterTick % 10 == 0) { RefreshMembers(); UpdateRoomStatus(); }
     }
 
     private void UpdateRoomStatus()
@@ -1528,17 +1555,22 @@ public sealed partial class MainForm : Form
         int connected = peers.Count(p => p.Connected);
         int punching = peers.Count(p => !p.Connected);
 
-        string s = peers.Count == 0 ? "você está sozinho na sala — chama a galera"
+        string s = _joiningVoice || !_session.PresenceReady ? "Sincronizando participantes…"
+                 : !_session.PresenceHealthy ? "Reconectando à lista da sala · última lista preservada"
+                 : peers.Count == 0 ? "você está sozinho na sala — chama a galera"
                  : punching == 0 ? $"{connected + 1} na call · "
                     + (_session.TailscaleOnly ? "Tailscale P2P" : "conectado direto (P2P)")
-                 : $"{connected + 1} na call · {punching} conectando...";
+                 : $"{peers.Count + 1} na sala · voz com {connected} · {punching} sem conexão";
+        if (_session.TailscaleOnly && peers.Any(p => p.Candidates.Count == 0))
+            s += " · participante sem endereço Tailscale; precisa conectar/atualizar";
         int djListeners = peers.Count(p => p.JamJoined) + (_session.JamJoined ? 1 : 0);
         if (djListeners > 0) s += $" · {djListeners} na Jam do Spotify";
         if (!_session.TailscaleOnly && _session.PublicEndpoint == null)
             s += " · sem STUN (somente rede local)";
         if (_session.TailscaleOnly && ConnectionPolicy.TailnetAddresses().Count == 0)
             s += " · Tailscale desconectado";
-        _roomStatus.Text = s + (_iAmSharing || peers.Any(p => p.Sharing) ? " · AO VIVO" : " · sem transmissão ativa");
+        _roomStatus.Text = s + " · sala " + _voiceRoomId;
+        _voiceStrip?.Invalidate();
     }
 
     private void ToggleMute()

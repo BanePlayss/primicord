@@ -2,7 +2,16 @@
 
 O app de comunidade dos primitivos — cliente nativo de Windows com uma interface
 inspirada na organização do Discord e identidade visual do escudo Primitivão.
-Versão publicada: **0.9.7**.
+Versão publicada: **0.9.8**.
+
+## 0.9.8 — presença confiável e movimento do palco
+
+- A presença de uma sala agora usa uma concessão de 15 segundos baseada no horário do servidor, remove entradas antigas e consolida identidades pelo nick da conta. Duas sessões do mesmo nick não aparecem mais como dois participantes.
+- A entrada verifica o documento da sala, sincroniza os participantes antes de exibir a call e encerra o heartbeat anterior antes de limpar a presença. Se a rede falhar, a última lista válida fica visível com o estado de reconexão.
+- Os endpoints Tailscale são atualizados sem apagar uma conexão válida a cada polling; uma mudança de endereço refaz o furo automaticamente.
+- A interface usa transições curtas com easing cúbico, spring no clique, entrada escalonada dos cards, indicador animado de sala ativa e halo de fala. A animação segue o relógio do WinForms e é desativada na prévia automatizada.
+
+O movimento visual segue a ideia do [Anime.js](https://animejs.com/): timelines curtas, easing, stagger e spring, traduzidos para os controles nativos do Primicord sem adicionar uma dependência web.
 
 ## 0.9.7 — reduzir o custo real da transmissão
 
@@ -13,7 +22,7 @@ Versão publicada: **0.9.7**.
 - Envio alterna a região inicial da tela: movimento no topo não impede os blocos inferiores de serem atualizados.
 - Contadores distinguem capturas reais, envios de pacotes de blocos e ciclos sem mudança. Diagnóstico de tempo por etapa no log a cada 5 segundos.
 
-Validação reproduzível: `dotnet run --project Tests/ScreenPerf -c Release` abre uma cena de movimento e testa captura, compressão e remontagem via UDP local, com e sem clipe. Imagens não são salvas nem enviadas para outros computadores. No monitor 1080p desta máquina, o recebimento passou de 22–25 para cerca de 40 atualizações de blocos/s e a prévia passou de 5 para 30 FPS. Isso não equivale a 40 quadros completos/s: a cobertura por atualização depende da banda. Não foi medido desempenho entre dois computadores via Tailscale.
+Validação reproduzível: `dotnet run --project Tests/ScreenPerf -c Release` abre uma cena de movimento e testa captura, compressão e remontagem via UDP local, com e sem clipe. `dotnet run --project Tests/Presence -c Release` verifica o lease de 15 segundos, o descarte de relógio futuro e a deduplicação de duas sessões com o mesmo nick. Imagens não são salvas nem enviadas para outros computadores. No monitor 1080p desta máquina, o recebimento passou de 22–25 para cerca de 40 atualizações de blocos/s e a prévia passou de 5 para 30 FPS. Isso não equivale a 40 quadros completos/s: a cobertura por atualização depende da banda. Não foi medido desempenho entre dois computadores via Tailscale.
 
 ## 0.9.6 — pacing estável de transmissão
 

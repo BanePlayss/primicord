@@ -46,6 +46,7 @@ internal static class Program
         Log.Write("=== Primicord iniciando ===");
         try
         {
+            UiMotion.Reduced = args.Contains("--render-preview");
             var form = new MainForm(preview);
             int render = Array.IndexOf(args, "--render-preview");
             if (preview && render >= 0 && render + 1 < args.Length)
