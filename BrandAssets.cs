@@ -8,6 +8,14 @@ internal static class BrandAssets
     private static readonly Lazy<Bitmap?> Cached = new(Load, LazyThreadSafetyMode.ExecutionAndPublication);
 
     public static Bitmap? Logo => Cached.Value;
+    private static readonly Lazy<Bitmap?> CampCached = new(() =>
+    {
+        using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("Primicord.Camp");
+        if (stream == null) return null;
+        using var source = new Bitmap(stream);
+        return new Bitmap(source);
+    });
+    public static Bitmap? Camp => CampCached.Value;
 
     private static Bitmap? Load()
     {

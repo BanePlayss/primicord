@@ -48,6 +48,8 @@ public sealed class PeerTile : Control
     }
 
     public bool Speaking => Level > SpeakThreshold && !Muted && Connected;
+    protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+    protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
 
     protected override void OnPaint(PaintEventArgs e)
     {
@@ -160,19 +162,19 @@ public sealed class PeerTile : Control
     private void DrawCallCard(Graphics g)
     {
         // Stable, restrained avatar colors give each person a recognizable tile.
-        Color[] colors = { Color.FromArgb(60, 45, 42), Color.FromArgb(43, 52, 66),
-            Color.FromArgb(46, 57, 51), Color.FromArgb(57, 43, 63), Color.FromArgb(62, 52, 37) };
-        uint hash = 0;
-        foreach (char ch in Nick.ToLowerInvariant()) hash = unchecked(hash * 31 + ch);
+        var color = Pv.AvatarColor(Nick);
+        var surface = UiMotion.Blend(Pv.Char2, color, .32);
         var rect = new Rectangle(2, 2, Math.Max(1, Width - 5), Math.Max(1, Height - 5));
         using var path = Pv.RoundRect(rect, 12);
-        using (var fill = new SolidBrush(colors[hash % (uint)colors.Length])) g.FillPath(fill, path);
+        using (var fill = new LinearGradientBrush(rect, UiMotion.Blend(surface,color,.22), Pv.Char2, 60f)) g.FillPath(fill, path);
+        using (var edge = new Pen(Focused ? Pv.NitroPurple : UiMotion.Blend(surface,color,.2), Focused ? 2 : 1)) g.DrawPath(edge,path);
         if (_speech.Value > .01 || Punching)
-            using (var pen = new Pen(Punching ? Pv.Orange : UiMotion.Blend(colors[hash % (uint)colors.Length], Pv.Green, _speech.Value), 3)) g.DrawPath(pen, path);
+            using (var pen = new Pen(Punching ? Pv.Orange : UiMotion.Blend(surface, Pv.Green, _speech.Value), 3)) g.DrawPath(pen, path);
 
         int diameter = Math.Clamp(Height / 3, Large ? 44 : 32, 86);
         var avatar = new Rectangle((Width - diameter) / 2, (Height - diameter) / 2 - 2, diameter, diameter);
-        Glyphs.Avatar(g, avatar, Nick, Pv.Orange, Pv.Bone);
+        Glyphs.Avatar(g, avatar, Nick, color, Pv.Bone);
+        AccessibleName = Nick + (Speaking ? ", falando" : Muted ? ", microfone silenciado" : ", na call") + (Game.Length > 0 ? ", jogando " + Game : "");
         if (_speech.Value > .01)
             using (var pen = new Pen(Color.FromArgb((int)(255*Math.Clamp(_speech.Value,0,1)), Pv.Green), (float)(2+2*_speech.Value)))
                 g.DrawEllipse(pen, Rectangle.Inflate(avatar, 5, 5));
@@ -192,7 +194,7 @@ public sealed class PeerTile : Control
             using (var shape = Pv.RoundRect(badge, 7))
             using (var fill = new SolidBrush(Color.FromArgb(80, 12, 10, 22))) g.FillPath(fill, shape);
             Glyphs.Gamepad(g, new RectangleF(19, 15, 18, 18), Color.FromArgb(206, 185, 250));
-            g.DrawString(Game, Pv.Label, light, new RectangleF(44, 17, Math.Max(1, badge.Width - 40), 18), format);
+            g.DrawString(Game, Pv.Label, light, new RectangleF(44, 15, Math.Max(1, badge.Width - 40), 20), format);
         }
         if (JamJoined)
         {
@@ -200,6 +202,7 @@ public sealed class PeerTile : Control
             g.DrawString("JAM", Pv.Label, light, Width - 42, 13);
         }
         if (Muted) Glyphs.Mic(g, new RectangleF(Width - 34, Height - 32, 18, 18), Pv.Red, true);
+        else if (Speaking && Large) Glyphs.Speaker(g, new RectangleF(Width - 34, Height - 32, 18, 18), Pv.Green);
         if (!Connected)
             g.DrawString(Punching ? "Conectando…" : "Sem sinal", Pv.Label, dim, 14, Height - 50);
     }

@@ -8,6 +8,7 @@ public sealed partial class MainForm
     private StageView? _secondStage;
     private uint? _secondSharer;
     private PrimButton? _pickWatch, _compareWatch, _expandWatch;
+    private Label? _watchTitle;
     private bool _watchFullscreen;
     private Rectangle _beforeWatchBounds;
     private Size _beforeWatchClientSize;
@@ -32,8 +33,9 @@ public sealed partial class MainForm
     private Panel BuildWatchHeader()
     {
         var header = new Panel { Dock = DockStyle.Top, Height = 46, BackColor = Pv.Charcoal };
-        var title = new Label { Dock = DockStyle.Fill, Text = "Call da tribo", Font = Pv.BodyBold,
+        var title = new Label { Dock = DockStyle.Fill, Text = "Arena principal", Font = Pv.DisplaySm,
             ForeColor = Pv.Bone, TextAlign = ContentAlignment.MiddleLeft };
+        _watchTitle = title;
         _expandWatch = new PrimButton("TELA CHEIA", PrimButton.Style.Ghost) { Dock = DockStyle.Right, Width = 138 };
         _compareWatch = new PrimButton("+ OUTRA TELA", PrimButton.Style.Ghost) { Dock = DockStyle.Right, Width = 134 };
         _pickWatch = new PrimButton("ASSISTIR", PrimButton.Style.Ghost) { Dock = DockStyle.Right, Width = 120 };
@@ -94,6 +96,9 @@ public sealed partial class MainForm
             _secondStage.SetSelfFrame(null);
         }
         bool pair = _secondSharer.HasValue;
+        if (_watchTitle != null) _watchTitle.Text = System.Globalization.CultureInfo.GetCultureInfo("pt-BR").TextInfo.ToTitleCase(_voiceRoomName.ToLowerInvariant());
+        foreach (var button in new[] { _pickWatch, _compareWatch, _expandWatch })
+            if (button != null) button.Visible = sources.Count > 0 || _watchFullscreen;
         bool stacked = pair && _watchStages.ClientSize.Width < 850;
         int columns = pair && !stacked ? 2 : 1;
         int rows = stacked ? 2 : 1;
@@ -115,13 +120,13 @@ public sealed partial class MainForm
         if (_expandWatch != null)
         {
             _expandWatch.Enabled = sources.Count > 0 || _watchFullscreen;
-            _expandWatch.Text = _watchFullscreen ? "VOLTAR · ESC" : sources.Count > 0 ? "TELA CHEIA" : "SEM TRANSMISSÃO";
+            _expandWatch.Text = _watchFullscreen ? "Voltar · Esc" : "Tela cheia";
         }
-        if (_pickWatch != null) { _pickWatch.Enabled = sources.Count > 0; _pickWatch.Text = sources.Count > 0 ? "ASSISTIR · " + sources.Count : "SEM TELAS"; }
+        if (_pickWatch != null) { _pickWatch.Enabled = sources.Count > 0; _pickWatch.Text = "Assistir · " + sources.Count; }
         if (_compareWatch != null)
         {
             _compareWatch.Enabled = pair || sources.Count > 1;
-            _compareWatch.Text = pair ? "FECHAR 2ª TELA" : sources.Count > 1 ? "+ OUTRA TELA" : "SEM OUTRA TELA";
+            _compareWatch.Text = pair ? "Fechar 2ª tela" : sources.Count > 1 ? "+ Outra tela" : "Só uma tela ativa";
         }
     }
 
@@ -177,7 +182,7 @@ public sealed partial class MainForm
         SuspendLayout();
         if (_navigationRail != null) _navigationRail.Visible = !enabled;
         if (_membersPanel != null) _membersPanel.Visible = !enabled && _beforeWatchMembers;
-        if (_shellTitle != null) _shellTitle.Visible = !enabled;
+        if (_shellTitle != null) _shellTitle.Visible = false; // The room owns its single header, including after fullscreen.
         _banner.Visible = !enabled && _beforeWatchBanner;
         WindowState = FormWindowState.Normal;
         FormBorderStyle = enabled ? FormBorderStyle.None : _beforeWatchBorder;

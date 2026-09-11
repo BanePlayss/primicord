@@ -56,13 +56,15 @@ public sealed partial class MainForm : Form
     };
     private System.Windows.Forms.Timer? _bannerTimer;
 
-    private Panel? _railList, _voiceStrip, _userPanel, _membersList, _membersPanel, _contentHost;
+    private Panel? _voiceStrip, _userPanel, _membersList, _membersPanel, _contentHost;
+    private RailListPanel? _railList;
     private ChatView? _chatView;
     private JamPanel? _jamPanel;
     private Panel? _stageActions;
     private PrimButton? _profileShare, _profileLeave;
     private GameActivityCard? _activityCard;
     private Label? _shellTitle;
+    private readonly HashSet<string> _collapsedRail = new(StringComparer.Ordinal);
     private bool _previewSharing, _previewJam;
     private InviteTile? _inviteTile;
     private DashboardView? _dashboard;
@@ -374,34 +376,28 @@ public sealed partial class MainForm : Form
             e.Graphics.DrawLine(p, rail.Width - 1, 0, rail.Width - 1, rail.Height);
         };
 
-        var brand = new Panel { Dock = DockStyle.Top, Height = 52, BackColor = Pv.Char2, Cursor = Cursors.Hand };
+        var brand = new Panel { Dock = DockStyle.Top, Height = 76, BackColor = Pv.Char2, Cursor = Cursors.Hand };
         brand.Paint += (_, e) =>
         {
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-            BrandAssets.Draw(g, new Rectangle(12, 8, 34, 34));
+            BrandAssets.Draw(g, new Rectangle(14, 18, 36, 36));
             using (var b = new SolidBrush(Pv.Bone))
-                g.DrawString("Primitivos da Nova Era", Pv.BodyBold, b, 54, 10);
+                g.DrawString("Primitivos da Nova Era", Pv.BodyBold, b, 58, 19);
             using (var b = new SolidBrush(Pv.BoneDim))
-                g.DrawString("⌄", Pv.BodyBold, b, 220, 10);
-            Glyphs.Users(g, new RectangleF(Math.Max(0, brand.Width - 34), 15, 18, 18), Pv.Bone);
+                g.DrawString("Seu acampamento", Pv.Label, b, 58, 41);
             using (var p = new Pen(Pv.Border, 1))
                 g.DrawLine(p, 0, brand.Height - 1, brand.Width, brand.Height - 1);
         };
         brand.Click += (_, _) => SelectView("home");
 
-        var nitro = BuildNitroBanner();
-
         _userPanel = BuildUserPanel();
         _voiceStrip = BuildVoiceStrip();
-        _railList = new Panel
-        {
-            Dock = DockStyle.Fill, AutoScroll = true, BackColor = Pv.Char2,
-            Padding = new Padding(0, 8, 0, 8),
-        };
+        var railScroll = new RailScrollHost();
+        _railList = railScroll.Content;
 
-        rail.Controls.Add(_railList);   // Fill primeiro
+        rail.Controls.Add(railScroll);   // Fill primeiro
         rail.Controls.Add(_voiceStrip);
         _activityCard = new GameActivityCard(_preview) { Dock = DockStyle.Bottom };
         _activityCard.ActivityChanged += game =>
@@ -412,7 +408,6 @@ public sealed partial class MainForm : Form
         };
         rail.Controls.Add(_activityCard);
         rail.Controls.Add(_userPanel);
-        nitro.Dispose();
         rail.Controls.Add(brand);
 
         // ── MEMBROS (direita) ──
@@ -429,7 +424,7 @@ public sealed partial class MainForm : Form
             var g = e.Graphics;
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
             using var b = new SolidBrush(Pv.Bone);
-            g.DrawString(_voiceRoomId.Length > 0 ? "NA SALA DE VOZ" : "A TRIBO", Pv.BodyBold, b, 18, 18);
+            g.DrawString(_voiceRoomId.Length > 0 ? "Na sala de voz" : "A tribo", Pv.BodyBold, b, 18, 18);
         };
         _membersList = new Panel
         {
@@ -446,12 +441,14 @@ public sealed partial class MainForm : Form
         // ── CONTEUDO ──
         _contentHost = new Panel { Dock = DockStyle.Fill, BackColor = Pv.Charcoal };
 
-        host.Controls.Add(_contentHost);   // Fill primeiro
+        var workspace = new Panel { Dock = DockStyle.Fill, BackColor = Pv.Charcoal };
+        workspace.Controls.Add(_contentHost);
+        host.Controls.Add(workspace);   // Fill primeiro
         host.Controls.Add(members);
         host.Controls.Add(rail);
-        _shellTitle = new Label { Dock = DockStyle.Top, Height = 46, Font = Pv.BodyBold,
-            ForeColor = Pv.Bone, BackColor = Pv.SurfaceLowest, Padding = new Padding(20, 14, 0, 0) };
-        host.Controls.Add(_shellTitle);
+        _shellTitle = new Label { Dock = DockStyle.Top, Height = 52, Font = Pv.DisplaySm,
+            ForeColor = Pv.Bone, BackColor = Pv.Charcoal, Padding = new Padding(20, 14, 0, 0) };
+        workspace.Controls.Add(_shellTitle);
         SetBody(host);
 
         _chatView = new ChatView { Dock = DockStyle.Fill };
@@ -473,6 +470,8 @@ public sealed partial class MainForm : Form
         else
         {
             ShowBanner("PRÉVIA LOCAL · Firestore, voz e Tailscale desligados");
+            _banner.Height = 24;
+            _banner.BackColor = Pv.SurfaceLow;
         }
     }
 
@@ -543,7 +542,7 @@ public sealed partial class MainForm : Form
             else if (_session == null) ShowBanner("Entre em uma sala para transmitir.");
             else { SelectView("room:" + _voiceRoomId); ToggleScreenShare(); }
         };
-        _profileLeave = new PrimButton("SAIR", PrimButton.Style.Ghost) { Location = new Point(170,10), Size = new Size(76,38) };
+        _profileLeave = new PrimButton("Sair", PrimButton.Style.Ghost) { Location = new Point(170,10), Size = new Size(76,38) };
         _profileLeave.AccessibleName = "Sair da sala de voz";
         _profileLeave.Click += (_,_) => { LeaveVoice(); SelectView("home"); };
         var menu = new ContextMenuStrip();
@@ -585,7 +584,7 @@ public sealed partial class MainForm : Form
         if (_profileShare != null)
         {
             _profileShare.Enabled = _voiceRoomId.Length > 0;
-            _profileShare.Text = _voiceRoomId.Length == 0 ? "ENTRE EM UMA SALA" : _iAmSharing || _previewSharing ? "PARAR TELA" : "TRANSMITIR";
+            _profileShare.Text = _voiceRoomId.Length == 0 ? "Entre em uma sala" : _iAmSharing || _previewSharing ? "Parar transmissão" : "Transmitir";
             _profileShare.Invalidate();
         }
         SyncDjView();
@@ -640,7 +639,7 @@ public sealed partial class MainForm : Form
     private void RebuildRail()
     {
         if (_railList == null || _railList.IsDisposed) return;
-        string signature = _view + "|" + _voiceRoomId + "|members=" + (_membersPanel?.Visible == true) + "|" + string.Join(",", _openDms) + "|" +
+        string signature = string.Join(",", _collapsedRail.Order()) + "|" + _view + "|" + _voiceRoomId + "|members=" + (_membersPanel?.Visible == true) + "|" + string.Join(",", _openDms) + "|" +
             string.Join(";", _rooms.Select(r => r.Id + ":" + r.Name + ":" + r.Count + ":" + r.LiveStreams)) + "|" +
             string.Join(",", _session?.Peers.Select(p => p.PeerId + ":" + p.Nick) ?? Enumerable.Empty<string>());
         if (_railSignature == signature && _railList.Controls.Count > 0) return;
@@ -653,7 +652,7 @@ public sealed partial class MainForm : Form
         void Add(string text, string route, RailItem.Kind kind)
         {
             var item = new RailItem(text, kind) { Dock = DockStyle.Top, Height = 34,
-                Active = _view == route || route == "rooms" && _view.StartsWith("room:") };
+                Active = _view == route };
             item.Click += (_,_) => {
                 if (route == "rooms" && _voiceRoomId.Length > 0) SelectView("room:" + _voiceRoomId);
                 else SelectView(route);
@@ -665,24 +664,40 @@ public sealed partial class MainForm : Form
         Add("Acampamento", "home", RailItem.Kind.Event);
         var members = new RailItem("Membros", RailItem.Kind.Members)
         {
-            Dock = DockStyle.Top, Height = 34, Active = _membersPanel?.Visible == true,
+            Dock = DockStyle.Top, Height = 34, Suffix = _membersPanel?.Visible == true ? "−" : "+",
         };
         members.Click += (_, _) => ToggleMembersPanel();
         items.Add(members);
         items.Add(RailDivider());
 
-        items.Add(RailHeader("PILAR"));
+        bool Section(string title, Func<Task>? add = null)
+        {
+            bool collapsed = _collapsedRail.Contains(title);
+            var section = new RailSection(title, collapsed, () =>
+            {
+                if (!_collapsedRail.Add(title)) _collapsedRail.Remove(title);
+                RebuildRail();
+                // Rebuilding must not strand keyboard focus on a disposed disclosure.
+                _railList.Controls.OfType<RailSection>().FirstOrDefault(s => s.Name == title)?.SelectNextControl(null, true, true, true, false);
+            }, add) { Name = title };
+            items.Add(section);
+            return !collapsed;
+        }
+        if (Section("Voz e atividades"))
+        {
         Add("Salas", "rooms", RailItem.Kind.Voice);
         Add("Transmissões", "streams", RailItem.Kind.Voice);
         Add("Jam", "dj", RailItem.Kind.Music);
         Add("Servidores", "servers", RailItem.Kind.Action);
-        items.Add(RailHeader("PRIMITIVOS DA NOVA ERA"));
+        }
+        if (Section("Texto"))
         foreach (var channel in TextChannels)
             Add(channel.Name, channel.Id == ChatService.GeneralChannel ? "geral" : "channel:" + channel.Id, RailItem.Kind.TextChannel);
-        items.Add(RailHeader("CANAIS DE VOZ", async () =>
+        if (Section("Salas de voz", async () =>
         {
             if (!_preview) await CreateRoomAsync();
-        }));
+        }))
+        {
         foreach (var room in _rooms)
         {
             var item = new RailItem(room.Name, RailItem.Kind.Voice) {
@@ -705,9 +720,6 @@ public sealed partial class MainForm : Form
                 }
             }
         }
-        var create = new RailItem("Nova sala", RailItem.Kind.Action) { Dock = DockStyle.Top, Height = 32 };
-        create.Click += async (_,_) => { if (!_preview) await CreateRoomAsync(); };
-        items.Add(create);
         var code = new RailItem("Entrar por código", RailItem.Kind.Voice) { Dock = DockStyle.Top, Height = 32 };
         code.Click += async (_,_) => {
             if (_preview) return;
@@ -718,6 +730,7 @@ public sealed partial class MainForm : Form
             await OnRoomClickedAsync(room.Id, room.Name);
         };
         items.Add(code);
+        }
         if (_openDms.Count > 0) items.Add(RailHeader("MENSAGENS DIRETAS"));
         foreach (var other in _openDms)
         {
@@ -725,6 +738,7 @@ public sealed partial class MainForm : Form
             dm.Click += (_,_) => OpenDm(other);
             items.Add(dm);
         }
+        for (int i = 0; i < items.Count; i++) items[i].TabIndex = i;
         items.Reverse();
         foreach (var item in items) _railList.Controls.Add(item);
         _railList.ResumeLayout();
@@ -742,20 +756,16 @@ public sealed partial class MainForm : Form
         return p;
     }
 
-    private static Panel RailHeader(string text, Func<Task>? onPlus = null)
+    private static Panel RailHeader(string text)
     {
-        var p = new Panel { Dock = DockStyle.Top, Height = 30, BackColor = Pv.Char2,
-            Cursor = onPlus == null ? Cursors.Default : Cursors.Hand };
+        var p = new Panel { Dock = DockStyle.Top, Height = 30, BackColor = Pv.Char2 };
         p.Paint += (_, e) =>
         {
             var g = e.Graphics;
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
             using var b = new SolidBrush(Pv.BoneDim);
-            g.DrawString("⌄", Pv.Label, b, 10, 9);
-            g.DrawString(text, Pv.Label, b, 24, 10);
-            if (onPlus != null) Glyphs.Plus(g, new RectangleF(p.Width - 28, 8, 14, 14), Pv.BoneDim, 1.4f);
+            g.DrawString(text, Pv.Label, b, 18, 8);
         };
-        if (onPlus != null) p.Click += async (_, _) => await onPlus();
         return p;
     }
 
@@ -823,8 +833,12 @@ public sealed partial class MainForm : Form
             : view.StartsWith("dm:") ? "@ " + view[3..]
             : view switch { "home" => "ACAMPAMENTO", "rooms" => "SALAS", "streams" => "TRANSMISSÕES",
                 "servers" => "SERVIDORES DE JOGOS", "dj" => "JAM DO SPOTIFY", "geral" => "# geral", _ => view };
-        if (_shellTitle != null) _shellTitle.Text = "PRIMICORD   /   " + viewTitle +
-            "     ·     " + (_preview ? "PRÉVIA LOCAL" : "TAILSCALE · " + ConnectionPolicy.Summary);
+        if (_shellTitle != null)
+        {
+            _shellTitle.Text = System.Globalization.CultureInfo.GetCultureInfo("pt-BR").TextInfo.ToTitleCase(viewTitle.ToLowerInvariant());
+            // Room and chat already own their headers. Never stack duplicate titles.
+            _shellTitle.Visible = view is "home" or "rooms" or "streams" or "servers" || view == "dj" && _voiceRoomId.Length == 0;
+        }
         RefreshMembers();
         SyncDjView();
         SyncStageLayout();
@@ -1959,18 +1973,18 @@ public sealed partial class MainForm : Form
         if (_icShare == null || _icRec == null || _icClip == null) return;
         bool sharing = _iAmSharing || _previewSharing;
         _icShare.Active = sharing;
-        _icShare.Caption = sharing ? "PARAR TELA" : "TRANSMITIR";
+        _icShare.Caption = sharing ? "Parar tela" : "Transmitir";
         bool buffering = _clips?.Active == true;
         _icRec.Active = buffering;
-        _icRec.Caption = buffering ? "BUFFER ON" : "BUFFER OFF";
+        _icRec.Caption = buffering ? "Replay ligado" : "Ativar replay";
         _icClip.Enabled = buffering;
-        _icClip.Caption = buffering ? "CLIPAR" : "SEM BUFFER";
+        _icClip.Caption = buffering ? "Salvar clipe" : "Sem replay";
         _icClip.ToolTipText = buffering ? "Salvar últimos segundos" : "Ative o buffer para clipar";
         if (_lanBadge != null)
         {
-            _lanBadge.Text = sharing ? $"VOCÊ TRANSMITE · {_cfg.ScreenFps} FPS" : "TRANSMISSÃO AO VIVO";
-            if (buffering) _lanBadge.Text += " · CLIPE PRONTO";
-            else _lanBadge.Text += " · BUFFER DESLIGADO";
+            _lanBadge.Text = sharing ? $"Você transmite · alvo {_cfg.ScreenFps} FPS" : "Transmissão ao vivo";
+            if (buffering) _lanBadge.Text += " · clipe pronto";
+            else _lanBadge.Text += " · replay desligado";
             _lanBadge.ForeColor = buffering ? Pv.Green : Pv.BoneDim;
         }
         _icShare.Invalidate(); _icRec.Invalidate(); _icClip.Invalidate();
@@ -2113,6 +2127,19 @@ public sealed partial class MainForm : Form
     internal void RenderPreviewChecks(string directory)
     {
         if (!_preview) throw new InvalidOperationException("Visual checks require --preview.");
+        try { RunPreviewChecks(directory); }
+        catch (Exception ex)
+        {
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory,"result.txt"),"FAIL: " + ex);
+            Environment.ExitCode = 1;
+        }
+        finally { _reallyClosing = true; Close(); }
+    }
+
+    private void RunPreviewChecks(string directory)
+    {
+        if (!_preview) throw new InvalidOperationException("Visual checks require --preview.");
         Directory.CreateDirectory(directory);
         int failures = 0;
         foreach (var size in new[] { new Size(1920,1080), new Size(1440,900), new Size(1280,720) })
@@ -2150,6 +2177,8 @@ public sealed partial class MainForm : Form
                     bool live = _previewSharing;
                     if (_stage!.Visible != live || _stageActions!.Visible != live || _inviteTile!.Visible == live) failures++;
                     if (_tiles!.Controls.OfType<PeerTile>().Count() != 5) failures++;
+                    if (_pickWatch!.Visible != live || _compareWatch!.Visible != live || _expandWatch!.Visible != live) failures++;
+                    if (_shellTitle!.Visible) failures++;
                 }
                 bool inCall = scene != "acampamento";
                 if (_profileShare == null || _profileShare.Enabled != inCall) failures++;
@@ -2160,6 +2189,7 @@ public sealed partial class MainForm : Form
                 if (_secondSharer.HasValue && (!_secondStage!.Visible || _stage!.Bounds.IntersectsWith(_secondStage.Bounds))) failures++;
                 if (_watchFullscreen && (!_tiles!.Visible || _navigationRail!.Visible || !_expandWatch!.Enabled)) failures++;
                 if (_userPanel!.Controls.Cast<Control>().Any(c => c.Visible && !_userPanel.ClientRectangle.Contains(c.Bounds))) failures++;
+                if (_stageActions?.Visible == true && _stageActions.Controls.Cast<Control>().Any(c => c.Visible && !_stageActions.ClientRectangle.Contains(c.Bounds))) failures++;
                 using var bitmap = new Bitmap(Width, Height);
                 DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size));
                 bitmap.Save(Path.Combine(directory, scene + "-" + size.Width + ".png"));
@@ -2183,12 +2213,31 @@ public sealed partial class MainForm : Form
                     if (_secondSharer.HasValue || _stage!.Visible || !_tiles!.Visible || _voiceRoomId != "arena") failures++;
                 }
             }
+            // Exercise the same key handlers used by real Tab/Enter/arrow navigation.
+            void Key(Control control, Keys key) => typeof(Control).GetMethod("OnKeyDown",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(control, new object[] { new KeyEventArgs(key) });
+            Control Disclosure(string name) => _railList!.Controls.OfType<RailSection>().Single(s => s.Name == name)
+                .Controls.Cast<Control>().Single(c => c.AccessibleName?.StartsWith("Recolher ") == true || c.AccessibleName?.StartsWith("Expandir ") == true);
+            string joinedRoom = _voiceRoomId;
+            Key(Disclosure("Texto"), Keys.Enter);
+            if (_railList!.Controls.OfType<RailItem>().Any(r => r.ItemKind == RailItem.Kind.TextChannel)) failures++;
+            if (_voiceRoomId != joinedRoom || !_collapsedRail.Contains("Texto")) failures++;
+            Key(Disclosure("Texto"), Keys.Right);
+            if (_railList.Controls.OfType<RailItem>().Count(r => r.ItemKind == RailItem.Kind.TextChannel) != TextChannels.Length) failures++;
+            Key(Disclosure("Salas de voz"), Keys.Left);
+            if (_railList.Controls.OfType<RailItem>().Any(r => r.Text == "ARENA PRINCIPAL") || _voiceRoomId != joinedRoom) failures++;
+            Key(Disclosure("Salas de voz"), Keys.Space);
+            if (!_railList.Controls.OfType<RailItem>().Any(r => r.Text == "ARENA PRINCIPAL")) failures++;
+            _railList.ScrollTo(int.MaxValue);
+            if (_railList.Offset != _railList.Maximum || _railList.Controls.Cast<Control>().Max(c => c.Bottom) > _railList.Height) failures++;
+            _railList.ScrollTo(0);
+            if (_railList.Controls.OfType<RailItem>().Count(r => r.Active) > 1) failures++;
         }
         File.WriteAllText(Path.Combine(directory,"result.txt"), failures == 0
-            ? "PASS: 18 layouts; stream selection/swap/navigation/fullscreen restore and stage/roster/profile invariants."
+            ? "PASS: 18 layouts; stream selection/swap/navigation/fullscreen restore; stage/roster/profile/action bounds; category keyboard/collapse/restore; rail scroll limits and single selection."
             : "FAIL: " + failures);
-        _reallyClosing = true;
-        Close();
+        Environment.ExitCode = failures == 0 ? 0 : 1;
     }
 
     private static Bitmap BuildPreviewFrame()

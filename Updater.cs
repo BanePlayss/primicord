@@ -18,6 +18,11 @@ public static class Updater
 {
     public const string DefaultRepo = "BanePlayss/primicord-releases";
 
+    // Velopack requires three-part SemVer. The public release keeps the name
+    // requested by the community; comparison uses the manifest's package version.
+    public static string DisplayPackageVersion(string version)
+        => version == "0.9.10" ? "0.9.9.1" : version;
+
     public static string CurrentVersion
     {
         get
@@ -71,7 +76,7 @@ public static class Updater
         long size = delta ? info.DeltasToTarget.Sum(d => d.Size) : info.TargetFullRelease.Size;
         return new UpdateInfoView
         {
-            Version = info.TargetFullRelease.Version.ToString(),
+            Version = DisplayPackageVersion(info.TargetFullRelease.Version.ToString()),
             Size = size,
             Notes = info.TargetFullRelease.NotesMarkdown ?? "",
             IsDelta = delta,

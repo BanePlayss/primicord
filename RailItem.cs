@@ -54,6 +54,8 @@ public sealed class RailItem : Control
 
     protected override void OnMouseEnter(EventArgs e) { _hover = true; _hoverMotion.To(1); base.OnMouseEnter(e); }
     protected override void OnMouseLeave(EventArgs e) { _hover = false; _hoverMotion.To(0); base.OnMouseLeave(e); }
+    protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+    protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
@@ -76,14 +78,20 @@ public sealed class RailItem : Control
         if (Active || _hoverMotion.Value > 0)
         {
             using var path = Pv.RoundRect(r, 6);
-            using var b = new SolidBrush(Active ? Pv.Char3 : UiMotion.Blend(BackColor, Pv.SurfaceHover, _hoverMotion.Value));
+            using var b = new SolidBrush(Active ? Color.FromArgb(48, 46, 66) : UiMotion.Blend(BackColor, Pv.SurfaceHover, _hoverMotion.Value));
             g.FillPath(b, path);
         }
         if (Active)
         {
-            using var accent = new SolidBrush(Pv.Orange);
+            using var accent = new SolidBrush(Pv.NitroPurple);
             using var indicator = Pv.RoundRect(new Rectangle(r.X, r.Y + 6, 3, Math.Max(3, r.Height - 12)), 2);
             g.FillPath(accent, indicator);
+        }
+        if (Focused && ShowFocusCues)
+        {
+            using var focus = new Pen(Pv.NitroPurple, 1.5f);
+            using var outline = Pv.RoundRect(r, 6);
+            g.DrawPath(focus, outline);
         }
         g.TranslateTransform((float)(_hoverMotion.Value * 2), 0);
 
@@ -156,10 +164,20 @@ public sealed class MemberRow : Control
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
                  ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-        Height = 44;
+        Height = 54;
         Cursor = Cursors.Hand;
         BackColor = Pv.Char2;   // MESMA cor do painel de membros
+        TabStop = true;
+        AccessibleRole = AccessibleRole.PushButton;
     }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (e.KeyCode is Keys.Enter or Keys.Space) { e.SuppressKeyPress = true; OnClick(EventArgs.Empty); return; }
+        base.OnKeyDown(e);
+    }
+    protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+    protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
 
     protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
     protected override void OnMouseLeave(EventArgs e) { _hover = false; Invalidate(); base.OnMouseLeave(e); }
@@ -171,7 +189,7 @@ public sealed class MemberRow : Control
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
         var r = new Rectangle(6, 2, Width - 12, Height - 4);
-        if (_hover)
+        if (_hover || Focused)
         {
             using var path = Pv.RoundRect(r, 6);
             using var b = new SolidBrush(Pv.SurfaceHover);
@@ -181,7 +199,7 @@ public sealed class MemberRow : Control
         var box = new Rectangle(r.X + 8, r.Y + (r.Height - 30) / 2, 30, 30);
         var saved = g.Save();
         if (!Online) g.CompositingQuality = CompositingQuality.HighQuality;
-        Glyphs.Avatar(g, box, Nick, Online ? Pv.Orange : Pv.Char3, Online ? Pv.Charcoal : Pv.BoneDim);
+        Glyphs.Avatar(g, box, Nick, Online ? Pv.AvatarColor(Nick) : Pv.Char3, Pv.Bone);
         if (!Online)
         {
             // Offline: veu por cima da foto, como no Discord.
@@ -195,16 +213,18 @@ public sealed class MemberRow : Control
 
         float tx = box.Right + 10;
         bool twoLines = Room.Length > 0;
+        AccessibleName = Nick + (IsMe ? " (você)" : "") + ", " + Room;
+        using var format = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
         using (var b = new SolidBrush(Online ? Pv.Bone : Pv.BoneDim))
         {
-            string name = Nick + (IsMe ? " (voce)" : "");
-            g.DrawString(name, Online ? Pv.BodyBold : Pv.Body, b, tx,
-                         twoLines ? r.Y + 5 : r.Y + (r.Height - Pv.Body.Height) / 2f);
+            string name = Nick + (IsMe ? " (você)" : "");
+            g.DrawString(name, Online ? Pv.BodyBold : Pv.Body, b,
+                new RectangleF(tx, twoLines ? r.Y + 5 : r.Y + (r.Height - Pv.Body.Height) / 2f, Math.Max(1,r.Right-tx-8),22), format);
         }
         if (twoLines)
         {
-            using var b = new SolidBrush(Pv.Green);
-            g.DrawString(Room, Pv.Label, b, tx, r.Y + 24);
+            using var b = new SolidBrush(Room == "falando" ? Pv.Green : Pv.BoneDim);
+            g.DrawString(Room, Pv.Label, b, new RectangleF(tx, r.Y + 27, Math.Max(1,r.Right-tx-8),19), format);
         }
     }
 }

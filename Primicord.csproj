@@ -11,10 +11,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Primicord</AssemblyName>
     <RootNamespace>Primicord</RootNamespace>
-    <Version>0.9.9</Version>
-    <AssemblyVersion>0.9.9.0</AssemblyVersion>
-    <FileVersion>0.9.9.0</FileVersion>
-    <InformationalVersion>0.9.9</InformationalVersion>
+    <Version>0.9.9.1</Version>
+    <AssemblyVersion>0.9.9.1</AssemblyVersion>
+    <FileVersion>0.9.9.1</FileVersion>
+    <InformationalVersion>0.9.9.1</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <ApplicationIcon>Primicord.ico</ApplicationIcon>
     <!-- Trimming quebra reflection do WinForms/NAudio — deixar desligado. -->
@@ -29,6 +29,7 @@
   <ItemGroup>
     <Compile Remove="Tests\**\*.cs" />
     <EmbeddedResource Include="Assets\primitivao-reference.png" LogicalName="Primicord.Brand" />
+    <EmbeddedResource Include="Assets\camp-banner.png" LogicalName="Primicord.Camp" />
     <!-- Motor de video empacotado pelo build.ps1 (ver VlcRuntime.cs). Sem ele o app
          compila e roda normal; so a sessao cinema fica indisponivel. -->
     <EmbeddedResource Include="vlc-runtime.zip" Condition="Exists('vlc-runtime.zip')"

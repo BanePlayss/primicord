@@ -2,7 +2,25 @@
 
 O app de comunidade dos primitivos — cliente nativo de Windows com uma interface
 inspirada na organização do Discord e identidade visual do escudo Primitivão.
-Versão publicada: **0.9.8**.
+Versão publicada: **0.9.9.1**.
+
+## 0.9.9.1 — Obsidiana: nova UX da tribo
+
+- Acampamento com arte original, cartões compactos e ações mais legíveis.
+- Navegação com categorias recolhíveis por clique e teclado, rolagem escura e foco visível.
+- Call sem cabeçalhos duplicados ou controles de assistir quando não há transmissão.
+- Avatares com cores estáveis, atividade de jogo e Jam do Spotify integrada ao painel de participantes.
+- Controles de replay com rótulos claros e indicador de FPS identificado como alvo configurado.
+- Mantém o canal de atualização e a identidade do pacote das versões anteriores.
+
+Validação: 18 layouts em três tamanhos, navegação de categorias pelo teclado,
+troca de transmissões, restauração de tela cheia e teste de filtragem de presença.
+Esta revisão não altera captura/encoder e não promete melhoria de FPS entre PCs.
+
+[Baixar instalador](https://github.com/BanePlayss/primicord-releases/releases/download/v0.9.9.1/Primicord-win-Setup.exe).
+Quem já instalou pelo Setup pode usar **Configurações → Procurar atualização**.
+O pacote Velopack usa 0.9.10 internamente (SemVer de três partes); o nome público
+e a versão exibida pelo Primicord continuam 0.9.9.1.
 
 ## 0.9.8 — presença confiável e movimento do palco
 

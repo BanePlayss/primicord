@@ -16,40 +16,52 @@ public static class Pv
     /// </summary>
     public static Color Orange { get; private set; } = Color.FromArgb(0xE6, 0x72, 0x16);
     public static Color OrangeDim { get; private set; } = Color.FromArgb(0xA8, 0x4A, 0x10);
+    private static Color? _siteAccent;
+    public static Color Primary => _siteAccent ?? NitroPurple;
 
     /// <summary>Troca a cor de destaque (null volta pro laranja padrao).</summary>
     public static void SetAccent(Color? accent)
     {
         var c = accent ?? Color.FromArgb(0xE6, 0x72, 0x16);
         Orange = c;
+        _siteAccent = accent;
         // Versao apagada pra estados secundarios (borda de "conectando", etc).
         OrangeDim = Color.FromArgb((int)(c.R * 0.72), (int)(c.G * 0.72), (int)(c.B * 0.72));
     }
     // Paleta inspirada no escudo enviado: fuligem, madeira queimada, osso e
     // laranja de pigmento. O destaque continua legível em telas escuras.
-    public static readonly Color Charcoal = Color.FromArgb(0x12, 0x13, 0x16);
-    public static readonly Color Char2 = Color.FromArgb(0x1A, 0x1B, 0x1F);
+    public static readonly Color Charcoal = Color.FromArgb(0x10, 0x11, 0x16);
+    public static readonly Color Char2 = Color.FromArgb(0x19, 0x1A, 0x22);
     public static readonly Color Char3 = Color.FromArgb(0x35, 0x36, 0x3C);
-    public static readonly Color SurfaceLow = Color.FromArgb(0x23, 0x24, 0x2A);
+    public static readonly Color SurfaceLow = Color.FromArgb(0x24, 0x26, 0x30);
     public static readonly Color SurfaceLowest = Color.FromArgb(0x10, 0x11, 0x14);
-    public static readonly Color SurfaceHover = Color.FromArgb(0x2C, 0x2D, 0x33);
+    public static readonly Color SurfaceHover = Color.FromArgb(0x30, 0x32, 0x3E);
     public static readonly Color Input = Color.FromArgb(0x27, 0x28, 0x2E);
     public static readonly Color Border = Color.FromArgb(0x30, 0x31, 0x37);
     public static readonly Color Bone = Color.FromArgb(0xF2, 0xF0, 0xEC);
-    public static readonly Color BoneDim = Color.FromArgb(0xAC, 0xAE, 0xB7);
+    public static readonly Color BoneDim = Color.FromArgb(0xB6, 0xB8, 0xC5);
     public static readonly Color Muted = Color.FromArgb(0x83, 0x85, 0x90);
     public static readonly Color Green = Color.FromArgb(0x43, 0xB5, 0x81);
     public static readonly Color Red = Color.FromArgb(0xD8, 0x5A, 0x45);
     public static readonly Color Yellow = Color.FromArgb(0xE3, 0xB5, 0x4B);
-    public static readonly Color NitroPurple = Color.FromArgb(0xB0, 0x5A, 0x20);
-    public static readonly Color NitroPink = Color.FromArgb(0xF0, 0x8A, 0x25);
+    public static readonly Color NitroPurple = Color.FromArgb(0xA9, 0x9A, 0xFF);
+    public static readonly Color NitroPink = Color.FromArgb(0xC0, 0xAC, 0xFA);
 
     public static readonly Font Display = new("Bahnschrift", 20f, FontStyle.Bold);
     public static readonly Font DisplaySm = new("Bahnschrift", 13f, FontStyle.Bold);
-    public static readonly Font Body = new("Segoe UI", 9.5f);
-    public static readonly Font BodyBold = new("Segoe UI", 9.5f, FontStyle.Bold);
-    public static readonly Font Label = new("Segoe UI", 7.5f, FontStyle.Bold);
+    public static readonly Font Body = new("Segoe UI", 10f);
+    public static readonly Font BodyBold = new("Segoe UI", 10f, FontStyle.Bold);
+    public static readonly Font Label = new("Segoe UI", 8.5f, FontStyle.Bold);
     public static readonly Font Mono = new("Consolas", 9f);
+
+    public static Color AvatarColor(string nick)
+    {
+        Color[] palette = { Color.FromArgb(99,74,150), Color.FromArgb(53,95,132),
+            Color.FromArgb(51,106,91), Color.FromArgb(139,73,102), Color.FromArgb(137,85,52) };
+        uint hash = 0;
+        foreach (char ch in nick.ToLowerInvariant()) hash = unchecked(hash * 31 + ch);
+        return palette[hash % (uint)palette.Length];
+    }
 
     public static GraphicsPath RoundRect(Rectangle r, int radius)
     {
@@ -126,6 +138,9 @@ public sealed class PrimButton : Control
     protected override void OnMouseLeave(EventArgs e) { _hoverMotion.To(0); _pressMotion.To(0, 280, spring:true); base.OnMouseLeave(e); }
     protected override void OnMouseDown(MouseEventArgs e) { _pressMotion.To(1, 80); base.OnMouseDown(e); }
     protected override void OnMouseUp(MouseEventArgs e) { _pressMotion.To(0, 280, spring:true); base.OnMouseUp(e); }
+    protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
+    protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
+    protected override void OnTextChanged(EventArgs e) { base.OnTextChanged(e); AccessibleName = Text; Invalidate(); }
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
@@ -149,8 +164,8 @@ public sealed class PrimButton : Control
         {
             case Style.Ghost:
                 bg = UiMotion.Blend(Color.Transparent, Pv.Char3, _hoverMotion.Value);
-                fg = UiMotion.Blend(Pv.Bone, Pv.Orange, _hoverMotion.Value);
-                border = UiMotion.Blend(Pv.Char3, Pv.Orange, _hoverMotion.Value);
+                fg = Pv.Bone;
+                border = UiMotion.Blend(Pv.Char3, Pv.NitroPurple, _hoverMotion.Value);
                 break;
             case Style.Danger:
                 bg = UiMotion.Blend(Color.Transparent, Pv.Red, _hoverMotion.Value);
@@ -158,7 +173,7 @@ public sealed class PrimButton : Control
                 border = Pv.Red;
                 break;
             default:
-                bg = UiMotion.Blend(Pv.Orange, Pv.Bone, Active ? 1 : _hoverMotion.Value);
+                bg = UiMotion.Blend(Pv.Primary, Pv.Bone, Active ? 1 : _hoverMotion.Value);
                 fg = Pv.Charcoal;
                 border = bg;
                 break;
@@ -170,12 +185,19 @@ public sealed class PrimButton : Control
 
         if (bg != Color.Transparent)
             using (var b = new SolidBrush(bg))
-            using (var path = Pv.RoundRect(r, 4)) g.FillPath(b, path);
+            using (var path = Pv.RoundRect(r, 8)) g.FillPath(b, path);
         if (true)
             using (var p = new Pen(border, 1))
-            using (var path = Pv.RoundRect(r, 4)) g.DrawPath(p, path);
+            using (var path = Pv.RoundRect(r, 8)) g.DrawPath(p, path);
 
-        string t = Text.ToUpperInvariant();
+        if (Focused && ShowFocusCues)
+        {
+            using var focus = new Pen(Kind == Style.Solid ? Pv.Charcoal : Pv.NitroPurple, 2);
+            using var focusPath = Pv.RoundRect(Rectangle.Inflate(r, -4, -4), 5);
+            g.DrawPath(focus, focusPath);
+        }
+
+        string t = Text;
         using var brush = new SolidBrush(fg);
         // Labels such as “TRANSMITIR MINHA MUSICA” precisam continuar legíveis
         // em uma janela estreita. O desenho centralizado com ellipsis evita que

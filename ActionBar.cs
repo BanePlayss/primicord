@@ -46,7 +46,7 @@ public sealed class ActionIcon : Control
         Caption = caption;
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
                  ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-        Size = new Size(66, 58);
+        Size = new Size(94, 62);
         Cursor = Cursors.Hand;
         BackColor = Pv.Charcoal;
         TabStop = true;
@@ -60,6 +60,8 @@ public sealed class ActionIcon : Control
     protected override void OnMouseLeave(EventArgs e) { _hover = false; _down = false; Invalidate(); base.OnMouseLeave(e); }
     protected override void OnMouseDown(MouseEventArgs e) { _down = true; Invalidate(); base.OnMouseDown(e); }
     protected override void OnMouseUp(MouseEventArgs e) { _down = false; Invalidate(); base.OnMouseUp(e); }
+    protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+    protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
@@ -81,7 +83,7 @@ public sealed class ActionIcon : Control
         int d = 38;
         var circle = new Rectangle((Width - d) / 2, 2, d, d);
 
-        Color bg = Alert ? Pv.Red : Active ? Pv.Orange : Pv.Char2;
+        Color bg = Alert ? Pv.Red : Active ? Pv.NitroPurple : Pv.Char2;
         Color fg = Alert || Active ? Pv.Charcoal : Enabled ? Pv.Bone : Pv.BoneDim;
         if (_hover && !Active && !Alert) bg = Pv.Char3;
         if (!Enabled) { bg = Pv.Char2; fg = Pv.BoneDim; }
@@ -89,8 +91,8 @@ public sealed class ActionIcon : Control
         var r = circle;
         if (_down && Enabled) r.Offset(0, 1);
         using (var b = new SolidBrush(bg)) g.FillEllipse(b, r);
-        if (_hover && Enabled)
-            using (var p = new Pen(Alert ? Pv.Red : Pv.Orange, 2))
+        if ((_hover || Focused) && Enabled)
+            using (var p = new Pen(Alert ? Pv.Red : Pv.NitroPurple, 2))
                 g.DrawEllipse(p, r);
 
         float pad = d * 0.28f;
@@ -105,9 +107,11 @@ public sealed class ActionIcon : Control
 
         if (Caption.Length > 0)
         {
-            using var b = new SolidBrush(Enabled ? (Active || Alert ? Pv.Bone : Pv.BoneDim) : Pv.Char3);
-            float w = Pv.TrackedWidth(g, Caption, Pv.Label, 0.8f);
-            Pv.DrawTracked(g, Caption, Pv.Label, b, (Width - w) / 2f, circle.Bottom + 3, 0.8f);
+            using var b = new SolidBrush(Active || Alert ? Pv.Bone : Pv.BoneDim);
+            using var sf = new StringFormat { Alignment=StringAlignment.Center, Trimming=StringTrimming.EllipsisCharacter,
+                FormatFlags=StringFormatFlags.NoWrap };
+            g.DrawString(Caption,Pv.Label,b,new RectangleF(0,circle.Bottom+3,Width,22),sf);
+            AccessibleName = Caption + ": " + ToolTipText;
         }
     }
 
