@@ -362,8 +362,24 @@ public sealed class RoomSession : IDisposable, IAsyncDisposable
             fields["pubPort"] = (long)(_publicEp?.Port ?? 0);
             fields["locEps"] = string.Join(",", _localEps.Select(e => e.ToString()));
         }
-        await _fs.SetAsync($"pc_rooms/{_roomId}/peers/{_peerId}", fields, mergeFields: true, ct: ct)
-                 .ConfigureAwait(false);
+        try
+        {
+            await _fs.SetAsync($"pc_rooms/{_roomId}/peers/{_peerId}", fields,
+                               mergeFields: true, ct: ct).ConfigureAwait(false);
+        }
+        catch (FirestoreException ex) when (ex.IsPermissionDenied && fields.ContainsKey("version"))
+        {
+            // Compatibilidade com as rules antigas do projeto: até a publicação
+            // da revisão que aceita os campos novos, elas limitam peers a 12
+            // campos. `version` é informativo e não é consumido por ninguém, então
+            // podemos repetir o heartbeat sem ele. Se a coleção estiver realmente
+            // bloqueada, a segunda tentativa continua falhando e mantém o erro
+            // visível em vez de mascarar o problema.
+            fields.Remove("version");
+            Log.Write("presença: rules antigas detectadas; repetindo heartbeat legado");
+            await _fs.SetAsync($"pc_rooms/{_roomId}/peers/{_peerId}", fields,
+                               mergeFields: true, ct: ct).ConfigureAwait(false);
+        }
         }
         finally { _presenceGate.Release(); }
     }
