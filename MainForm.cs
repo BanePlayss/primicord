@@ -105,7 +105,7 @@ public sealed partial class MainForm : Form
         _dir = new RoomDirectory(_fs);
         _cfg = Config.Load();
 
-        Text = "PRIMICORD · 0.9.6";
+        Text = "PRIMICORD · " + Application.ProductVersion;
         try
         {
             string? exe = Environment.ProcessPath;
@@ -1477,12 +1477,12 @@ public sealed partial class MainForm : Form
         bool self = _iAmSharing && _focusedSharer == 0;
         _stage.SelfPreview = self;
         _stage.SelfInfo = self && _screenSender != null
-            ? $"{_screenSender.OutWidth}x{_screenSender.OutHeight} · {_screenSender.Fps} FPS · {_screenSender.KbPerSecond} KB/s · Q{_screenSender.Quality}"
+            ? $"{_screenSender.OutWidth}x{_screenSender.OutHeight} · {_screenSender.Fps} FPS captura · {_screenSender.SentFps} envios/s · Q{_screenSender.Quality}"
             : "";
         bool buffering = _clips?.Active == true;
         _stage.Recording = buffering;
         string net = _iAmSharing && _screenSender != null
-            ? $"{_screenSender.Fps}FPS · alvo {_screenSender.EffectiveTargetFps} · Q{_screenSender.Quality} · {_screenSender.KbPerSecond}KB/s"
+            ? $"{_screenSender.Fps} FPS captura · alvo {_screenSender.EffectiveTargetFps} · {_screenSender.KbPerSecond}KB/s"
               + (_screenSender.MaxQuality ? " · MÁX" : "")
             : "";
         _stage.StatusRight = buffering

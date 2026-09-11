@@ -54,13 +54,11 @@ public sealed class ScreenSender : IDisposable
     /// Teto TOTAL de subida da tela (bytes/s), dividido entre os espectadores.
     /// </summary>
     /// <remarks>
-    /// Depois que a captura virou GPU (4ms por quadro, teto de 166fps), ESTE numero
-    /// e o unico limite da qualidade — nao ha mais gargalo de CPU. Por isso e ajustavel
-    /// nas configuracoes: quem tem fibra sobrando poe mais e ganha resolucao.
-    /// O Discord usa ~2,5 Mbps, mas com H.264, que rende umas 5x mais que JPEG solto.
+    /// O limite de banda divide o envio entre espectadores. Captura, compressão
+    /// por CPU e remontagem também limitam a fluidez e são medidas separadamente.
     /// </remarks>
     public int TotalUploadBudget { get; set; } = 900_000;
-    /// <summary>O stream nunca desce de 30 FPS; 15 FPS deixava jogos travados.</summary>
+    /// <summary>Alvo de captura; a taxa efetiva depende do tempo de processamento.</summary>
     public int TargetFps { get; set; } = 60;
     public int EffectiveTargetFps => Math.Clamp(TargetFps, 30, 60);
     public int MaxWidth { get; set; } = 1920;
@@ -96,9 +94,12 @@ public sealed class ScreenSender : IDisposable
     public event Action<Bitmap>? PreviewFrameProduced;
 
     public int Fps { get; private set; }
+    public int SentFps { get; private set; }
+    public int IdlePolls { get; private set; }
     public int KbPerSecond { get; private set; }
     public int Quality => (int)_quality;
     public int TilesLastFrame { get; private set; }
+    public int CoveragePercent { get; private set; }
     public int OutWidth { get; private set; }
     public int OutHeight { get; private set; }
 
@@ -109,6 +110,7 @@ public sealed class ScreenSender : IDisposable
     public int MsEncode { get; private set; }
     public int MsSend { get; private set; }
     public int MsTotal => MsCapture + MsScale + MsCompare + MsEncode + MsSend;
+    public string TimingSummary { get; private set; } = "aguardando quadros";
 
     /// <summary>Avisa quando o alvo sumiu (janela fechada) pra UI parar sozinha.</summary>
     public event Action? TargetLost;
@@ -143,8 +145,8 @@ public sealed class ScreenSender : IDisposable
         int srcW = 0, srcH = 0;         // tamanho do alvo na ultima montagem
         int outW = 0, outH = 0, cols = 0, rows = 0, stride = 0;
 
-        Bitmap? scaled = null, tile = null;
-        Graphics? gScale = null, gTile = null;
+        Bitmap? scaled = null;
+        Graphics? gScale = null;
 
         // prev = estado JA TRANSMITIDO (nao o quadro anterior). Bloco que nao coube
         // no orcamento deste quadro fica com o valor velho aqui e continua marcado
@@ -153,6 +155,7 @@ public sealed class ScreenSender : IDisposable
         byte[] cur = Array.Empty<byte>();
         bool primed = false;
         int refreshCursor = 0;
+        int transmitCursor = 0;
 
         var payload = new MemoryStream(512 * 1024);
         var tileMs = new MemoryStream(64 * 1024);
@@ -160,9 +163,16 @@ public sealed class ScreenSender : IDisposable
 
         int lastViewers = 0;
         long lastStat = Environment.TickCount64;
-        long nextFullFrameAt = 0;
-        long nextPreviewAt = 0;
-        int framesSec = 0, bytesSec = 0;
+        using var clipEncoder = new ScreenClipEncoder((jpeg, w, h) =>
+        {
+            if (NeedFullFrames) FullFrameProduced?.Invoke(jpeg, w, h);
+        });
+        double nextFullFrameAt = 0;
+        double nextPreviewAt = 0;
+        int framesSec = 0, sentSec = 0, idleSec = 0, bytesSec = 0;
+        long nextDiagnosticAt = Environment.TickCount64 + 5000;
+        long captureMs = 0, copyMs = 0, compareMs = 0, encodeMs = 0, sendMs = 0;
+        int timedFrames = 0;
         int overBudgetStreak = 0, underBudgetStreak = 0;
 
         void Rebuild(int targetW, int targetH, int ladderIdx)
@@ -177,16 +187,12 @@ public sealed class ScreenSender : IDisposable
             if (w < 2 || h < 2) return;
 
             gScale?.Dispose(); scaled?.Dispose();
-            gTile?.Dispose(); tile?.Dispose();
             _target.ReleaseWindowDc();
 
             // Nao existe mais bitmap de tamanho nativo: o StretchBlt entrega ja reduzido.
-            scaled = new Bitmap(w, h, PixelFormat.Format24bppRgb);
-            tile = new Bitmap(TileSize, TileSize, PixelFormat.Format24bppRgb);
+            scaled = new Bitmap(w, h, PixelFormat.Format32bppRgb);
 
             gScale = Graphics.FromImage(scaled);
-            gTile = Graphics.FromImage(tile);
-            gTile.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
 
             outW = w; outH = h;
             OutWidth = w; OutHeight = h;
@@ -200,7 +206,7 @@ public sealed class ScreenSender : IDisposable
         while (_running)
         {
             long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
-            framesSec++;
+            MsCapture = MsScale = MsCompare = MsEncode = MsSend = 0;
             try
             {
                 if (!_target.StillAlive())
@@ -216,7 +222,7 @@ public sealed class ScreenSender : IDisposable
                 // A janela pode ser redimensionada a qualquer momento.
                 if (size.Width != srcW || size.Height != srcH || scaled == null)
                     Rebuild(size.Width, size.Height, ladder);
-                if (scaled == null || tile == null) { Thread.Sleep(200); continue; }
+                if (scaled == null) { Thread.Sleep(200); continue; }
 
                 // Captura JA reduzida: uma operacao so, sem bitmap de 8MB no meio.
                 // Em cena com movimento usa o modo rapido (vale ~10 fps); parada,
@@ -229,8 +235,10 @@ public sealed class ScreenSender : IDisposable
                     // A GPU avisou que nada mudou na tela. Nao ha o que comparar nem
                     // mandar — so o rodizio de conserto, que segue no proximo ciclo.
                     MsCapture = (int)tCap.ElapsedMilliseconds;
+                    idleSec++;
                     goto pacing;
                 }
+                framesSec++;
                 DrawCursorScaled(gScale!, _target.ScreenRect(), outW, outH);
                 tCap.Stop();
                 MsCapture = (int)tCap.ElapsedMilliseconds;
@@ -238,23 +246,22 @@ public sealed class ScreenSender : IDisposable
                 var tScale = System.Diagnostics.Stopwatch.StartNew();
                 // Copia os pixels pra memoria gerenciada, pra comparar bloco a bloco.
                 var bits = scaled.LockBits(new Rectangle(0, 0, outW, outH),
-                                           ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+                                           ImageLockMode.ReadOnly, PixelFormat.Format32bppRgb);
                 stride = bits.Stride;
                 int total = stride * outH;
-                if (cur.Length < total) cur = new byte[total];
+                if (cur.Length < total) cur = GC.AllocateUninitializedArray<byte>(total, pinned: true);
                 Marshal.Copy(bits.Scan0, cur, 0, total);
                 scaled.UnlockBits(bits);
                 tScale.Stop();
                 MsScale = (int)tScale.ElapsedMilliseconds;
 
-                // A prévia é local: não volta pela rede e não participa do palco
-                // dos outros. Cinco quadros/s dão feedback imediato sem duplicar
-                // o custo de captura a 60 FPS.
+                // Local preview reuses the capture, at up to 30 FPS. The UI
+                // keeps only the newest bitmap so a slow paint never queues video.
                 long previewNow = Environment.TickCount64;
                 if (PreviewFrameProduced != null && previewNow >= nextPreviewAt)
                 {
-                    nextPreviewAt = previewNow + 200;
-                    try { PreviewFrameProduced(new Bitmap(scaled)); } catch { }
+                    nextPreviewAt = Math.Max(nextPreviewAt + 1000d / 30, previewNow);
+                    try { PreviewFrameProduced(scaled.Clone(new Rectangle(Point.Empty, scaled.Size), scaled.PixelFormat)); } catch { }
                 }
 
                 int viewers = Math.Max(1, _session.Peers.Count(p => p.Locked != null));
@@ -278,23 +285,23 @@ public sealed class ScreenSender : IDisposable
 
                 var tCmp = System.Diagnostics.Stopwatch.StartNew();
                 var dirty = new List<(int C, int R)>();
-                for (int r = 0; r < rows; r++)
-                {
-                    int ty = r * TileSize, th = Math.Min(TileSize, outH - ty);
-                    for (int c = 0; c < cols; c++)
-                    {
-                        int tx = c * TileSize, tw = Math.Min(TileSize, outW - tx);
-                        if (TileChanged(prev, cur, stride, tx, ty, tw, th)) dirty.Add((c, r));
-                    }
-                }
-                int dirtyTotal = dirty.Count;
-
+                // Scan from the last transmitted tile, not always from the
+                // top-left. Otherwise a busy scene can starve the bottom forever.
+                var refresh = new HashSet<int>();
                 for (int i = 0; i < RefreshTilesPerFrame; i++)
                 {
-                    int idx = refreshCursor % Math.Max(1, tileCount);
-                    refreshCursor++;
-                    var pick = (C: idx % cols, R: idx / cols);
-                    if (!dirty.Contains(pick)) dirty.Add(pick);
+                    refresh.Add(refreshCursor++ % tileCount);
+                }
+                int dirtyTotal = 0;
+                for (int i = 0; i < tileCount; i++)
+                {
+                    int index = (transmitCursor + i) % tileCount;
+                    int r = index / cols, c = index % cols;
+                    int ty = r * TileSize, th = Math.Min(TileSize, outH - ty);
+                    int tx = c * TileSize, tw = Math.Min(TileSize, outW - tx);
+                    bool changed = TileChanged(prev, cur, stride, tx, ty, tw, th);
+                    if (changed) dirtyTotal++;
+                    if (changed || refresh.Contains(index)) dirty.Add((c, r));
                 }
 
                 tCmp.Stop();
@@ -315,37 +322,23 @@ public sealed class ScreenSender : IDisposable
                     int tw = Math.Min(TileSize, outW - tx), th = Math.Min(TileSize, outH - ty);
                     if (tw <= 0 || th <= 0) continue;
 
-                    gTile!.DrawImage(scaled, new Rectangle(0, 0, tw, th),
-                                     new Rectangle(tx, ty, tw, th), GraphicsUnit.Pixel);
+                    // Read-only view into this cycle's pinned pixels. Avoid a
+                    // GDI+ DrawImage and its pixel conversion for every tile.
+                    using var tile = TileView(cur, stride, tx, ty, tw, th);
 
                     tileMs.SetLength(0);
                     if (MaxQuality && !_sceneBusy)
                     {
                         // Texto, HUD e janelas paradas ficam realmente sem perda.
                         // Em movimento, PNG custaria mais que o orçamento inteiro.
-                        if (tw == TileSize && th == TileSize) tile.Save(tileMs, ImageFormat.Png);
-                        else
-                        {
-                            using var edgePng = tile.Clone(new Rectangle(0, 0, tw, th), tile.PixelFormat);
-                            edgePng.Save(tileMs, ImageFormat.Png);
-                        }
+                        tile.Save(tileMs, ImageFormat.Png);
                         if (tileMs.Length > ushort.MaxValue)
                         {
                             tileMs.SetLength(0);
-                            if (tw == TileSize && th == TileSize) tile.Save(tileMs, _jpegCodec, ep);
-                            else
-                            {
-                                using var edgeJpeg = tile.Clone(new Rectangle(0, 0, tw, th), tile.PixelFormat);
-                                edgeJpeg.Save(tileMs, _jpegCodec, ep);
-                            }
+                            tile.Save(tileMs, _jpegCodec, ep);
                         }
                     }
-                    else if (tw == TileSize && th == TileSize) tile.Save(tileMs, _jpegCodec, ep);
-                    else
-                    {
-                        using var edge = tile.Clone(new Rectangle(0, 0, tw, th), tile.PixelFormat);
-                        edge.Save(tileMs, _jpegCodec, ep);
-                    }
+                    else tile.Save(tileMs, _jpegCodec, ep);
 
                     int jlen = (int)tileMs.Length;
                     if (jlen > ushort.MaxValue) continue;
@@ -355,12 +348,13 @@ public sealed class ScreenSender : IDisposable
                     payload.WriteByte((byte)(jlen >> 8));
                     payload.Write(tileMs.GetBuffer(), 0, jlen);
                     tilesSent++;
+                    transmitCursor = (r * cols + c + 1) % tileCount;
 
                     // Bloco transmitido: marca como sincronizado copiando pro prev.
                     for (int row = 0; row < th; row++)
                     {
-                        int off = (ty + row) * stride + tx * 3;
-                        Buffer.BlockCopy(cur, off, prev, off, tw * 3);
+                        int off = (ty + row) * stride + tx * 4;
+                        Buffer.BlockCopy(cur, off, prev, off, tw * 4);
                     }
                 }
 
@@ -380,12 +374,13 @@ public sealed class ScreenSender : IDisposable
 
                     int plen = (int)payload.Length;
                     _session.SendScreenFrame(buf, plen, outW, outH);
-                    bytesSec += plen;
+                    if (conectados.Count > 0) { sentSec++; bytesSec += plen; }
                 }
 
                 tSend.Stop();
                 MsSend = (int)tSend.ElapsedMilliseconds;
                 TilesLastFrame = tilesSent;
+                CoveragePercent = tilesSent * 100 / tileCount;
 
                 // ── adaptacao ──
                 // Muita coisa mudando e nao coube: e cena de movimento. Primeiro
@@ -436,13 +431,11 @@ public sealed class ScreenSender : IDisposable
                 long nowFull = Environment.TickCount64;
                 if (NeedFullFrames && nowFull >= nextFullFrameAt)
                 {
-                    nextFullFrameAt = nowFull + 1000L / EffectiveTargetFps;
-                    tileMs.SetLength(0);
-                    ep.Param[0]?.Dispose();
-                    ep.Param[0] = new EncoderParameter(Encoder.Quality, 70L);
-                    scaled.Save(tileMs, _jpegCodec, ep);
-                    FullFrameProduced?.Invoke(tileMs.ToArray(), outW, outH);
+                    nextFullFrameAt = Math.Max(nextFullFrameAt + 1000d / 30, nowFull);
+                    clipEncoder.Publish(scaled.Clone(new Rectangle(Point.Empty, scaled.Size), scaled.PixelFormat));
                 }
+                captureMs += MsCapture; copyMs += MsScale; compareMs += MsCompare;
+                encodeMs += MsEncode; sendMs += MsSend; timedFrames++;
 
             }
             catch (Exception ex)
@@ -455,17 +448,31 @@ public sealed class ScreenSender : IDisposable
         pacing:
             if (Environment.TickCount64 - lastStat >= 1000)
             {
-                Fps = framesSec;
-                KbPerSecond = bytesSec / 1024;
-                framesSec = 0; bytesSec = 0;
+                double seconds = (Environment.TickCount64 - lastStat) / 1000d;
+                Fps = (int)Math.Round(framesSec / seconds);
+                SentFps = (int)Math.Round(sentSec / seconds);
+                IdlePolls = (int)Math.Round(idleSec / seconds);
+                KbPerSecond = (int)(bytesSec / seconds / 1024);
+                if (timedFrames > 0)
+                    TimingSummary = $"{captureMs / (double)timedFrames:F1}/{copyMs / (double)timedFrames:F1}/" +
+                        $"{compareMs / (double)timedFrames:F1}/{encodeMs / (double)timedFrames:F1}/{sendMs / (double)timedFrames:F1}";
+                captureMs = copyMs = compareMs = encodeMs = sendMs = 0;
+                timedFrames = 0;
+                framesSec = sentSec = idleSec = bytesSec = 0;
                 lastStat = Environment.TickCount64;
+            }
+            if (Environment.TickCount64 >= nextDiagnosticAt)
+            {
+                nextDiagnosticAt = Environment.TickCount64 + 5000;
+                Log.Write($"screen-perf: capture={Fps} sent={SentFps} idle={IdlePolls} target={EffectiveTargetFps} " +
+                    $"avg-ms capture/copy/compare/encode/send={TimingSummary} " +
+                    $"backend={CaptureBackend} size={OutWidth}x{OutHeight} coverage={CoveragePercent}% clip={NeedFullFrames}");
             }
 
             ScreenPacing.Wait(t0, EffectiveTargetFps);
         }
 
         gScale?.Dispose(); scaled?.Dispose();
-        gTile?.Dispose(); tile?.Dispose();
         _target.ReleaseWindowDc();
         _target.ReleaseGpu();
         ep.Dispose();
@@ -476,8 +483,8 @@ public sealed class ScreenSender : IDisposable
     /// <summary>Compara um bloco entre o quadro anterior e o atual, linha por linha.</summary>
     private static bool TileChanged(byte[] prev, byte[] cur, int stride, int x, int y, int w, int h)
     {
-        int byteX = x * 3;
-        int byteW = w * 3;
+        int byteX = x * 4;
+        int byteW = w * 4;
         for (int row = 0; row < h; row++)
         {
             int off = (y + row) * stride + byteX;
@@ -486,6 +493,14 @@ public sealed class ScreenSender : IDisposable
                 return true;
         }
         return false;
+    }
+
+    private static unsafe Bitmap TileView(byte[] pixels, int stride, int x, int y, int w, int h)
+    {
+        // The caller allocates pixels on the pinned object heap and keeps it
+        // alive until every tile view is disposed, before the next capture.
+        fixed (byte* ptr = pixels)
+            return new Bitmap(w, h, stride, PixelFormat.Format32bppRgb, (IntPtr)(ptr + y * stride + x * 4));
     }
 
     // ─── cursor (o CopyFromScreen nao traz) ──────────────────────────────────

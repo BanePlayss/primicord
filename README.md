@@ -2,7 +2,18 @@
 
 O app de comunidade dos primitivos — cliente nativo de Windows com uma interface
 inspirada na organização do Discord e identidade visual do escudo Primitivão.
-Versão publicada: **0.9.6**.
+Versão publicada: **0.9.7**.
+
+## 0.9.7 — reduzir o custo real da transmissão
+
+- Captura DXGI em resolução nativa copia direto para o bitmap, eliminando a passagem intermediária por DIB/BitBlt.
+- Os blocos são comprimidos diretamente dos pixels capturados, sem um DrawImage por bloco; formato de rede compatível com as versões anteriores.
+- Compressão do clipe em uma tarefa separada, com somente um quadro pendente, limitada ao ritmo de 30 FPS do buffer.
+- Prévia local de até 30 FPS (antes: 5 FPS), sem fila de imagens atrasadas.
+- Envio alterna a região inicial da tela: movimento no topo não impede os blocos inferiores de serem atualizados.
+- Contadores distinguem capturas reais, envios de pacotes de blocos e ciclos sem mudança. Diagnóstico de tempo por etapa no log a cada 5 segundos.
+
+Validação reproduzível: `dotnet run --project Tests/ScreenPerf -c Release` abre uma cena de movimento e testa captura, compressão e remontagem via UDP local, com e sem clipe. Imagens não são salvas nem enviadas para outros computadores. No monitor 1080p desta máquina, o recebimento passou de 22–25 para cerca de 40 atualizações de blocos/s e a prévia passou de 5 para 30 FPS. Isso não equivale a 40 quadros completos/s: a cobertura por atualização depende da banda. Não foi medido desempenho entre dois computadores via Tailscale.
 
 ## 0.9.6 — pacing estável de transmissão
 

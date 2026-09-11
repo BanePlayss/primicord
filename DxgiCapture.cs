@@ -163,6 +163,18 @@ public sealed class DxgiCapture : IDisposable
             var map = ctx.Map(staging, 0, Vortice.Direct3D11.MapMode.Read, Vortice.Direct3D11.MapFlags.None);
             try
             {
+                // Native-size capture: copy straight into the managed bitmap.
+                // Going through a DIB + GetHdc/BitBlt synchronizes GDI on every
+                // frame and was taking 10–22 ms in the 1080p motion benchmark.
+                var crop = new Rectangle(_bounds.X - _outputRect.X, _bounds.Y - _outputRect.Y,
+                    _bounds.Width, _bounds.Height);
+                if (dest.PixelFormat == PixelFormat.Format32bppRgb &&
+                    dest.Size == crop.Size && crop.X >= 0 && crop.Y >= 0 &&
+                    crop.Right <= _texW && crop.Bottom <= _texH)
+                {
+                    CopyIntoBitmap(map.DataPointer, (int)map.RowPitch, crop, dest);
+                    return true;
+                }
                 // Copia as linhas pra uma DIB de verdade. Embrulhar a memoria mapeada
                 // num Bitmap do GDI+ e pedir o HDC dele PARECE funcionar (nao da erro)
                 // mas o blit sai todo PRETO — o DC que o GDI+ devolve nao enxerga a
@@ -233,6 +245,21 @@ public sealed class DxgiCapture : IDisposable
         int bytes = Math.Min(srcPitch, _dibStride);
         for (int y = 0; y < _dibH; y++)
             Buffer.MemoryCopy(s + (long)y * srcPitch, d + (long)y * _dibStride, _dibStride, bytes);
+    }
+
+    private static unsafe void CopyIntoBitmap(IntPtr source, int pitch, Rectangle crop, Bitmap dest)
+    {
+        var bits = dest.LockBits(new Rectangle(Point.Empty, dest.Size), ImageLockMode.WriteOnly,
+            PixelFormat.Format32bppRgb);
+        try
+        {
+            int rowBytes = crop.Width * 4;
+            byte* src = (byte*)source + (long)crop.Y * pitch + crop.X * 4;
+            for (int y = 0; y < crop.Height; y++)
+                Buffer.MemoryCopy(src + (long)y * pitch, (byte*)bits.Scan0 + (long)y * bits.Stride,
+                    rowBytes, rowBytes);
+        }
+        finally { dest.UnlockBits(bits); }
     }
 
     private void BlitFromDib(Rectangle srcRect, Bitmap dest, Graphics gDest, bool fast)
