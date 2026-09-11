@@ -188,5 +188,7 @@ dotnet run --project Primicord.csproj
 - [ ] paridade completa: cargos/permissões, anexos, reações, threads, bots e moderação
 
 **Passo manual pendente:** publicar as rules do `pc_rooms` (arquivo
-`firestore.rules` do repo `primitivao`) no Firebase Console. Sem isso o app não
-lista nem cria sala.
+`firestore.rules` do repo `primitivao`) no Firebase Console. O Primicord 0.9.9
+também faz fallback para a regra antiga de 12 campos, mas o deploy é necessário
+para liberar criação, presença completa e sinalização WebRTC. Veja o passo a
+passo em [docs/firestore-rules.md](docs/firestore-rules.md).
