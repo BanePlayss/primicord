@@ -47,12 +47,25 @@ public static class Pv
     public static readonly Color NitroPurple = Color.FromArgb(0xA9, 0x9A, 0xFF);
     public static readonly Color NitroPink = Color.FromArgb(0xC0, 0xAC, 0xFA);
 
-    public static readonly Font Display = new("Bahnschrift", 20f, FontStyle.Bold);
-    public static readonly Font DisplaySm = new("Bahnschrift", 13f, FontStyle.Bold);
+    public static readonly Font Display = new("Segoe UI Semibold", 20f);
+    public static readonly Font DisplaySm = new("Segoe UI Semibold", 13f);
     public static readonly Font Body = new("Segoe UI", 10f);
     public static readonly Font BodyBold = new("Segoe UI", 10f, FontStyle.Bold);
-    public static readonly Font Label = new("Segoe UI", 8.5f, FontStyle.Bold);
+    public static readonly Font Label = new("Segoe UI", 9f);
+    public static readonly Font Button = new("Segoe UI Semibold", 9.5f);
     public static readonly Font Mono = new("Consolas", 9f);
+
+    /// <summary>
+    /// Grayscale antialiasing for owner-painted text, including artwork/gradients.
+    /// Shape SmoothingMode does not smooth DrawString; ClearType's RGB fringes
+    /// are undesirable on these composited surfaces and captured previews.
+    /// This does not alter the user's Windows font or DPI settings.
+    /// </summary>
+    public static void PrepareText(Graphics graphics)
+    {
+        graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+        graphics.TextContrast = 4;
+    }
 
     public static Color AvatarColor(string nick)
     {
@@ -128,7 +141,7 @@ public sealed class PrimButton : Control
                  ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
         Size = new Size(120, 36);
         Cursor = Cursors.Hand;
-        Font = Pv.Label;
+        Font = Pv.Button;
         TabStop = true;
         AccessibleRole = AccessibleRole.PushButton;
         AccessibleName = text;
@@ -157,7 +170,7 @@ public sealed class PrimButton : Control
     {
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        Pv.PrepareText(g);
 
         Color bg, fg, border;
         switch (Kind)

@@ -72,7 +72,7 @@ public sealed class RailItem : Control
     {
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        Pv.PrepareText(g);
 
         var r = new Rectangle(6 + Indent, 2, Width - 12 - Indent, Height - 4);
         if (Active || _hoverMotion.Value > 0)
@@ -93,7 +93,7 @@ public sealed class RailItem : Control
             using var outline = Pv.RoundRect(r, 6);
             g.DrawPath(focus, outline);
         }
-        g.TranslateTransform((float)(_hoverMotion.Value * 2), 0);
+        g.TranslateTransform((float)Math.Round(_hoverMotion.Value * 2), 0);
 
         Color fg = Active ? Pv.Bone : _hover ? Pv.Bone : Pv.BoneDim;
         int iconBox = 18;
@@ -130,7 +130,7 @@ public sealed class RailItem : Control
             float avail = r.Right - textX - (Suffix.Length > 0 ? 34 : 10);
             while (t.Length > 3 && g.MeasureString(t, font).Width > avail) t = t[..^1];
             if (t != Text) t = t[..Math.Max(1, t.Length - 1)] + "…";
-            g.DrawString(t, font, b, textX, r.Y + (r.Height - font.Height) / 2f);
+            g.DrawString(t, font, b, textX, (float)Math.Round(r.Y + (r.Height - font.Height) / 2f));
         }
 
         if (Suffix.Length > 0)
@@ -186,7 +186,7 @@ public sealed class MemberRow : Control
     {
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        Pv.PrepareText(g);
 
         var r = new Rectangle(6, 2, Width - 12, Height - 4);
         if (_hover || Focused)

@@ -213,7 +213,7 @@ public sealed partial class MainForm : Form
         {
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            Pv.PrepareText(g);
             using (var p = new Pen(Pv.Border, 1)) g.DrawRectangle(p, 0, 0, card.Width - 1, card.Height - 1);
             using (var b = new SolidBrush(Pv.Orange))
                 g.FillRectangle(b, 0, 0, card.Width, 4);
@@ -381,7 +381,7 @@ public sealed partial class MainForm : Form
         {
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            Pv.PrepareText(g);
             BrandAssets.Draw(g, new Rectangle(14, 18, 36, 36));
             using (var b = new SolidBrush(Pv.Bone))
                 g.DrawString("Primitivos da Nova Era", Pv.BodyBold, b, 58, 19);
@@ -422,7 +422,7 @@ public sealed partial class MainForm : Form
         mHead.Paint += (_, e) =>
         {
             var g = e.Graphics;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            Pv.PrepareText(g);
             using var b = new SolidBrush(Pv.Bone);
             g.DrawString(_voiceRoomId.Length > 0 ? "Na sala de voz" : "A tribo", Pv.BodyBold, b, 18, 18);
         };
@@ -516,6 +516,7 @@ public sealed partial class MainForm : Form
         var p = new Panel { Dock = DockStyle.Bottom, Height = 112, BackColor = Pv.SurfaceLowest };
         p.Paint += (_, e) =>
         {
+            Pv.PrepareText(e.Graphics);
             Glyphs.Avatar(e.Graphics, new Rectangle(10, 66, 32, 32), Nick, Pv.Orange, Pv.Bone);
             using (var dot = new SolidBrush(_voiceRoomId.Length > 0 ? Pv.Green : Pv.Orange))
                 e.Graphics.FillEllipse(dot, 35, 91, 8, 8);
@@ -561,7 +562,7 @@ public sealed partial class MainForm : Form
         p.Paint += (_, e) =>
         {
             var g = e.Graphics;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            Pv.PrepareText(g);
             using (var pen = new Pen(Pv.Border, 1)) g.DrawLine(pen, 0, 0, p.Width, 0);
             using (var b = new SolidBrush(Pv.Green))
                 g.DrawString(_preview ? "Prévia da call" : _joiningVoice ? "Entrando na sala…" :
@@ -762,7 +763,7 @@ public sealed partial class MainForm : Form
         p.Paint += (_, e) =>
         {
             var g = e.Graphics;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            Pv.PrepareText(g);
             using var b = new SolidBrush(Pv.BoneDim);
             g.DrawString(text, Pv.Label, b, 18, 8);
         };

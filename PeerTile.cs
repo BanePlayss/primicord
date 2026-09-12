@@ -55,8 +55,8 @@ public sealed class PeerTile : Control
     {
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-        g.TranslateTransform(0, (float)((1-_arrival.Value)*12));
+        Pv.PrepareText(g);
+        g.TranslateTransform(0, (float)Math.Round((1-_arrival.Value)*12));
         if (_wasSpeaking != Speaking) { _wasSpeaking = Speaking; _speech.To(Speaking ? 1 : 0, 180); }
         if (Large || Height < 120) { DrawCallCard(g); return; }
 

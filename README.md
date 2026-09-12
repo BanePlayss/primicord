@@ -2,7 +2,24 @@
 
 O app de comunidade dos primitivos — cliente nativo de Windows com uma interface
 inspirada na organização do Discord e identidade visual do escudo Primitivão.
-Versão publicada: **0.9.9.1**.
+Versão publicada: **1.0.0** (Primicord 1.0).
+
+## 1.0 — transmissão sem faixas e tipografia mais nítida
+
+- Corrige a grade de faixas pretas ao receber telas com escala/DPI diferente:
+  os blocos agora são remontados em pixels exatos, inclusive nas bordas.
+- Fontes suavizadas, legendas mais legíveis e texto animado alinhado a pixels inteiros.
+- Mantém a UX Obsidiana, as salas, a Jam e o protocolo de transmissão existente.
+- Pacote e aplicativo usam **1.0.0**, sem numeração interna diferente nesta versão.
+
+[Baixar instalador 1.0](https://github.com/BanePlayss/primicord-releases/releases/download/v1.0.0/Primicord-win-Setup.exe).
+Quem instalou pelo Setup pode usar **Configurações → Procurar atualização**.
+Cópias portáteis ou muito antigas sem atualizador funcional podem executar o Setup.
+
+Validação: 96 combinações sintéticas de resolução/DPI/codec, 20 testes de
+tipografia, 18 layouts e testes de presença. A descoberta de atualização é
+verificada para pacotes 0.7.1, 0.8.5, 0.9.1, 0.9.9 e 0.9.10 (público 0.9.9.1).
+Isso não substitui uma chamada real entre PCs nem garante FPS mínimo pela rede.
 
 ## 0.9.9.1 — Obsidiana: nova UX da tribo
 

@@ -581,7 +581,13 @@ public sealed class ScreenReceiver : IDisposable
                 // nascia — todo delta era recusado.
                 if (canvas != null) { try { canvas.G.Dispose(); canvas.Bmp.Dispose(); } catch { } }
                 var bmp = new Bitmap(frameW, frameH, PixelFormat.Format24bppRgb);
+                // Network frame dimensions are pixels, never physical display units.
+                bmp.SetResolution(96, 96);
                 canvas = new Canvas { Bmp = bmp, G = Graphics.FromImage(bmp), W = frameW, H = frameH };
+                canvas.G.PageUnit = GraphicsUnit.Pixel;
+                canvas.G.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+                canvas.G.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+                canvas.G.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
                 _canvases[senderId] = canvas;
             }
         }
@@ -601,9 +607,17 @@ public sealed class ScreenReceiver : IDisposable
             {
                 using var ms = new MemoryStream(payload, pos, jlen, writable: false);
                 using var img = Image.FromStream(ms);
+                int x = col * tileSize, y = row * tileSize;
+                int expectedW = Math.Min(tileSize, frameW - x), expectedH = Math.Min(tileSize, frameH - y);
+                if (img.Width != expectedW || img.Height != expectedH) { pos += jlen; continue; }
                 lock (_lock)
                 {
-                    canvas.G.DrawImageUnscaled(img, col * tileSize, row * tileSize);
+                    // DrawImageUnscaled uses PHYSICAL size (source/destination DPI),
+                    // despite its name. A 128px/144-DPI tile became ~85px at 96 DPI,
+                    // leaving a regular black grid. Explicit pixel rectangles preserve
+                    // 1:1 geometry for old senders too, regardless of PNG/JPEG metadata.
+                    canvas.G.DrawImage(img, new Rectangle(x, y, expectedW, expectedH),
+                        0, 0, expectedW, expectedH, GraphicsUnit.Pixel);
                 }
                 applied++;
             }

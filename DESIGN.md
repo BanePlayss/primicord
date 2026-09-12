@@ -30,7 +30,9 @@ Tema escuro fixo nesta revisão; preferências existentes de cor do usuário pre
 - Texto #F2F0EC, secundário #B6B8C5. Violeta #A99AFF em foco/destaques;
   laranja permanece na marca e no tema personalizado. Verde indica voz/online,
   vermelho indica mute/erro, nunca dependem só da cor para comunicar estado.
-- Segoe UI 10 pt corpo, 8.5 pt legenda; títulos de sala 15 pt sem tracking.
+- Segoe UI 10 pt corpo, 9 pt legenda regular; botões Semibold 9.5 pt e títulos
+  Semibold 13/20 pt. Texto desenhado com antialiasing em tons de cinza, sem franjas
+  RGB; transições de texto alinhadas a pixels inteiros.
 - Espaçamento 4/8/12/16/24; raios 8 para botões, 12 para cartões.
 - Rail com ícone e rótulo, categorias realmente recolhíveis. Sem barra de servidores.
 - Um título por superfície; botões de assistir só existem com transmissão.

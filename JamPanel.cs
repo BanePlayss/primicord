@@ -66,6 +66,7 @@ public sealed class InviteTile : Control
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
+        Pv.PrepareText(g);
         using var pen = new Pen(Focused ? Pv.NitroPurple : Pv.Muted, 1.5f) { DashStyle = DashStyle.Dash };
         using var path = Pv.RoundRect(new Rectangle(2,2,Math.Max(1,Width-5),Math.Max(1,Height-5)), 12);
         g.DrawPath(pen,path);

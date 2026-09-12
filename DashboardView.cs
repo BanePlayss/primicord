@@ -115,6 +115,7 @@ public sealed class DashboardView : Panel
         {
             base.OnPaint(e);
             var g=e.Graphics; g.SmoothingMode=SmoothingMode.AntiAlias;
+            Pv.PrepareText(g);
             var box=new Rectangle(18,4,Math.Max(1,Width-36),202);
             using(var path=Pv.RoundRect(box,12))
             {
@@ -133,12 +134,12 @@ public sealed class DashboardView : Panel
                 using var pen=new Pen(Pv.Border,1); g.DrawPath(pen,path);
             }
             int x=36;
-            g.TranslateTransform(0, (float)((1-_intro.Value)*10));
+            g.TranslateTransform(0, (float)Math.Round((1-_intro.Value)*10));
             using var accent=new SolidBrush(Pv.NitroPurple);
             using var bone=new SolidBrush(Pv.Bone);
             using var dim=new SolidBrush(Pv.BoneDim);
             g.DrawString("PRIMITIVOS DA NOVA ERA",Pv.Label,accent,x,24);
-            using var title=new Font("Segoe UI",Width < 600 ? 24 : 30,FontStyle.Bold);
+            using var title=new Font("Segoe UI Semibold",Width < 600 ? 24 : 30);
             g.DrawString("Seu lugar é com a tribo.",title,bone,x-2,49);
             g.DrawString("Uma call, seu jogo e todo mundo por perto.",Pv.Body,dim,x,113);
         }
@@ -166,7 +167,8 @@ public sealed class DashboardView : Panel
         protected override void OnPaint(PaintEventArgs e)
         {
             var g=e.Graphics; g.SmoothingMode=SmoothingMode.AntiAlias;
-            g.TranslateTransform(0, (float)((1-_entry.Value)*10 + (1-_hover.Value)*2));
+            Pv.PrepareText(g);
+            g.TranslateTransform(0, (float)Math.Round((1-_entry.Value)*10 + (1-_hover.Value)*2));
             using var path=Pv.RoundRect(new Rectangle(1,1,Width-3,Height-3),12);
             using var bg=new SolidBrush(UiMotion.Blend(Pv.Char2, Pv.SurfaceHover, _hover.Value)); g.FillPath(bg,path);
             using var border=new Pen(Focused?Pv.NitroPurple:UiMotion.Blend(Pv.Border,Pv.NitroPurple,_hover.Value),1); g.DrawPath(border,path);
